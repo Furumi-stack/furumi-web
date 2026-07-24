@@ -18,6 +18,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::player::PlayerDeviceHub;
 
+use super::{TransportStats, record_stream_transport};
+
 pub const SYNC_ALPN: &[u8] = b"furumi/sync/1";
 
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -457,6 +459,7 @@ pub async fn connect_invite(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
     user_id: i64,
     user_name: &str,
     invite_link: &str,
@@ -471,6 +474,7 @@ pub async fn connect_invite(
             pool,
             Arc::clone(&service),
             Arc::clone(&hub),
+            Arc::clone(&transport_stats),
             user_id,
             user_name,
             &invite,
@@ -884,14 +888,16 @@ pub async fn serve_peers(
     pool: sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
 ) {
     while let Some(stream) = acceptor.accept().await {
         let pool = pool.clone();
         let service = Arc::clone(&service);
         let hub = Arc::clone(&hub);
+        let transport_stats = Arc::clone(&transport_stats);
         tokio::spawn(async move {
             let peer = stream.peer_id;
-            if let Err(err) = serve_one(stream, &pool, service, hub).await {
+            if let Err(err) = serve_one(stream, &pool, service, hub, transport_stats).await {
                 tracing::warn!(peer = %peer, "web fed device sync stream failed: {err:#}");
             }
         });
@@ -902,11 +908,19 @@ pub async fn sync_loop(
     pool: sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
 ) {
     let mut interval = tokio::time::interval(DEVICE_SYNC_INTERVAL);
     loop {
         interval.tick().await;
-        if let Err(err) = sync_once_all(&pool, Arc::clone(&service), Arc::clone(&hub)).await {
+        if let Err(err) = sync_once_all(
+            &pool,
+            Arc::clone(&service),
+            Arc::clone(&hub),
+            Arc::clone(&transport_stats),
+        )
+        .await
+        {
             tracing::debug!("web fed device sync tick failed: {err:#}");
         }
     }
@@ -916,6 +930,7 @@ pub async fn sync_once_all(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
 ) -> Result<()> {
     let rows = sqlx::query(
         "SELECT DISTINCT user_id FROM furumusic__fed_device
@@ -925,7 +940,15 @@ pub async fn sync_once_all(
     .await?;
     for row in rows {
         let user_id: i64 = row.get("user_id");
-        if let Err(err) = sync_once(pool, Arc::clone(&service), Arc::clone(&hub), user_id).await {
+        if let Err(err) = sync_once(
+            pool,
+            Arc::clone(&service),
+            Arc::clone(&hub),
+            Arc::clone(&transport_stats),
+            user_id,
+        )
+        .await
+        {
             set_last_error(pool, user_id, Some(&format!("{err:#}"))).await?;
         }
     }
@@ -936,6 +959,7 @@ pub async fn sync_once(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
     user_id: i64,
 ) -> Result<()> {
     let devices = active_remote_devices(pool, user_id).await?;
@@ -947,6 +971,7 @@ pub async fn sync_once(
             pool,
             Arc::clone(&service),
             Arc::clone(&hub),
+            Arc::clone(&transport_stats),
             user_id,
             &device,
         )
@@ -968,6 +993,7 @@ async fn try_connect_invite(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
     user_id: i64,
     user_name: &str,
     invite: &InviteWire,
@@ -984,6 +1010,7 @@ async fn try_connect_invite(
     let snapshot = snapshot(pool, user_id).await?;
     let playback = local_playback_snapshot(pool, Arc::clone(&hub), user_id, &identity).await;
     let mut stream = service.open_stream(peer, SYNC_ALPN).await?;
+    record_stream_transport(&transport_stats, "device-sync", "outbound", "open", &stream);
     write_msg(
         &mut stream,
         &WireMessage::PairRequest {
@@ -1001,10 +1028,11 @@ async fn try_connect_invite(
     )
     .await?;
     finish_send(&mut stream).await?;
-    match read_msg(&mut stream)
+    let response = read_msg(&mut stream)
         .await
-        .context("pairing response was not received")?
-    {
+        .context("pairing response was not received")?;
+    record_stream_transport(&transport_stats, "device-sync", "outbound", "done", &stream);
+    match response {
         WireMessage::PairResponse {
             accepted: true,
             group_id: Some(group_id),
@@ -1068,7 +1096,9 @@ async fn serve_one(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
 ) -> Result<()> {
+    record_stream_transport(&transport_stats, "device-sync", "inbound", "open", &stream);
     match read_msg(&mut stream).await? {
         WireMessage::PairRequest {
             invite_id,
@@ -1087,6 +1117,7 @@ async fn serve_one(
                 pool,
                 service,
                 hub,
+                transport_stats,
                 invite_id,
                 secret,
                 profile,
@@ -1110,7 +1141,17 @@ async fn serve_one(
             playback,
         } => {
             handle_hello(
-                stream, pool, service, hub, group_id, profile, devices, vector, ops, snapshot,
+                stream,
+                pool,
+                service,
+                hub,
+                transport_stats,
+                group_id,
+                profile,
+                devices,
+                vector,
+                ops,
+                snapshot,
                 playback,
             )
             .await
@@ -1125,6 +1166,7 @@ async fn handle_pair_request(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
     invite_id: String,
     secret: String,
     mut profile: DeviceProfileWire,
@@ -1215,6 +1257,7 @@ async fn handle_pair_request(
             )
             .await?;
             finish_response(&mut stream).await?;
+            record_stream_transport(&transport_stats, "device-sync", "inbound", "done", &stream);
             return Ok(());
         }
         Some("accepted") => {}
@@ -1265,6 +1308,7 @@ async fn handle_pair_request(
     )
     .await?;
     finish_response(&mut stream).await?;
+    record_stream_transport(&transport_stats, "device-sync", "inbound", "done", &stream);
     Ok(())
 }
 
@@ -1274,6 +1318,7 @@ async fn handle_hello(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
     group_id: String,
     mut profile: DeviceProfileWire,
     devices: Vec<DeviceProfileWire>,
@@ -1334,6 +1379,7 @@ async fn handle_hello(
     )
     .await?;
     finish_response(&mut stream).await?;
+    record_stream_transport(&transport_stats, "device-sync", "inbound", "done", &stream);
     Ok(())
 }
 
@@ -1341,6 +1387,7 @@ async fn sync_device(
     pool: &sqlx::PgPool,
     service: Arc<MusicDhtService>,
     hub: Arc<PlayerDeviceHub>,
+    transport_stats: Arc<TransportStats>,
     user_id: i64,
     device: &StoredDevice,
 ) -> Result<()> {
@@ -1355,6 +1402,7 @@ async fn sync_device(
     let snapshot = snapshot(pool, user_id).await?;
     let playback = local_playback_snapshot(pool, Arc::clone(&hub), user_id, &identity).await;
     let mut stream = service.open_stream(peer, SYNC_ALPN).await?;
+    record_stream_transport(&transport_stats, "device-sync", "outbound", "open", &stream);
     write_msg(
         &mut stream,
         &WireMessage::Hello {
@@ -1369,10 +1417,11 @@ async fn sync_device(
     )
     .await?;
     finish_send(&mut stream).await?;
-    match read_msg(&mut stream)
+    let response = read_msg(&mut stream)
         .await
-        .context("device sync response was not received")?
-    {
+        .context("device sync response was not received")?;
+    record_stream_transport(&transport_stats, "device-sync", "outbound", "done", &stream);
+    match response {
         WireMessage::SyncResponse {
             accepted: true,
             devices,
@@ -3034,6 +3083,10 @@ fn json_f64(value: f64) -> serde_json::Value {
         .unwrap_or_else(|| serde_json::json!(0.0))
 }
 
+fn cover_variant_url(file_id: Option<i64>, variant: &str) -> Option<String> {
+    file_id.map(|id| format!("/api/player/cover/{id}/{variant}"))
+}
+
 async fn web_playback_payload(
     pool: &sqlx::PgPool,
     state: &PlaybackStateWire,
@@ -3265,7 +3318,8 @@ async fn web_track_json_by_id(
         "SELECT t.id, t.title::text AS title, t.track_number, t.disc_number,
                 t.duration_seconds, r.id AS release_id, r.title::text AS release_title,
                 r.year AS release_year, mf.audio_format, mf.audio_bitrate,
-                mf.audio_sample_rate, mf.audio_bit_depth, mf.file_size_bytes
+                mf.audio_sample_rate, mf.audio_bit_depth, mf.file_size_bytes,
+                COALESCE(t.cover_file_id, r.cover_file_id) AS cover_file_id
          FROM furumusic__track t
          JOIN furumusic__release r ON r.id = t.release_id
          LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
@@ -3290,7 +3344,7 @@ async fn web_track_json_by_id(
         "release_id": row.get::<i64, _>("release_id"),
         "release_title": row.get::<String, _>("release_title"),
         "release_year": row.get::<Option<i32>, _>("release_year"),
-        "cover_url": serde_json::Value::Null,
+        "cover_url": cover_variant_url(row.get::<Option<i64>, _>("cover_file_id"), "medium"),
         "stream_url": format!("/api/player/stream/{track_id}"),
         "uploader_name": "Fed",
         "audio_format": row.get::<Option<String>, _>("audio_format"),

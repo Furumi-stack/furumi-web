@@ -1575,9 +1575,9 @@ dependencies = [
 
 [[package]]
 name = "either"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 dependencies = [
  "serde",
 ]
@@ -1718,7 +1718,7 @@ dependencies = [
 [[package]]
 name = "federation-net"
 version = "0.1.0"
-source = "git+https://gt.hexor.cy/ab/frid.git#e5353fa9b93d78be6cd811b8430d7dd5e725e6e5"
+source = "git+https://gt.hexor.cy/ab/frid.git#085a4752da25a8d3fe7eac673af081a4a73c08bd"
 dependencies = [
  "blake3",
  "data-encoding",
@@ -1845,7 +1845,7 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "furumusic"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3622,7 +3622,7 @@ dependencies = [
 [[package]]
 name = "music-dht"
 version = "0.1.0"
-source = "git+https://gt.hexor.cy/ab/frid.git#e5353fa9b93d78be6cd811b8430d7dd5e725e6e5"
+source = "git+https://gt.hexor.cy/ab/frid.git#085a4752da25a8d3fe7eac673af081a4a73c08bd"
 dependencies = [
  "async-trait",
  "blake3",

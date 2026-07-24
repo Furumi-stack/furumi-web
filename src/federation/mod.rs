@@ -16,15 +16,15 @@ pub mod devices;
 mod serve;
 mod storage;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use music_dht::{
-    ItemKind, ItemSpec, MusicDhtConfig, MusicDhtService, NetworkId, PeerTicket, PublishStats,
-    RendezvousConfig, SyncStats,
+    ByteStream, ByteStreamConnectionStats, ItemKind, ItemSpec, MusicDhtConfig, MusicDhtService,
+    NetworkId, PeerTicket, PublishStats, RendezvousConfig, SyncStats,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -37,6 +37,7 @@ pub use serve::{AUDIO_ALPN, CATALOG_ALPN};
 
 /// How often the published library is re-synchronized with the database.
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
+const TRANSPORT_SAMPLE_LIMIT: usize = 16;
 
 struct Running {
     service: Arc<MusicDhtService>,
@@ -50,6 +51,157 @@ struct ContentHashJob {
     file_path: String,
 }
 
+#[derive(Debug, Clone)]
+struct TransportSample {
+    at: String,
+    protocol: &'static str,
+    direction: &'static str,
+    phase: &'static str,
+    peer_id: String,
+    selected_path: String,
+    open_paths: usize,
+    direct_paths: usize,
+    relay_paths: usize,
+    custom_paths: usize,
+    selected_rtt_ms: Option<u64>,
+    selected_tx_bytes: u64,
+    selected_rx_bytes: u64,
+    total_tx_bytes: u64,
+    total_rx_bytes: u64,
+    lost_packets: u64,
+    lost_bytes: u64,
+}
+
+impl TransportSample {
+    fn from_stats(
+        protocol: &'static str,
+        direction: &'static str,
+        phase: &'static str,
+        stats: ByteStreamConnectionStats,
+    ) -> Self {
+        Self {
+            at: now_iso(),
+            protocol,
+            direction,
+            phase,
+            peer_id: stats.peer_id.to_string(),
+            selected_path: stats.selected_path.as_str().to_string(),
+            open_paths: stats.open_paths,
+            direct_paths: stats.direct_paths,
+            relay_paths: stats.relay_paths,
+            custom_paths: stats.custom_paths,
+            selected_rtt_ms: stats
+                .selected_rtt
+                .map(|duration| duration.as_millis() as u64),
+            selected_tx_bytes: stats.selected_tx_bytes,
+            selected_rx_bytes: stats.selected_rx_bytes,
+            total_tx_bytes: stats.total_tx_bytes,
+            total_rx_bytes: stats.total_rx_bytes,
+            lost_packets: stats.lost_packets,
+            lost_bytes: stats.lost_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TransportStatsState {
+    total_samples: u64,
+    direct_samples: u64,
+    relay_samples: u64,
+    custom_samples: u64,
+    unknown_samples: u64,
+    audio_samples: u64,
+    catalog_samples: u64,
+    sync_samples: u64,
+    last: VecDeque<TransportSample>,
+}
+
+#[derive(Debug, Default)]
+pub struct TransportStats {
+    inner: std::sync::Mutex<TransportStatsState>,
+}
+
+impl TransportStats {
+    fn reset(&self) {
+        *lock(&self.inner) = TransportStatsState::default();
+    }
+
+    fn record(
+        &self,
+        protocol: &'static str,
+        direction: &'static str,
+        phase: &'static str,
+        stats: ByteStreamConnectionStats,
+    ) {
+        let sample = TransportSample::from_stats(protocol, direction, phase, stats);
+        let mut state = lock(&self.inner);
+        state.total_samples += 1;
+        match sample.selected_path.as_str() {
+            "direct" => state.direct_samples += 1,
+            "relay" => state.relay_samples += 1,
+            "custom" => state.custom_samples += 1,
+            _ => state.unknown_samples += 1,
+        }
+        match protocol {
+            "audio" => state.audio_samples += 1,
+            "catalog" => state.catalog_samples += 1,
+            "device-sync" => state.sync_samples += 1,
+            _ => {}
+        }
+        state.last.push_front(sample);
+        while state.last.len() > TRANSPORT_SAMPLE_LIMIT {
+            state.last.pop_back();
+        }
+    }
+
+    fn snapshot(&self) -> Value {
+        let state = lock(&self.inner);
+        let latest = state.last.front();
+        json!({
+            "total_samples": state.total_samples,
+            "direct_samples": state.direct_samples,
+            "relay_samples": state.relay_samples,
+            "custom_samples": state.custom_samples,
+            "unknown_samples": state.unknown_samples,
+            "audio_samples": state.audio_samples,
+            "catalog_samples": state.catalog_samples,
+            "sync_samples": state.sync_samples,
+            "last_path": latest.map(|sample| sample.selected_path.clone()),
+            "last_rtt_ms": latest.and_then(|sample| sample.selected_rtt_ms),
+            "last_peer": latest.map(|sample| sample.peer_id.clone()),
+            "last": state.last.iter().map(|sample| json!({
+                "at": sample.at,
+                "protocol": sample.protocol,
+                "direction": sample.direction,
+                "phase": sample.phase,
+                "peer_id": sample.peer_id,
+                "selected_path": sample.selected_path,
+                "open_paths": sample.open_paths,
+                "direct_paths": sample.direct_paths,
+                "relay_paths": sample.relay_paths,
+                "custom_paths": sample.custom_paths,
+                "selected_rtt_ms": sample.selected_rtt_ms,
+                "selected_tx_bytes": sample.selected_tx_bytes,
+                "selected_rx_bytes": sample.selected_rx_bytes,
+                "total_tx_bytes": sample.total_tx_bytes,
+                "total_rx_bytes": sample.total_rx_bytes,
+                "lost_packets": sample.lost_packets,
+                "lost_bytes": sample.lost_bytes,
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+pub fn record_stream_transport(
+    stats: &Arc<TransportStats>,
+    protocol: &'static str,
+    direction: &'static str,
+    phase: &'static str,
+    stream: &ByteStream,
+) {
+    stats.record(protocol, direction, phase, stream.connection_stats());
+}
+
 pub struct Federation {
     /// Transport data directory; server-side DHT state and identity live in PostgreSQL.
     data_dir: PathBuf,
@@ -61,6 +213,7 @@ pub struct Federation {
     running: tokio::sync::Mutex<Option<Running>>,
     last_sync: std::sync::Mutex<Option<String>>,
     last_error: std::sync::Mutex<Option<String>>,
+    transport_stats: Arc<TransportStats>,
 }
 
 fn now_iso() -> String {
@@ -87,6 +240,7 @@ pub fn handle() -> Arc<Federation> {
             running: tokio::sync::Mutex::new(None),
             last_sync: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
+            transport_stats: Arc::new(TransportStats::default()),
         })
     }))
 }
@@ -189,6 +343,7 @@ impl Federation {
 
         let dht_storage = Arc::new(PostgresFederationStorage::new(pool.clone()).await?);
         let secret_key = dht_storage.load_or_create_secret_key().await?;
+        self.transport_stats.reset();
 
         let config = MusicDhtConfig::builder()
             .data_dir(&self.data_dir)
@@ -236,6 +391,7 @@ impl Federation {
             pool.clone(),
             storage_dir.clone(),
             service.endpoint_id(),
+            Arc::clone(&self.transport_stats),
         ));
         let catalog_acceptor = service
             .stream_acceptor(CATALOG_ALPN)
@@ -245,6 +401,7 @@ impl Federation {
             pool.clone(),
             storage_dir,
             service.endpoint_id(),
+            Arc::clone(&self.transport_stats),
         ));
         let device_acceptor = service
             .stream_acceptor(devices::SYNC_ALPN)
@@ -255,9 +412,14 @@ impl Federation {
             pool.clone(),
             Arc::clone(&service),
             Arc::clone(&device_hub),
+            Arc::clone(&self.transport_stats),
         ));
-        let device_sync_task =
-            tokio::spawn(devices::sync_loop(pool, Arc::clone(&service), device_hub));
+        let device_sync_task = tokio::spawn(devices::sync_loop(
+            pool,
+            Arc::clone(&service),
+            device_hub,
+            Arc::clone(&self.transport_stats),
+        ));
 
         *guard = Some(Running {
             service,
@@ -596,6 +758,7 @@ impl Federation {
                     "connected_peers": peers,
                     "known_contacts": service.known_peers().len(),
                     "published_items": published,
+                    "transport": self.transport_stats.snapshot(),
                 })
             }
             None => json!({ "running": false }),
@@ -668,6 +831,7 @@ impl Federation {
             &pool,
             service,
             crate::player::PlayerDeviceHub::shared(),
+            Arc::clone(&self.transport_stats),
             user_id,
             user_name,
             invite,
@@ -698,6 +862,7 @@ impl Federation {
             &pool,
             service,
             crate::player::PlayerDeviceHub::shared(),
+            Arc::clone(&self.transport_stats),
             user_id,
         )
         .await

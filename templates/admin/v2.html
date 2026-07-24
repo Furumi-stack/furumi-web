@@ -2303,6 +2303,29 @@ tbody tr:hover {
                                     <div class="probe-row"><span>Published items</span><strong x-text="(federationStatus.node && federationStatus.node.published_items) ?? '-'"></strong></div>
                                     <div class="probe-row"><span>Last sync</span><strong x-text="federationStatus.last_sync || 'not yet'"></strong></div>
                                 </div>
+                                <div class="probe-table" x-show="fedTransport().total_samples > 0" style="margin-top:10px">
+                                    <div class="probe-row">
+                                        <span>Transport path</span>
+                                        <strong>
+                                            <span class="badge" :class="fedPathBadge(fedTransport().last_path)" x-text="fedTransport().last_path || 'unknown'"></span>
+                                        </strong>
+                                    </div>
+                                    <div class="probe-row"><span>RTT</span><strong x-text="fedRtt(fedTransport().last_rtt_ms)"></strong></div>
+                                    <div class="probe-row"><span>Path samples</span><strong x-text="`${fedTransport().direct_samples || 0} direct · ${fedTransport().relay_samples || 0} relay · ${fedTransport().custom_samples || 0} custom · ${fedTransport().unknown_samples || 0} unknown`"></strong></div>
+                                    <div class="probe-row"><span>Protocols</span><strong x-text="`${fedTransport().audio_samples || 0} audio · ${fedTransport().catalog_samples || 0} catalog · ${fedTransport().sync_samples || 0} sync`"></strong></div>
+                                    <div class="probe-row"><span>Last peer</span><strong x-text="fedShort(fedTransport().last_peer)"></strong></div>
+                                </div>
+                                <div class="probe-table" x-show="fedTransport().last && fedTransport().last.length" style="margin-top:10px">
+                                    <template x-for="(sample, index) in fedTransport().last.slice(0, 5)" :key="`${sample.at}-${sample.protocol}-${sample.direction}-${sample.phase}-${sample.peer_id}-${index}`">
+                                        <div class="probe-row">
+                                            <span x-text="`${sample.protocol} · ${sample.direction} · ${sample.phase}`"></span>
+                                            <strong>
+                                                <span class="badge" :class="fedPathBadge(sample.selected_path)" x-text="sample.selected_path || 'unknown'"></span>
+                                                <span x-text="` ${fedRtt(sample.selected_rtt_ms)} · tx ${formatBytes(sample.total_tx_bytes || 0)} · rx ${formatBytes(sample.total_rx_bytes || 0)} · lost ${formatBytes(sample.lost_bytes || 0)}`"></span>
+                                            </strong>
+                                        </div>
+                                    </template>
+                                </div>
                                 <p class="probe-intro muted" x-show="federationStatus.last_error" x-text="federationStatus.last_error"></p>
                                 <div class="toolbar" style="margin-top:14px; flex-wrap:wrap; gap:8px">
                                     <button class="btn" type="button" @click="loadFederation()" :disabled="federationLoading">
@@ -3266,6 +3289,21 @@ function adminV2() {
 
         fedShort(id) {
             return id ? `${id.slice(0, 12)}…` : '-';
+        },
+
+        fedTransport() {
+            return (this.federationStatus.node && this.federationStatus.node.transport) || {};
+        },
+
+        fedPathBadge(path) {
+            if (path === 'direct') return 'ok';
+            if (path === 'relay') return 'pending';
+            if (path === 'custom') return 'running';
+            return 'disabled';
+        },
+
+        fedRtt(ms) {
+            return ms != null ? `${Math.round(Number(ms))} ms` : '-';
         },
 
         async loadSettingsProbe(showErrors = true) {

@@ -3,6 +3,7 @@
 //! with the furumi TUI client and any other furumi peer.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 use music_dht::{ByteStream, EndpointId, ItemId, ItemKind, StreamAcceptor};
@@ -10,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use sqlx::Row as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+use super::{TransportStats, record_stream_transport};
 
 /// ALPN of the peer-to-peer audio streaming protocol.
 pub const AUDIO_ALPN: &[u8] = b"furumi-fd/audio/1";
@@ -344,13 +347,16 @@ pub async fn serve_audio(
     pool: PgPool,
     storage_dir: String,
     own: EndpointId,
+    transport_stats: Arc<TransportStats>,
 ) {
     while let Some(stream) = acceptor.accept().await {
         let pool = pool.clone();
         let storage_dir = storage_dir.clone();
+        let transport_stats = Arc::clone(&transport_stats);
         tokio::spawn(async move {
             let peer = stream.peer_id;
-            if let Err(err) = serve_audio_one(stream, pool, storage_dir, own).await {
+            if let Err(err) = serve_audio_one(stream, pool, storage_dir, own, transport_stats).await
+            {
                 tracing::warn!(peer = %peer, "federation audio stream failed: {err:#}");
             }
         });
@@ -362,7 +368,9 @@ async fn serve_audio_one(
     pool: PgPool,
     storage_dir: String,
     own: EndpointId,
+    transport_stats: Arc<TransportStats>,
 ) -> Result<()> {
+    record_stream_transport(&transport_stats, "audio", "inbound", "open", &stream);
     let request: AudioRequest = serde_json::from_slice(&read_line(&mut stream.recv).await?)?;
     tracing::info!(
         peer = %stream.peer_id,
@@ -465,6 +473,7 @@ async fn serve_audio_one(
     // Wait until the peer read everything before dropping the stream,
     // otherwise the tail of the file is lost.
     let _ = stream.send.stopped().await;
+    record_stream_transport(&transport_stats, "audio", "inbound", "done", &stream);
     Ok(())
 }
 
@@ -493,13 +502,17 @@ pub async fn serve_catalog(
     pool: PgPool,
     storage_dir: String,
     own: EndpointId,
+    transport_stats: Arc<TransportStats>,
 ) {
     while let Some(stream) = acceptor.accept().await {
         let pool = pool.clone();
         let storage_dir = storage_dir.clone();
+        let transport_stats = Arc::clone(&transport_stats);
         tokio::spawn(async move {
             let peer = stream.peer_id;
-            if let Err(err) = serve_catalog_one(stream, pool, storage_dir, own).await {
+            if let Err(err) =
+                serve_catalog_one(stream, pool, storage_dir, own, transport_stats).await
+            {
                 tracing::warn!(peer = %peer, "federation catalog request failed: {err:#}");
             }
         });
@@ -511,7 +524,9 @@ async fn serve_catalog_one(
     pool: PgPool,
     storage_dir: String,
     own: EndpointId,
+    transport_stats: Arc<TransportStats>,
 ) -> Result<()> {
+    record_stream_transport(&transport_stats, "catalog", "inbound", "open", &stream);
     let request: CatalogRequest = serde_json::from_slice(&read_line(&mut stream.recv).await?)?;
     tracing::info!(
         peer = %stream.peer_id,
@@ -579,6 +594,7 @@ async fn serve_catalog_one(
     }
     stream.send.finish()?;
     let _ = stream.send.stopped().await;
+    record_stream_transport(&transport_stats, "catalog", "inbound", "done", &stream);
     Ok(())
 }
 
