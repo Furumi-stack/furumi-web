@@ -6,7 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use music_dht::{ByteStream, EndpointId, ItemId, ItemKind, StreamAcceptor};
+pub use music_dht::catalog::CATALOG_ALPN;
+use music_dht::catalog::{
+    CatalogArtist, CatalogArtistPreview, CatalogImageHeader as ImageHeader, CatalogRelease,
+    CatalogRequest, CatalogResponse, CatalogTrack,
+};
+use music_dht::{ByteStream, EndpointId, ItemId, ItemKind, StreamAcceptor, normalize_name};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use sqlx::Row as _;
@@ -16,8 +21,6 @@ use super::{TransportStats, record_stream_transport};
 
 /// ALPN of the peer-to-peer audio streaming protocol.
 pub const AUDIO_ALPN: &[u8] = b"furumi-fd/audio/1";
-/// ALPN of the per-artist catalog protocol.
-pub const CATALOG_ALPN: &[u8] = b"furumi-fd/catalog/1";
 
 /// Maximum size of a JSON protocol line (request or response header).
 const MAX_PROTOCOL_LINE: usize = 4096;
@@ -64,58 +67,6 @@ struct TrackMetadata {
     year: Option<i32>,
     track_number: Option<i32>,
     disc_number: Option<i32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CatalogRequest {
-    artist: String,
-    #[serde(default)]
-    want: Option<String>,
-    #[serde(default)]
-    release: Option<String>,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct CatalogResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    artist: Option<CatalogArtist>,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct CatalogArtist {
-    name: String,
-    releases: Vec<CatalogRelease>,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct CatalogRelease {
-    title: String,
-    release_type: String,
-    year: Option<i32>,
-    tracks: Vec<CatalogTrack>,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct CatalogTrack {
-    title: String,
-    track_number: Option<i32>,
-    disc_number: Option<i32>,
-    duration_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content_id: Option<String>,
-    item_id: String,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct ImageHeader {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    mime_type: String,
-    size: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +226,31 @@ async fn track_artist_image_file(pool: &PgPool, track_id: i64) -> Result<Option<
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|row| (row.get(0), row.get(1))))
+}
+
+async fn track_catalog_artist_names(
+    pool: &PgPool,
+    track_id: i64,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let mut artists = Vec::new();
+    let mut featured = Vec::new();
+    let rows = sqlx::query(
+        "SELECT a.name, ta.role FROM furumusic__track_artist ta
+         JOIN furumusic__artist a ON a.id = ta.artist_id
+         WHERE ta.track_id = $1 ORDER BY ta.position",
+    )
+    .bind(track_id)
+    .fetch_all(pool)
+    .await?;
+    for row in rows {
+        let name: String = row.get(0);
+        match row.get::<String, _>(1).as_str() {
+            "featuring" => featured.push(name),
+            "main" => artists.push(name),
+            _ => {}
+        }
+    }
+    Ok((artists, featured))
 }
 
 async fn track_metadata(pool: &PgPool, track_id: i64) -> Result<Option<TrackMetadata>> {
@@ -542,7 +518,23 @@ async fn serve_catalog_one(
                 Err(err) => CatalogResponse {
                     ok: false,
                     error: Some(format!("catalog lookup failed: {err:#}")),
-                    artist: None,
+                    ..CatalogResponse::default()
+                },
+            };
+            stream
+                .send
+                .write_all(&serde_json::to_vec(&response)?)
+                .await?;
+        }
+        Some("artists") => {
+            let cursor = request.cursor.clone();
+            let limit = request.limit.unwrap_or(64).clamp(1, 200);
+            let response = match build_artist_slice(&pool, cursor, limit).await {
+                Ok(response) => response,
+                Err(err) => CatalogResponse {
+                    ok: false,
+                    error: Some(format!("artist slice lookup failed: {err:#}")),
+                    ..CatalogResponse::default()
                 },
             };
             stream
@@ -584,7 +576,7 @@ async fn serve_catalog_one(
             let response = CatalogResponse {
                 ok: false,
                 error: Some(format!("unknown request kind '{other}'")),
-                artist: None,
+                ..CatalogResponse::default()
             };
             stream
                 .send
@@ -611,7 +603,7 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
         return Ok(CatalogResponse {
             ok: false,
             error: Some("artist not found in the library".to_string()),
-            artist: None,
+            ..CatalogResponse::default()
         });
     };
     let artist_id: i64 = artist_row.get(0);
@@ -646,8 +638,11 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
         for row in track_rows {
             let track_id: i64 = row.get(0);
             let duration: f64 = row.get(4);
+            let (artists, featured_artists) = track_catalog_artist_names(pool, track_id).await?;
             tracks.push(CatalogTrack {
                 title: row.get(1),
+                artists,
+                featured_artists,
                 track_number: row.get(2),
                 disc_number: row.get(3),
                 duration_seconds: (duration > 0.0).then_some(duration),
@@ -665,11 +660,82 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
 
     Ok(CatalogResponse {
         ok: true,
-        error: None,
         artist: Some(CatalogArtist {
             name: artist_row.get(1),
             releases,
+            appears_on: Vec::new(),
         }),
+        ..CatalogResponse::default()
+    })
+}
+
+async fn build_artist_slice(
+    pool: &PgPool,
+    cursor: Option<String>,
+    limit: usize,
+) -> Result<CatalogResponse> {
+    let offset = cursor
+        .as_deref()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let rows = sqlx::query(
+        r#"SELECT a.name::text AS name,
+                  mf.file_path::text AS image_path,
+                  COALESCE(s.release_count, 0)::bigint AS release_count,
+                  COALESCE(s.track_count, 0)::bigint AS track_count
+           FROM furumusic__artist a
+           LEFT JOIN furumusic__media_file mf ON mf.id = a.image_file_id
+           LEFT JOIN (
+               SELECT appearance.artist_id,
+                      COUNT(DISTINCT appearance.release_id) FILTER (WHERE appearance.is_primary_release_artist) AS release_count,
+                      COUNT(DISTINCT appearance.track_id) AS track_count
+                 FROM (
+                        SELECT ta.artist_id,
+                               t.id AS track_id,
+                               r.id AS release_id,
+                               primary_release.artist_id IS NOT NULL AS is_primary_release_artist
+                          FROM furumusic__track_artist ta
+                          JOIN furumusic__track t ON t.id = ta.track_id AND t.is_hidden = false
+                          JOIN furumusic__release r ON r.id = t.release_id AND r.is_hidden = false
+                          LEFT JOIN furumusic__release_artist primary_release
+                            ON primary_release.release_id = r.id
+                           AND primary_release.artist_id = ta.artist_id
+                           AND primary_release.position = 0
+                      ) appearance
+                GROUP BY appearance.artist_id
+           ) s ON s.artist_id = a.id
+           WHERE a.is_hidden = false
+             AND COALESCE(s.track_count, 0) > 0
+           ORDER BY (COALESCE(s.release_count, 0) > 0) DESC,
+                    COALESCE(s.release_count, 0) DESC,
+                    COALESCE(s.track_count, 0) DESC,
+                    a.name_sort
+           LIMIT $1 OFFSET $2"#,
+    )
+    .bind(limit as i64 + 1)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    let mut artists = Vec::with_capacity(rows.len().min(limit));
+    let has_more = rows.len() > limit;
+    for row in rows.into_iter().take(limit) {
+        let name: String = row.get(0);
+        artists.push(CatalogArtistPreview {
+            artist_key: normalize_name(&name),
+            name,
+            image_path: row.get(1),
+            release_count: row.get(2),
+            track_count: row.get(3),
+        });
+    }
+    let next_cursor = has_more.then(|| (offset + artists.len() as i64).to_string());
+    Ok(CatalogResponse {
+        ok: true,
+        artists,
+        next_cursor,
+        ..CatalogResponse::default()
     })
 }
 
