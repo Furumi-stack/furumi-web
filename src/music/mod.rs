@@ -2223,6 +2223,105 @@ pub mod db_migrations {
             &[Operation::custom(ensure_federation_content_id_cache).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_content_addressed_music_refs(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        // A track reference is durable user-facing identity. `local_track_id`
+        // is availability, not identity: it may become non-NULL after a
+        // federated track is materialized without changing likes/playlists.
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__track_ref (
+                    id BIGSERIAL PRIMARY KEY,
+                    content_id TEXT NOT NULL UNIQUE,
+                    local_track_id BIGINT UNIQUE,
+                    title TEXT NOT NULL,
+                    release_title TEXT,
+                    year INTEGER,
+                    duration_seconds DOUBLE PRECISION,
+                    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    metadata_authority TEXT NOT NULL DEFAULT 'local',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_track_ref_local_track
+                   ON furumusic__track_ref (local_track_id)
+                 WHERE local_track_id IS NOT NULL",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__federation_track_source (
+                    track_ref_id BIGINT NOT NULL REFERENCES furumusic__track_ref(id)
+                        ON DELETE CASCADE,
+                    owner_peer_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    last_seen_ms BIGINT NOT NULL,
+                    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    PRIMARY KEY (owner_peer_id, item_id)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_federation_track_source_ref
+                   ON furumusic__federation_track_source (track_ref_id, last_seen_ms DESC)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__user_liked_track
+                   ADD COLUMN IF NOT EXISTS track_ref_id BIGINT
+                       REFERENCES furumusic__track_ref(id)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_liked_track_ref_uniq
+                   ON furumusic__user_liked_track (user_id, track_ref_id)
+                 WHERE track_ref_id IS NOT NULL",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__playlist_track
+                   ADD COLUMN IF NOT EXISTS track_ref_id BIGINT
+                       REFERENCES furumusic__track_ref(id)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_playlist_track_ref
+                   ON furumusic__playlist_track (track_ref_id)
+                 WHERE track_ref_id IS NOT NULL",
+            )
+            .await?;
+        // History deliberately remains local-track based. Only the web
+        // player's existing playback report records history and triggers
+        // Last.fm scrobbling.
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0040CreateContentAddressedMusicRefs;
+
+    impl migrations::Migration for M0040CreateContentAddressedMusicRefs {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0040_create_content_addressed_music_refs";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0039_ensure_federation_content_id_cache",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_content_addressed_music_refs).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2253,5 +2352,6 @@ pub mod db_migrations {
         &M0037CreatePlaylistShareLinks,
         &M0038CreateFedDeviceSync,
         &M0039EnsureFederationContentIdCache,
+        &M0040CreateContentAddressedMusicRefs,
     ];
 }

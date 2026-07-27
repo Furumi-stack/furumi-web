@@ -51,6 +51,7 @@ pub(super) struct ArtistRef {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TrackItem {
     pub(super) id: i64,
+    pub(super) content_id: Option<String>,
     pub(super) title: String,
     pub(super) track_number: Option<i32>,
     pub(super) disc_number: Option<i32>,
@@ -559,6 +560,46 @@ pub(super) struct PlayHistoryPage {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct LikeStatus {
     pub(super) liked: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct ContentTrackMutation {
+    pub(super) content_id: String,
+    pub(super) liked: Option<bool>,
+    pub(super) playlist_id: Option<i64>,
+    pub(super) position: Option<i64>,
+    pub(super) federation: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct PrepareFederatedTrackRequest {
+    pub(super) content_id: String,
+    pub(super) owner: String,
+    pub(super) item_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FederationArtworkQuery {
+    pub(super) owner: String,
+    pub(super) item_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FederationArtistQuery {
+    pub(super) name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FederationCatalogArtworkQuery {
+    pub(super) owner: String,
+    pub(super) artist: String,
+    pub(super) release: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FederationArtworkDiscoveryQuery {
+    pub(super) artist: String,
+    pub(super) release: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

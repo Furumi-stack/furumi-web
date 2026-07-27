@@ -9,10 +9,12 @@
 //! or download from other peers.
 //!
 //! Settings are the regular admin config entries (`federation_enabled`,
-//! `federation_network_id`) and apply on the fly — saving the settings
+//! `federation_network_id`, `federation_save_on_listen`) and apply on the fly — saving the settings
 //! starts, stops or re-joins the node without a server restart.
 
+pub mod client;
 pub mod devices;
+mod receive;
 mod serve;
 mod storage;
 
@@ -49,6 +51,13 @@ struct ContentHashJob {
     media_file_id: i64,
     sha256_hash: String,
     file_path: String,
+}
+
+#[derive(Clone)]
+struct CachedArtwork {
+    bytes: Vec<u8>,
+    mime: String,
+    fetched_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -207,8 +216,12 @@ pub struct Federation {
     data_dir: PathBuf,
     database_url: std::sync::Mutex<String>,
     storage_dir: std::sync::Mutex<String>,
+    save_on_listen: std::sync::atomic::AtomicBool,
     content_cache: std::sync::Mutex<HashMap<i64, (String, String)>>,
     content_pending: std::sync::Mutex<HashSet<i64>>,
+    prepared_cache: std::sync::Mutex<HashMap<String, (PathBuf, String)>>,
+    artwork_cache: std::sync::Mutex<HashMap<String, CachedArtwork>>,
+    download_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pool: tokio::sync::OnceCell<PgPool>,
     running: tokio::sync::Mutex<Option<Running>>,
     last_sync: std::sync::Mutex<Option<String>>,
@@ -234,8 +247,12 @@ pub fn handle() -> Arc<Federation> {
             data_dir: PathBuf::from(crate::media_paths::resolve_config_path("federation")),
             database_url: std::sync::Mutex::new(String::new()),
             storage_dir: std::sync::Mutex::new(String::new()),
+            save_on_listen: std::sync::atomic::AtomicBool::new(false),
             content_cache: std::sync::Mutex::new(Default::default()),
             content_pending: std::sync::Mutex::new(Default::default()),
+            prepared_cache: std::sync::Mutex::new(Default::default()),
+            artwork_cache: std::sync::Mutex::new(Default::default()),
+            download_locks: std::sync::Mutex::new(Default::default()),
             pool: tokio::sync::OnceCell::new(),
             running: tokio::sync::Mutex::new(None),
             last_sync: std::sync::Mutex::new(None),
@@ -285,7 +302,8 @@ impl Federation {
         let mut effective = config.clone();
         let rows = sqlx::query(
             "SELECT key, value FROM furumusic__config_entry
-             WHERE key IN ('federation_enabled', 'federation_network_id', 'agent_storage_dir')",
+             WHERE key IN ('federation_enabled', 'federation_network_id',
+                           'federation_save_on_listen', 'agent_storage_dir')",
         )
         .fetch_all(&pool)
         .await
@@ -304,6 +322,11 @@ impl Federation {
                     }
                 }
                 "federation_network_id" => effective.federation_network_id = value,
+                "federation_save_on_listen" => {
+                    if let Ok(parsed) = value.parse() {
+                        effective.federation_save_on_listen = parsed;
+                    }
+                }
                 "agent_storage_dir" => {
                     effective.agent_storage_dir = crate::media_paths::resolve_config_path(&value);
                 }
@@ -318,6 +341,10 @@ impl Federation {
     pub async fn apply(self: &Arc<Self>, config: &AppConfig) {
         *lock(&self.database_url) = config.database_url.clone();
         *lock(&self.storage_dir) = config.agent_storage_dir.clone();
+        self.save_on_listen.store(
+            config.federation_save_on_listen,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let network = config.federation_network_id.trim().to_string();
         if config.federation_enabled && !network.is_empty() {
             if let Err(err) = self.start(network, config.agent_storage_dir.clone()).await {
@@ -904,6 +931,16 @@ impl Federation {
             state,
         )
         .await
+    }
+
+    pub async fn fed_device_web_active_takeover(
+        &self,
+        user_id: i64,
+        previous_device_id: &str,
+        state: serde_json::Value,
+    ) -> Result<()> {
+        let pool = self.pool().await?;
+        devices::record_web_active_takeover(&pool, user_id, previous_device_id, state).await
     }
 }
 

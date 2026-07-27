@@ -452,6 +452,8 @@ struct AdminSettingsValues {
     federation_enabled: bool,
     #[serde(default)]
     federation_network_id: String,
+    #[serde(default)]
+    federation_save_on_listen: bool,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -478,6 +480,7 @@ struct AdminSettingsSources {
     agent_concurrency: &'static str,
     federation_enabled: &'static str,
     federation_network_id: &'static str,
+    federation_save_on_listen: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +509,8 @@ pub(super) struct UpdateSettingsRequest {
     federation_enabled: bool,
     #[serde(default)]
     federation_network_id: String,
+    #[serde(default)]
+    federation_save_on_listen: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -993,6 +998,10 @@ pub async fn update_settings(
             "federation_network_id",
             body.federation_network_id.trim().to_string(),
         ),
+        (
+            "federation_save_on_listen",
+            body.federation_save_on_listen.to_string(),
+        ),
     ];
     for (key, value) in fields {
         let mut entry = ConfigEntry::new(key.to_string(), value);
@@ -1143,6 +1152,7 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             agent_concurrency: config.agent_concurrency.to_string(),
             federation_enabled: config.federation_enabled,
             federation_network_id: config.federation_network_id,
+            federation_save_on_listen: config.federation_save_on_listen,
         },
         sources: AdminSettingsSources {
             auth_password_enabled: sources.auth_password_enabled.code(),
@@ -1167,6 +1177,7 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             agent_concurrency: sources.agent_concurrency.code(),
             federation_enabled: sources.federation_enabled.code(),
             federation_network_id: sources.federation_network_id.code(),
+            federation_save_on_listen: sources.federation_save_on_listen.code(),
         },
     }
 }

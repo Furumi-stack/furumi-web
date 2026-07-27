@@ -636,6 +636,144 @@
         </div>
     </template>
 
+    <!-- User Settings Modal -->
+    <template x-if="$store.user.settingsOpen">
+        <div class="modal-overlay" @click.self="$store.user.closeSettings()">
+            <div class="modal-box user-settings-modal">
+                <div class="user-settings-head">
+                    <div>
+                        <h3>User settings</h3>
+                        <p>Personal services, listening history and trusted devices.</p>
+                    </div>
+                    <button class="mobile-list-action" @click="$store.user.closeSettings()" title="{{ t.player_close }}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <section class="user-settings-section">
+                    <div class="user-settings-section-head">
+                        <div>
+                            <h4>Listening history</h4>
+                            <p>Review plays recorded by this web player.</p>
+                        </div>
+                        <button class="settings-secondary-btn" @click="$store.user.openHistoryFromSettings()">Open history</button>
+                    </div>
+                </section>
+
+                <section class="user-settings-section">
+                    <div class="user-settings-section-head">
+                        <div>
+                            <h4>Last.fm</h4>
+                            <p x-text="$store.user.lastfmStatusLabel()"></p>
+                        </div>
+                        <button class="settings-secondary-btn"
+                                :class="$store.user.lastfmClass()"
+                                :disabled="$store.user.lastfmBusy || !$store.user.lastfm?.configured"
+                                @click="$store.user.handleLastfm()"
+                                x-text="$store.user.lastfm?.connected && !$store.user.lastfm?.reauth_required ? 'Disconnect' : 'Connect'"></button>
+                    </div>
+                </section>
+
+                <section class="user-settings-section user-settings-devices">
+                    <div class="user-settings-section-head">
+                        <div>
+                            <h4>Connected devices</h4>
+                            <p x-text="$store.devices.fedSummary()"></p>
+                        </div>
+                        <button class="settings-secondary-btn"
+                                :disabled="$store.devices.fedBusy"
+                                @click="$store.devices.syncFedDevices()">Sync now</button>
+                    </div>
+                    <template x-if="$store.devices.fedError">
+                        <div class="fed-device-error" x-text="$store.devices.fedError"></div>
+                    </template>
+
+                    <div class="settings-device-group">
+                        <div class="settings-device-label">Web player sessions</div>
+                        <template x-for="device in $store.devices.webDevices()" :key="'settings-web-' + device.id">
+                            <div class="settings-device-row">
+                                <span class="device-row-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="3" y="4" width="18" height="12" rx="2"/>
+                                        <path d="M8 20h8M12 16v4"/>
+                                    </svg>
+                                </span>
+                                <span class="fed-device-main">
+                                    <span class="fed-device-name" x-text="device.name"></span>
+                                    <span class="fed-device-meta"
+                                          x-text="device.is_current ? 'This browser session' : (device.is_active ? 'Active web session' : 'Web session')"></span>
+                                </span>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="settings-device-group">
+                        <div class="settings-device-label">Trusted federation devices</div>
+                        <template x-for="request in $store.devices.fedPending()" :key="request.request_id">
+                            <div class="fed-pairing-card">
+                                <div class="fed-pairing-title" x-text="request.name || request.device_id"></div>
+                                <div class="fed-pairing-meta"
+                                     x-text="request.requester_group_id ? 'Already belongs to another sync group' : (request.client_version || 'Waiting for approval')"></div>
+                                <div class="fed-device-actions">
+                                    <button class="fed-action-btn primary"
+                                            @click="$store.devices.answerFedPairing(request, true, !!request.requester_group_id)"
+                                            x-text="request.requester_group_id ? 'Use existing group' : 'Approve'"></button>
+                                    <button class="fed-action-btn"
+                                            @click="$store.devices.answerFedPairing(request, false, false)">Reject</button>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-for="device in $store.devices.fedDevices()" :key="'settings-fed-' + device.device_id">
+                            <div class="settings-device-row federation">
+                                <span class="device-row-icon federation-device-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                        <circle cx="12" cy="12" r="3"/>
+                                        <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
+                                        <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
+                                    </svg>
+                                </span>
+                                <span class="fed-device-main">
+                                    <span class="fed-device-name" x-text="device.name || device.device_id"></span>
+                                    <span class="fed-device-meta"
+                                          x-text="device.is_self ? 'This web player' : (device.client_version || 'Trusted device')"></span>
+                                </span>
+                                <button class="fed-revoke-btn"
+                                        x-show="!device.is_self"
+                                        :disabled="$store.devices.fedBusy"
+                                        @click="$store.devices.revokeFedDevice(device)">Revoke</button>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="settings-pairing-actions">
+                        <button class="settings-primary-btn"
+                                :disabled="$store.devices.fedBusy"
+                                @click="$store.devices.generateFedInvite()">Invite a device</button>
+                        <template x-if="$store.devices.fedInvite">
+                            <input class="fed-device-input"
+                                   readonly
+                                   :value="$store.devices.fedInvite"
+                                   @focus="$event.target.select()">
+                        </template>
+                        <div class="fed-connect-row">
+                            <input class="fed-device-input"
+                                   type="text"
+                                   placeholder="Paste frid:// invite"
+                                   x-model="$store.devices.fedInviteInput"
+                                   @keydown.enter.prevent="$store.devices.connectFedInvite()">
+                            <button class="settings-secondary-btn"
+                                    :disabled="$store.devices.fedBusy || !$store.devices.fedInviteInput.trim()"
+                                    @click="$store.devices.connectFedInvite()">Connect</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </template>
+
     <!-- Play History Modal -->
     <template x-if="$store.history.modal">
         <div class="modal-overlay" @click.self="$store.history.close()">

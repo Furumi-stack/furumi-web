@@ -493,6 +493,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.store('user', {
         profile: null,
         menuOpen: false,
+        settingsOpen: false,
         lastfm: { configured: false, connected: false, username: null, reauth_required: false, last_error: null },
         lastfmBusy: false,
 
@@ -578,6 +579,21 @@ document.addEventListener('alpine:init', () => {
             } finally {
                 this.lastfmBusy = false;
             }
+        },
+
+        openSettings() {
+            this.menuOpen = false;
+            this.settingsOpen = true;
+            this.loadLastfm();
+            Alpine.store('devices')?.loadFedDevices();
+        },
+
+        closeSettings() {
+            this.settingsOpen = false;
+        },
+
+        openHistoryFromSettings() {
+            Alpine.store('history').open();
         },
 
         initials() {
@@ -717,6 +733,7 @@ document.addEventListener('alpine:init', () => {
         _remoteStateBaseTime: 0,
         _remoteStateReceivedAt: 0,
         _remoteStateTimer: null,
+        _prefetchedQueueKey: null,
 
         _hasInitialShareLink() {
             const params = new URLSearchParams(window.location.search);
@@ -732,6 +749,7 @@ document.addEventListener('alpine:init', () => {
                 this.duration = audio.duration || 0;
                 this.progress = this.duration > 0 ? (this.currentTime / this.duration) * 100 : 0;
                 this._trackListenedDelta();
+                this._maybePrefetchNext();
             });
 
             audio.addEventListener('ended', () => {
@@ -802,6 +820,12 @@ document.addEventListener('alpine:init', () => {
             if (!queue || idx < 0 || idx >= queue.tracks.length) return;
             queue.currentIndex = idx;
             const track = queue.tracks[idx];
+            if (track?.federation_pending && track?._federationTrack) {
+                Alpine.store('library')?.playFederatedTrack(track._federationTrack, {
+                    queueIndex: idx,
+                });
+                return;
+            }
             if (this._shouldSendRemote()) {
                 this._mirrorRemoteTrack(track, true, 0);
                 if (this._shouldMirrorRemoteLocally()) {
@@ -820,8 +844,25 @@ document.addEventListener('alpine:init', () => {
             this._playLocal(track);
         },
 
+        _maybePrefetchNext() {
+            if (this.progress < 90 || !this.isPlaying) return;
+            const queue = Alpine.store('queue');
+            const nextIndex = queue?.currentIndex + 1;
+            if (!queue || nextIndex < 0 || nextIndex >= queue.tracks.length) return;
+            const next = queue.tracks[nextIndex];
+            if (!next?.federation_pending || !next?._federationTrack) return;
+            const key = next.content_id || next.id;
+            if (!key || this._prefetchedQueueKey === key) return;
+            this._prefetchedQueueKey = key;
+            Alpine.store('library')?.playFederatedTrack(next._federationTrack, {
+                queueIndex: nextIndex,
+                playAfterPrepare: false,
+            });
+        },
+
         _playLocal(track, options = {}) {
             this.currentTrack = track;
+            this._prefetchedQueueKey = null;
             Alpine.store('queue')?.syncCurrentIndexToTrack(track);
             this._localSourceTrackId = track.id;
             this._historyRecorded = false;
@@ -1306,11 +1347,17 @@ document.addEventListener('alpine:init', () => {
 
         _buildStatePayload() {
             const queue = Alpine.store('queue');
+            const localQueue = queue.tracks.filter(track => Number.isInteger(Number(track.id)));
+            const currentLocalId = this.currentTrack && Number.isInteger(Number(this.currentTrack.id))
+                ? Number(this.currentTrack.id)
+                : null;
             return {
-                current_track_id: this.currentTrack ? this.currentTrack.id : null,
+                current_track_id: currentLocalId,
                 position_ms: Math.floor(this.currentTime * 1000),
-                queue: queue.tracks.map(t => t.id),
-                queue_position: queue.currentIndex,
+                queue: localQueue.map(track => Number(track.id)),
+                queue_position: currentLocalId == null
+                    ? 0
+                    : Math.max(0, localQueue.findIndex(track => Number(track.id) === currentLocalId)),
                 shuffle: this.shuffle,
                 repeat_mode: this.repeatMode,
                 volume: this.volume,
@@ -1392,6 +1439,9 @@ document.addEventListener('alpine:init', () => {
 
         _recordHistory(completed) {
             if (this._historyRecorded || !this.currentTrack) return;
+            if (!Number.isInteger(Number(this.currentTrack.id)) || this.currentTrack.federated_cache) {
+                return;
+            }
             this._historyRecorded = true;
             const listenedSeconds = this._historyListenedSeconds(completed);
             fetch('/api/player/history', {
@@ -1472,6 +1522,9 @@ document.addEventListener('alpine:init', () => {
 
         _sendNowPlaying() {
             if (this._nowPlayingSent || !this.currentTrack) return;
+            if (!Number.isInteger(Number(this.currentTrack.id)) || this.currentTrack.federated_cache) {
+                return;
+            }
             const lastfm = Alpine.store('user')?.lastfm;
             if (!lastfm?.configured || !lastfm?.connected || lastfm?.reauth_required) return;
             this._nowPlayingSent = true;
@@ -1756,6 +1809,14 @@ document.addEventListener('alpine:init', () => {
 
         fedDevices() {
             return (this.fed?.devices || []).filter(device => !device.revoked);
+        },
+
+        webDevices() {
+            return this.devices.filter(device => device.kind !== 'fed');
+        },
+
+        playbackFedDevices() {
+            return this.devices.filter(device => device.kind === 'fed');
         },
 
         fedPending() {
@@ -2431,6 +2492,16 @@ document.addEventListener('alpine:init', () => {
         searchQuery: '',
         searchResults: null,
         searchLoading: false,
+        federationSearch: { loading: false, error: '', artists: [], releases: [], tracks: [] },
+        artistFederation: { loading: false, error: '', releases: [], tracks: [] },
+        federationPreparing: {},
+        trackAvailability: {},
+        _federatedReleaseCache: {},
+        federationLiked: [],
+        _federationSearchSource: null,
+        _artistFederationSource: null,
+        _releaseFederationSource: null,
+        releaseFederationLoading: false,
         _previousView: 'artists',
         _activeHash: location.hash || '#artists',
         _scrollPositions: {},
@@ -2439,6 +2510,12 @@ document.addEventListener('alpine:init', () => {
 
         init() {
             this._setupScroll();
+            this.loadFederationLikes();
+            window.addEventListener('furumi:track-availability', event => {
+                if (event.detail?.source !== 'library') {
+                    this.applyTrackAvailability(event.detail || {});
+                }
+            });
 
             // Listen for browser back/forward
             window.addEventListener('hashchange', () => {
@@ -2484,8 +2561,18 @@ document.addEventListener('alpine:init', () => {
                 else if (options.restoreScroll) this._restoreScrollPosition(hash);
             } else if (view === 'artist' && id) {
                 this.openArtist(id, options);
+            } else if (view === 'artistfed') {
+                const nameMatch = params.match(/name=([^&]*)/);
+                if (nameMatch) this.openFederatedArtist(decodeURIComponent(nameMatch[1]), options);
             } else if (view === 'release' && id) {
                 this.openRelease(id, options);
+            } else if (view === 'releasefed') {
+                const keyMatch = params.match(/key=([^&]*)/);
+                const release = keyMatch
+                    ? this._federatedReleaseCache[decodeURIComponent(keyMatch[1])]
+                    : null;
+                if (release) this.openFederatedRelease(release, options);
+                else this.goArtists(options);
             } else if (view === 'playlist' && id) {
                 this.openPlaylist(id, options);
             } else if (view === 'search') {
@@ -2542,6 +2629,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         _beginNavigation(hash, options = {}) {
+            if (!hash.startsWith('#artistfed')) this.stopArtistFederation();
+            if (!hash.startsWith('#release/')) this.stopReleaseFederation();
             if (!options.fromHash) {
                 this._saveScrollPosition(this._activeHash);
                 this._setHash(hash);
@@ -2637,6 +2726,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async openArtist(id, options = {}) {
+            this.stopArtistFederation();
             this._beginNavigation('#artist/' + id, options);
             this.searchQuery = '';
             this.searchResults = null;
@@ -2646,8 +2736,191 @@ document.addEventListener('alpine:init', () => {
                 const res = await fetch(`/api/player/artists/${id}`);
                 if (!res.ok) throw new Error('failed');
                 this.currentArtist = await res.json();
+                this.startArtistFederation(this.currentArtist.name);
             } catch {}
             this._afterNavigation(options);
+        },
+
+        stopArtistFederation() {
+            if (this._artistFederationSource) {
+                this._artistFederationSource.close();
+                this._artistFederationSource = null;
+            }
+            this.artistFederation = { loading: false, error: '', releases: [], tracks: [] };
+        },
+
+        async openFederatedArtist(artist, options = {}) {
+            const name = typeof artist === 'string' ? artist : artist?.name;
+            if (!name) return;
+            this.stopFederationSearch();
+            this.stopArtistFederation();
+            this._beginNavigation('#artistfed?name=' + encodeURIComponent(name), options);
+            this.searchQuery = '';
+            this.searchResults = null;
+            this.view = 'artist_detail';
+            this.currentArtist = {
+                id: null,
+                name,
+                image_url: null,
+                releases: [],
+                top_tracks: [],
+                featured_tracks: [],
+                total_track_count: 0,
+                total_play_count: 0,
+                federated: true,
+            };
+            this.startArtistFederation(name);
+            const requestedKey = name.trim().toLocaleLowerCase();
+            try {
+                const search = await fetch(`/api/player/search?q=${encodeURIComponent(name)}&limit=50`);
+                if (search.ok) {
+                    const results = await search.json();
+                    const local = (results.artists || []).find(candidate =>
+                        candidate.name?.trim().toLocaleLowerCase() === requestedKey
+                    );
+                    if (local && this.view === 'artist_detail'
+                        && this.currentArtist?.name?.trim().toLocaleLowerCase() === requestedKey) {
+                        const detail = await fetch(`/api/player/artists/${local.id}`);
+                        if (detail.ok) {
+                            const localArtist = await detail.json();
+                            if (this.currentArtist?.name?.trim().toLocaleLowerCase() === requestedKey) {
+                                this.currentArtist = { ...localArtist, federated: true };
+                            }
+                        }
+                    }
+                }
+            } catch {}
+            this._afterNavigation(options);
+        },
+
+        startArtistFederation(name) {
+            this.artistFederation = { loading: true, error: '', releases: [], tracks: [] };
+            const source = new EventSource(
+                `/api/player/federation/artists/events?name=${encodeURIComponent(name)}`
+            );
+            this._artistFederationSource = source;
+            source.addEventListener('federation.artist.catalog', event => {
+                if (this._artistFederationSource !== source) return;
+                const payload = JSON.parse(event.data);
+                const owner = payload.peer;
+                const artist = payload.entity || {};
+                const artistName = artist.name || name;
+                const artworkBase = this.federationDiscoveredArtwork(artistName);
+                if (!this.currentArtist?.image_url) {
+                    this.currentArtist = { ...this.currentArtist, image_url: artworkBase };
+                }
+                const releases = [...this.artistFederation.releases];
+                const tracks = [...this.artistFederation.tracks];
+                const catalogReleases = [
+                    ...(artist.releases || []),
+                    ...(artist.appears_on || []).map(appearance => ({
+                        title: appearance.release_title,
+                        release_type: appearance.release_type,
+                        year: appearance.year,
+                        tracks: [appearance.track],
+                    })),
+                ];
+                for (const release of catalogReleases) {
+                    const releaseKey = [
+                        release.title?.trim().toLocaleLowerCase(),
+                        release.year || '',
+                        release.release_type || '',
+                    ].join('|');
+                    const wireTracks = (release.tracks || [])
+                        .filter(item => item.content_id && item.item_id)
+                        .map(item => this.withTrackAvailability({
+                            key: { content_id: item.content_id },
+                            metadata: {
+                                title: item.title,
+                                artists: (item.artists || []).map(value => ({
+                                    key: { normalized_name: value.trim().toLocaleLowerCase() },
+                                    name: value,
+                                    local_id: null,
+                                })),
+                                featured_artists: (item.featured_artists || []).map(value => ({
+                                    key: { normalized_name: value.trim().toLocaleLowerCase() },
+                                    name: value,
+                                    local_id: null,
+                                })),
+                                release: { title: release.title },
+                                year: release.year,
+                                duration_seconds: item.duration_seconds,
+                                track_number: item.track_number,
+                                disc_number: item.disc_number,
+                                cover_url: `/api/player/federation/tracks/artwork?owner=${owner}&item_id=${item.item_id}`,
+                            },
+                            availability: {
+                                state: 'federated',
+                                local: null,
+                                federation: [{ owner, item_id: item.item_id }],
+                            },
+                        }));
+                    const existingRelease = releases.find(item => item.key === releaseKey);
+                    if (existingRelease) {
+                        const known = new Set(existingRelease.tracks.map(item => item.key.content_id));
+                        existingRelease.tracks = [
+                            ...existingRelease.tracks,
+                            ...wireTracks.filter(item => !known.has(item.key.content_id)),
+                        ];
+                        if (!existingRelease.owners.includes(owner)) existingRelease.owners.push(owner);
+                    } else {
+                        releases.push({
+                            key: releaseKey,
+                            title: release.title,
+                            release_type: release.release_type || 'other',
+                            year: release.year,
+                            owners: [owner],
+                            cover_url: this.federationDiscoveredArtwork(artistName, release.title),
+                            tracks: wireTracks,
+                        });
+                    }
+                    for (const track of wireTracks) {
+                        const existingTrack = tracks.find(item => item.key.content_id === track.key.content_id);
+                        if (existingTrack) {
+                            const sourceInfo = track.availability.federation[0];
+                            if (!existingTrack.availability.federation.some(item =>
+                                item.owner === sourceInfo.owner && item.item_id === sourceInfo.item_id
+                            )) existingTrack.availability.federation.push(sourceInfo);
+                        } else {
+                            tracks.push(track);
+                        }
+                    }
+                }
+                this.artistFederation = {
+                    ...this.artistFederation,
+                    releases: [...releases],
+                    tracks: [...tracks],
+                };
+                if (this.currentArtist?.releases?.length) {
+                    this.currentArtist = {
+                        ...this.currentArtist,
+                        releases: this.currentArtist.releases.map(localRelease => ({
+                            ...localRelease,
+                            cover_url: localRelease.cover_url || this.federationDiscoveredArtwork(
+                                artistName,
+                                localRelease.title,
+                            ),
+                        })),
+                    };
+                }
+            });
+            source.addEventListener('artist.completed', () => {
+                if (this._artistFederationSource === source) {
+                    this.artistFederation = { ...this.artistFederation, loading: false };
+                    this._artistFederationSource = null;
+                }
+                source.close();
+            });
+            source.onerror = () => {
+                if (this._artistFederationSource !== source) return;
+                this.artistFederation = {
+                    ...this.artistFederation,
+                    loading: false,
+                    error: 'Federation connection interrupted',
+                };
+                this._artistFederationSource = null;
+                source.close();
+            };
         },
 
         artistReleaseGroups() {
@@ -2878,11 +3151,16 @@ document.addEventListener('alpine:init', () => {
 
         playArtistTopTracks() {
             const tracks = this.currentArtist?.top_tracks || [];
-            if (!tracks.length) return;
-            Alpine.store('queue').playRelease(tracks, 0);
+            if (tracks.length) {
+                Alpine.store('queue').playRelease(tracks, 0);
+                return;
+            }
+            const federated = this.artistFederation.tracks[0];
+            if (federated) this.playFederatedTrack(federated);
         },
 
         async openRelease(id, options = {}) {
+            this.stopReleaseFederation();
             this._beginNavigation('#release/' + id, options);
             this.searchQuery = '';
             this.searchResults = null;
@@ -2892,8 +3170,109 @@ document.addEventListener('alpine:init', () => {
                 const res = await fetch(`/api/player/releases/${id}`);
                 if (!res.ok) throw new Error('failed');
                 this.currentRelease = await res.json();
+                if (!this.currentRelease.cover_url && this.currentRelease.artists?.[0]?.name) {
+                    this.currentRelease = {
+                        ...this.currentRelease,
+                        cover_url: this.federationDiscoveredArtwork(
+                            this.currentRelease.artists[0].name,
+                            this.currentRelease.title,
+                        ),
+                    };
+                }
+                this.startReleaseFederation(this.currentRelease);
             } catch {}
             this._afterNavigation(options);
+        },
+
+        stopReleaseFederation() {
+            if (this._releaseFederationSource) {
+                this._releaseFederationSource.close();
+                this._releaseFederationSource = null;
+            }
+            this.releaseFederationLoading = false;
+        },
+
+        startReleaseFederation(release) {
+            const artistName = release?.artists?.[0]?.name;
+            if (!artistName || !release?.title) return;
+            this.stopReleaseFederation();
+            this.releaseFederationLoading = true;
+            const source = new EventSource(
+                `/api/player/federation/artists/events?name=${encodeURIComponent(artistName)}`
+            );
+            this._releaseFederationSource = source;
+            const wantedTitle = this.normalizeFederationSearchText(release.title);
+            source.addEventListener('federation.artist.catalog', event => {
+                if (this._releaseFederationSource !== source || !this.currentRelease) return;
+                const payload = JSON.parse(event.data);
+                const owner = payload.peer;
+                const catalog = payload.entity || {};
+                const matches = (catalog.releases || []).filter(candidate =>
+                    this.normalizeFederationSearchText(candidate.title) === wantedTitle
+                    && (!release.year || !candidate.year || Number(candidate.year) === Number(release.year))
+                );
+                if (!matches.length) return;
+                const existing = new Set(
+                    (this.currentRelease.tracks || []).map(track => track.content_id).filter(Boolean)
+                );
+                const additions = [];
+                for (const candidate of matches) {
+                    for (const item of candidate.tracks || []) {
+                        if (!item.content_id || !item.item_id || existing.has(item.content_id)) continue;
+                        const federated = this.withTrackAvailability({
+                            key: { content_id: item.content_id },
+                            metadata: {
+                                title: item.title,
+                                artists: (item.artists || []).map(name => ({
+                                    key: { normalized_name: this.normalizeFederationSearchText(name) },
+                                    name,
+                                    local_id: null,
+                                })),
+                                featured_artists: (item.featured_artists || []).map(name => ({
+                                    key: { normalized_name: this.normalizeFederationSearchText(name) },
+                                    name,
+                                    local_id: null,
+                                })),
+                                release: { title: candidate.title },
+                                year: candidate.year,
+                                duration_seconds: item.duration_seconds,
+                                track_number: item.track_number,
+                                disc_number: item.disc_number,
+                                cover_url: this.federationDiscoveredArtwork(artistName, candidate.title),
+                            },
+                            availability: {
+                                state: 'federated',
+                                local: null,
+                                federation: [{ owner, item_id: item.item_id }],
+                            },
+                        });
+                        additions.push(this.federationQueueTrack(federated));
+                        existing.add(item.content_id);
+                    }
+                }
+                if (additions.length) {
+                    const tracks = [...this.currentRelease.tracks, ...additions].sort((left, right) =>
+                        Number(left.disc_number || 1) - Number(right.disc_number || 1)
+                        || Number(left.track_number || 9999) - Number(right.track_number || 9999)
+                        || String(left.title).localeCompare(String(right.title))
+                    );
+                    this.currentRelease = { ...this.currentRelease, tracks };
+                }
+            });
+            source.addEventListener('artist.completed', () => {
+                if (this._releaseFederationSource === source) {
+                    this._releaseFederationSource = null;
+                    this.releaseFederationLoading = false;
+                }
+                source.close();
+            });
+            source.onerror = () => {
+                if (this._releaseFederationSource === source) {
+                    this._releaseFederationSource = null;
+                    this.releaseFederationLoading = false;
+                }
+                source.close();
+            };
         },
 
         async openPlaylist(id, options = {}) {
@@ -2904,7 +3283,17 @@ document.addEventListener('alpine:init', () => {
             try {
                 const res = await fetch(`/api/player/playlists/${id}`);
                 if (!res.ok) throw new Error('failed');
-                this.currentPlaylist = await res.json();
+                const playlist = await res.json();
+                const federationResponse = await fetch(`/api/player/playlists/${id}/federation-tracks`);
+                if (federationResponse.ok) {
+                    const references = await federationResponse.json();
+                    const federated = (references || [])
+                        .map(reference => this.federationTrackFromWire(reference.federation))
+                        .filter(Boolean)
+                        .map(track => this.federationQueueTrack(track));
+                    playlist.tracks = [...(playlist.tracks || []), ...federated];
+                }
+                this.currentPlaylist = playlist;
             } catch {}
             this._afterNavigation(options);
         },
@@ -2977,6 +3366,7 @@ document.addEventListener('alpine:init', () => {
             }
             this.view = 'search';
             this.searchLoading = true;
+            this.startFederationSearch(q);
             try {
                 const res = await fetch(`/api/player/search?q=${encodeURIComponent(q)}&limit=10`);
                 if (!res.ok) throw new Error('failed');
@@ -2989,6 +3379,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         clearSearch() {
+            this.stopFederationSearch();
             this.searchQuery = '';
             this.searchResults = null;
             this.searchLoading = false;
@@ -2999,6 +3390,650 @@ document.addEventListener('alpine:init', () => {
                     this.$nextTick(() => { this._setupScroll(); });
                 }
             }
+        },
+
+        stopFederationSearch() {
+            if (this._federationSearchSource) {
+                this._federationSearchSource.close();
+                this._federationSearchSource = null;
+            }
+            this.federationSearch = { loading: false, error: '', artists: [], releases: [], tracks: [] };
+        },
+
+        startFederationSearch(query) {
+            this.stopFederationSearch();
+            this.federationSearch = { loading: true, error: '', artists: [], releases: [], tracks: [] };
+            const source = new EventSource(`/api/player/federation/search/events?q=${encodeURIComponent(query)}`);
+            this._federationSearchSource = source;
+            const updateResults = (kind, keyFor, labelFor, entity) => {
+                if (this._federationSearchSource !== source) return;
+                const items = [...this.federationSearch[kind]];
+                const key = keyFor(entity);
+                const index = items.findIndex(item => keyFor(item) === key);
+                if (index >= 0) items.splice(index, 1, entity);
+                else items.push(entity);
+                items.sort((left, right) => {
+                    const score = this.federationSearchScore(labelFor(right), query)
+                        - this.federationSearchScore(labelFor(left), query);
+                    return score || String(labelFor(left) || '').localeCompare(
+                        String(labelFor(right) || ''),
+                        undefined,
+                        { sensitivity: 'base' },
+                    );
+                });
+                this.federationSearch = { ...this.federationSearch, [kind]: items };
+            };
+            const watchdog = window.setTimeout(() => {
+                if (!this.federationSearch.loading || this._federationSearchSource !== source) return;
+                this.federationSearch = {
+                    ...this.federationSearch,
+                    error: 'Federation search timed out',
+                    loading: false,
+                };
+                source.close();
+                this._federationSearchSource = null;
+            }, 25000);
+            const upsertTrack = event => {
+                const payload = JSON.parse(event.data);
+                const track = this.withTrackAvailability(payload.entity);
+                if (!track?.key?.content_id) return;
+                updateResults('tracks', item => item.key.content_id, item => item.metadata?.title, track);
+            };
+            source.addEventListener('federation.track', upsertTrack);
+            source.addEventListener('federation.artist', event => {
+                const artist = JSON.parse(event.data)?.entity;
+                const key = artist?.key?.normalized_name;
+                if (!key) return;
+                updateResults('artists', item => item.key.normalized_name, item => item.name, artist);
+            });
+            source.addEventListener('federation.release', event => {
+                const release = JSON.parse(event.data)?.entity;
+                if (!release?.key) return;
+                updateResults('releases', item => JSON.stringify(item.key || {}), item => item.title, release);
+            });
+            source.addEventListener('search.completed', () => {
+                window.clearTimeout(watchdog);
+                if (this._federationSearchSource === source) {
+                    this.federationSearch = { ...this.federationSearch, loading: false };
+                }
+                source.close();
+                if (this._federationSearchSource === source) this._federationSearchSource = null;
+            });
+            source.addEventListener('search.failed', event => {
+                window.clearTimeout(watchdog);
+                let error = 'Federation search failed';
+                try {
+                    error = JSON.parse(event.data)?.entity?.message || error;
+                } catch {}
+                if (this._federationSearchSource === source) {
+                    this.federationSearch = { ...this.federationSearch, error, loading: false };
+                }
+                source.close();
+                if (this._federationSearchSource === source) this._federationSearchSource = null;
+            });
+            source.onerror = () => {
+                if (!this.federationSearch.loading || this._federationSearchSource !== source) return;
+                window.clearTimeout(watchdog);
+                this.federationSearch = {
+                    ...this.federationSearch,
+                    error: 'Federation connection interrupted',
+                    loading: false,
+                };
+                source.close();
+                if (this._federationSearchSource === source) this._federationSearchSource = null;
+            };
+        },
+
+        normalizeFederationSearchText(value) {
+            return String(value || '')
+                .normalize('NFKD')
+                .toLocaleLowerCase()
+                .replace(/ё/g, 'е')
+                .replace(/[^\p{L}\p{N}]+/gu, ' ')
+                .trim()
+                .replace(/\s+/g, ' ');
+        },
+
+        federationSearchScore(value, query) {
+            const candidate = this.normalizeFederationSearchText(value);
+            const wanted = this.normalizeFederationSearchText(query);
+            if (!candidate || !wanted) return 0;
+            if (candidate === wanted) return 100000;
+            if (candidate.startsWith(wanted + ' ')) return 90000;
+            if (candidate.includes(wanted)) return 80000;
+            const candidateWords = candidate.split(' ');
+            const wantedWords = wanted.split(' ');
+            const exactWords = wantedWords.filter(word => candidateWords.includes(word)).length;
+            const prefixWords = wantedWords.filter(word =>
+                candidateWords.some(candidateWord => candidateWord.startsWith(word))
+            ).length;
+            const allExact = exactWords === wantedWords.length;
+            const allPrefixes = prefixWords === wantedWords.length;
+            if (allExact) return 70000 - Math.abs(candidateWords.length - wantedWords.length) * 100;
+            if (allPrefixes) return 60000 - Math.abs(candidateWords.length - wantedWords.length) * 100;
+            return exactWords * 5000 + prefixWords * 2500
+                - Math.abs(candidate.length - wanted.length);
+        },
+
+        federationArtistLine(track) {
+            return [...(track?.metadata?.artists || []), ...(track?.metadata?.featured_artists || [])]
+                .map(artist => artist.name)
+                .filter(Boolean)
+                .join(', ');
+        },
+
+        federationArtistImage(artist) {
+            if (!artist?.name) return '';
+            return this.federationDiscoveredArtwork(artist.name);
+        },
+
+        federationDiscoveredArtwork(artist, release = '') {
+            if (!artist) return '';
+            const params = new URLSearchParams({ artist });
+            if (release) params.set('release', release);
+            return `/api/player/federation/catalog/artwork/discover?${params.toString()}`;
+        },
+
+        async loadFederationLikes() {
+            try {
+                const response = await fetch('/api/player/tracks/content/like');
+                if (response.ok) this.federationLiked = await response.json();
+            } catch {}
+        },
+
+        federationIsLiked(track) {
+            return this.federationLiked.includes(track?.key?.content_id);
+        },
+
+        federationWireTrack(track) {
+            const metadata = track?.metadata || {};
+            const source = track?.availability?.federation?.[0] || {};
+            return {
+                item_id: source.item_id || '',
+                owner: source.owner || '',
+                title: metadata.title || '',
+                artist_names: (metadata.artists || []).map(artist => artist.name),
+                featured_artist_names: (metadata.featured_artists || []).map(artist => artist.name),
+                year: metadata.year || null,
+                duration_seconds: metadata.duration_seconds == null ? null : Math.round(metadata.duration_seconds),
+                content_id: track?.key?.content_id || '',
+                release_title: metadata.release?.title || null,
+                track_number: metadata.track_number || null,
+                disc_number: metadata.disc_number || null,
+            };
+        },
+
+        federationTrackFromWire(wire) {
+            if (!wire?.content_id || !wire?.owner || !wire?.item_id) return null;
+            return this.withTrackAvailability({
+                key: { content_id: wire.content_id },
+                metadata: {
+                    title: wire.title || 'Unknown track',
+                    artists: (wire.artist_names || []).map(name => ({
+                        key: { normalized_name: name.trim().toLocaleLowerCase() },
+                        name,
+                        local_id: null,
+                    })),
+                    featured_artists: (wire.featured_artist_names || []).map(name => ({
+                        key: { normalized_name: name.trim().toLocaleLowerCase() },
+                        name,
+                        local_id: null,
+                    })),
+                    release: wire.release_title ? { title: wire.release_title } : null,
+                    year: wire.year,
+                    duration_seconds: wire.duration_seconds,
+                    track_number: wire.track_number,
+                    disc_number: wire.disc_number,
+                    cover_url: `/api/player/federation/tracks/artwork?owner=${encodeURIComponent(wire.owner)}&item_id=${encodeURIComponent(wire.item_id)}`,
+                },
+                availability: {
+                    state: 'federated',
+                    local: null,
+                    federation: [{ owner: wire.owner, item_id: wire.item_id }],
+                },
+            });
+        },
+
+        federationQueueTrack(track) {
+            const metadata = track?.metadata || {};
+            return {
+                id: `fed:${track.key.content_id}`,
+                content_id: track.key.content_id,
+                title: metadata.title || 'Unknown track',
+                track_number: metadata.track_number,
+                disc_number: metadata.disc_number,
+                duration_seconds: metadata.duration_seconds || 0,
+                artists: (metadata.artists || []).map(artist => ({
+                    id: artist.local_id || null,
+                    name: artist.name,
+                })),
+                featured_artists: (metadata.featured_artists || []).map(artist => ({
+                    id: artist.local_id || null,
+                    name: artist.name,
+                })),
+                release_id: null,
+                release_title: metadata.release?.title || '',
+                release_year: metadata.year || null,
+                cover_url: metadata.cover_url || null,
+                stream_url: '',
+                uploader_name: 'Federation',
+                federation_pending: true,
+                _federationTrack: track,
+            };
+        },
+
+        openFederatedRelease(release, options = {}) {
+            if (!release?.key) return;
+            this._federatedReleaseCache[release.key] = release;
+            this._beginNavigation('#releasefed?key=' + encodeURIComponent(release.key), options);
+            const queuedTracks = (release.tracks || []).map(track => this.federationQueueTrack(track));
+            const first = queuedTracks[0];
+            this.currentRelease = {
+                id: null,
+                title: release.title,
+                release_type: release.release_type || 'release',
+                year: release.year,
+                cover_url: release.cover_url,
+                artists: first?.artists || [],
+                tracks: queuedTracks,
+                uploaders: (release.owners || []).map(owner => ({
+                    name: `Federation ${owner.slice(0, 10)}`,
+                    track_count: queuedTracks.length,
+                })),
+                federated: true,
+                federationRelease: release,
+            };
+            this.view = 'release_detail';
+            this._afterNavigation(options);
+        },
+
+        playFederatedRelease(release) {
+            const tracks = (release?.tracks || []).map(track => this.federationQueueTrack(track));
+            if (tracks.length) Alpine.store('queue').playRelease(tracks, 0);
+        },
+
+        enqueueFederatedTrack(track, next = false) {
+            const queued = this.federationQueueTrack(track);
+            if (next) Alpine.store('queue').addNextInQueue([queued]);
+            else Alpine.store('queue').addToEnd([queued]);
+        },
+
+        openFederationTrackInfo(track) {
+            const metadata = track?.metadata || {};
+            const sources = track?.availability?.federation || [];
+            const rows = [
+                { label: T.title, value: metadata.title || T.unknown },
+                { label: T.artists, value: this.federationArtistLine(track) || T.unknown },
+                { label: T.release, value: metadata.release?.title || T.unknown },
+                { label: T.year, value: metadata.year || T.unknown },
+                { label: T.duration, value: formatTime(metadata.duration_seconds) },
+                { label: 'Content ID', value: track?.key?.content_id || T.unknown },
+                { label: 'Availability', value: this.isTrackLocal(track) ? 'Local' : `${sources.length} peer${sources.length === 1 ? '' : 's'}` },
+                { label: 'Source', value: 'Federation' },
+            ];
+            Alpine.store('info').openRows(T.trackInfoTitle, rows);
+        },
+
+        withTrackAvailability(track) {
+            const contentId = track?.key?.content_id;
+            const known = contentId ? this.trackAvailability[contentId] : null;
+            if (!known) return track;
+            return {
+                ...track,
+                availability: {
+                    ...(track.availability || {}),
+                    state: known.state,
+                    local: known.local ?? track.availability?.local ?? null,
+                },
+            };
+        },
+
+        isTrackLocal(track) {
+            const contentId = track?.key?.content_id;
+            return (contentId && this.trackAvailability[contentId]?.state === 'local')
+                || track?.availability?.state === 'local'
+                || !!track?.availability?.local;
+        },
+
+        applyTrackAvailability(change) {
+            const contentId = change?.content_id;
+            if (!contentId || !change.state) return;
+            const previous = this.trackAvailability[contentId] || {};
+            const availability = {
+                ...previous,
+                ...change,
+                content_id: contentId,
+            };
+            this.trackAvailability = {
+                ...this.trackAvailability,
+                [contentId]: availability,
+            };
+            const updateTrack = track => track?.key?.content_id === contentId
+                ? this.withTrackAvailability(track)
+                : track;
+            this.federationSearch = {
+                ...this.federationSearch,
+                tracks: this.federationSearch.tracks.map(updateTrack),
+            };
+            this.artistFederation = {
+                ...this.artistFederation,
+                tracks: this.artistFederation.tracks.map(updateTrack),
+                releases: this.artistFederation.releases.map(release => ({
+                    ...release,
+                    tracks: (release.tracks || []).map(updateTrack),
+                })),
+            };
+        },
+
+        publishTrackAvailability(change) {
+            this.applyTrackAvailability(change);
+            window.dispatchEvent(new CustomEvent('furumi:track-availability', {
+                detail: { ...change, source: 'library' },
+            }));
+        },
+
+        refreshMaterializedArtwork(track) {
+            const metadata = track?.metadata || {};
+            const names = (metadata.artists || []).map(artist =>
+                this.normalizeFederationSearchText(artist.name)
+            );
+            if (names.length) {
+                this.artists = this.artists.map(artist => {
+                    if (artist.image_url
+                        || !names.includes(this.normalizeFederationSearchText(artist.name))) {
+                        return artist;
+                    }
+                    return {
+                        ...artist,
+                        image_url: this.federationDiscoveredArtwork(artist.name),
+                    };
+                });
+            }
+        },
+
+        async toggleFederationLike(track) {
+            const contentId = track?.key?.content_id;
+            if (!contentId) return;
+            const liked = !this.federationLiked.includes(contentId);
+            return this.setFederationLike(track, liked);
+        },
+
+        async setFederationLike(track, liked) {
+            const contentId = track?.key?.content_id;
+            if (!contentId) return;
+            const response = await fetch('/api/player/tracks/content/like', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content_id: contentId,
+                    liked,
+                    federation: this.federationWireTrack(track),
+                }),
+            });
+            if (!response.ok) return;
+            if (liked) this.federationLiked.push(contentId);
+            else this.federationLiked = this.federationLiked.filter(id => id !== contentId);
+            if (this.currentPlaylist?.id === -1) {
+                if (liked && !this.currentPlaylist.tracks.some(item => item.content_id === contentId)) {
+                    this.currentPlaylist = {
+                        ...this.currentPlaylist,
+                        tracks: [...this.currentPlaylist.tracks, this.federationQueueTrack(track)],
+                    };
+                } else if (!liked) {
+                    this.currentPlaylist = {
+                        ...this.currentPlaylist,
+                        tracks: this.currentPlaylist.tracks.filter(item => item.content_id !== contentId),
+                    };
+                }
+            }
+        },
+
+        isMixedReleaseLiked(release) {
+            const tracks = release?.tracks || [];
+            if (!tracks.length) return false;
+            return tracks.every(track => track.federation_pending
+                ? this.federationIsLiked(track._federationTrack)
+                : Alpine.store('likes').has(track.id)
+            );
+        },
+
+        async toggleMixedReleaseLike(release) {
+            const tracks = release?.tracks || [];
+            if (!tracks.length) return;
+            const liked = !this.isMixedReleaseLiked(release);
+            const operations = [];
+            for (const track of tracks) {
+                if (track.federation_pending) {
+                    if (this.federationIsLiked(track._federationTrack) !== liked) {
+                        operations.push(this.setFederationLike(track._federationTrack, liked));
+                    }
+                } else if (Alpine.store('likes').has(track.id) !== liked) {
+                    operations.push(Alpine.store('likes').toggle(track.id));
+                }
+            }
+            await Promise.allSettled(operations);
+            Alpine.store('playlists').reload();
+        },
+
+        async playFederatedTrack(track, options = {}) {
+            const contentId = track?.key?.content_id;
+            const sources = track?.availability?.federation || [];
+            const knownPlayable = contentId && this.trackAvailability[contentId]?.playable;
+            if (knownPlayable) {
+                if (Number.isInteger(options.queueIndex)) {
+                    const queue = Alpine.store('queue');
+                    queue.tracks = queue.tracks.map((item, index) =>
+                        index === options.queueIndex ? knownPlayable : item
+                    );
+                    if (options.playAfterPrepare !== false) {
+                        Alpine.store('player').playQueueIndex(options.queueIndex);
+                    }
+                } else {
+                    Alpine.store('queue').playRelease([knownPlayable], 0);
+                }
+                return;
+            }
+            if (!contentId || sources.length === 0) return;
+            if (this.federationPreparing[contentId]) {
+                if (options.playAfterPrepare !== false) {
+                    this.federationPreparing = {
+                        ...this.federationPreparing,
+                        [contentId]: {
+                            ...this.federationPreparing[contentId],
+                            playWhenReady: true,
+                            queueIndex: options.queueIndex,
+                        },
+                    };
+                }
+                return;
+            }
+            this.federationPreparing = {
+                ...this.federationPreparing,
+                [contentId]: {
+                    phase: 'connecting',
+                    received: 0,
+                    total: 0,
+                    percent: 0,
+                    bytesPerSecond: 0,
+                    sampledAt: performance.now(),
+                    playWhenReady: options.playAfterPrepare !== false,
+                    queueIndex: options.queueIndex,
+                },
+            };
+            try {
+                let prepared = null;
+                let lastError = 'Federated track download failed';
+                for (const source of sources) {
+                    const preparedResponse = await fetch('/api/player/federation/tracks/prepare', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content_id: contentId,
+                            owner: source.owner,
+                            item_id: source.item_id,
+                        }),
+                    });
+                    if (!preparedResponse.ok || !preparedResponse.body) {
+                        const failure = await preparedResponse.json().catch(() => ({}));
+                        lastError = failure.error || lastError;
+                        continue;
+                    }
+                    const reader = preparedResponse.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffered = '';
+                    let sourceFailed = false;
+                    const consume = line => {
+                        if (!line.trim()) return;
+                        const event = JSON.parse(line);
+                        if (event.kind === 'progress') {
+                            const previous = this.federationPreparing[contentId];
+                            if (!previous) return;
+                            const now = performance.now();
+                            const seconds = Math.max((now - previous.sampledAt) / 1000, 0.001);
+                            const instantSpeed = event.received > previous.received
+                                ? (event.received - previous.received) / seconds
+                                : previous.bytesPerSecond;
+                            const speed = previous.bytesPerSecond > 0 && instantSpeed > 0
+                                ? previous.bytesPerSecond * 0.65 + instantSpeed * 0.35
+                                : instantSpeed;
+                            this.federationPreparing = {
+                                ...this.federationPreparing,
+                                [contentId]: {
+                                    ...previous,
+                                    phase: event.phase,
+                                    received: Number(event.received || 0),
+                                    total: Number(event.total || 0),
+                                    percent: event.total > 0
+                                        ? Math.min(100, event.received / event.total * 100)
+                                        : 0,
+                                    bytesPerSecond: speed,
+                                    sampledAt: now,
+                                },
+                            };
+                        } else if (event.kind === 'completed') {
+                            prepared = event;
+                        } else if (event.kind === 'failed') {
+                            sourceFailed = true;
+                            lastError = event.error || lastError;
+                        }
+                    };
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+                        const lines = buffered.split('\n');
+                        buffered = lines.pop() || '';
+                        for (const line of lines) consume(line);
+                        if (done) {
+                            consume(buffered);
+                            break;
+                        }
+                    }
+                    if (prepared) break;
+                    if (!sourceFailed) lastError = 'Federated download ended unexpectedly';
+                }
+                if (!prepared) throw new Error(lastError);
+                let playable;
+                if (prepared.local_track_id != null) {
+                    const tracksResponse = await fetch('/api/player/tracks-by-ids', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: [prepared.local_track_id] }),
+                    });
+                    const tracks = await tracksResponse.json();
+                    playable = tracks?.[0];
+                } else {
+                    const metadata = track.metadata || {};
+                    playable = {
+                        id: `fed:${contentId}`,
+                        content_id: contentId,
+                        title: metadata.title || 'Unknown track',
+                        duration_seconds: metadata.duration_seconds || 0,
+                        artists: metadata.artists || [],
+                        featured_artists: metadata.featured_artists || [],
+                        release_id: null,
+                        release_title: metadata.release?.title || '',
+                        release_year: metadata.year || metadata.release?.key?.year || null,
+                        cover_url: metadata.cover_url || null,
+                        stream_url: prepared.stream_url,
+                        uploader_name: 'Federation',
+                        federated_cache: true,
+                        federation: { content_id: contentId, sources: track.availability.federation },
+                    };
+                }
+                if (!playable) throw new Error('Prepared track is unavailable');
+                const queueCover = Number.isInteger(options.queueIndex)
+                    ? Alpine.store('queue')?.tracks?.[options.queueIndex]?.cover_url
+                    : null;
+                if (!playable.cover_url) {
+                    playable.cover_url = queueCover || track?.metadata?.cover_url || null;
+                }
+                if (prepared.local_track_id != null) {
+                    this.publishTrackAvailability({
+                        content_id: contentId,
+                        state: 'local',
+                        local: {
+                            track_id: prepared.local_track_id,
+                            stream_url: prepared.stream_url,
+                        },
+                        playable,
+                    });
+                    this.refreshMaterializedArtwork(track);
+                }
+                const finalProgress = this.federationPreparing[contentId] || {};
+                const queueIndex = Number.isInteger(finalProgress.queueIndex)
+                    ? finalProgress.queueIndex
+                    : options.queueIndex;
+                const playWhenReady = finalProgress.playWhenReady !== false;
+                if (Number.isInteger(queueIndex)) {
+                    const queue = Alpine.store('queue');
+                    queue.tracks = queue.tracks.map((item, index) =>
+                        index === queueIndex ? playable : item
+                    );
+                    if (playWhenReady) Alpine.store('player').playQueueIndex(queueIndex);
+                } else {
+                    Alpine.store('queue').playRelease([playable], 0);
+                }
+            } catch (error) {
+                window.alert(error?.message || 'Federated track download failed');
+            } finally {
+                const next = { ...this.federationPreparing };
+                delete next[contentId];
+                this.federationPreparing = next;
+            }
+        },
+
+        federationDownload(contentId) {
+            return this.federationPreparing[contentId] || null;
+        },
+
+        federationDownloadTooltip(contentId) {
+            const progress = this.federationDownload(contentId);
+            if (!progress) return '';
+            const phases = {
+                checking: 'Checking local library',
+                connecting: 'Connecting to peer',
+                downloading: 'Downloading',
+                verifying: 'Verifying content ID',
+                saving: 'Adding to library',
+                ready: 'Ready',
+            };
+            let text = phases[progress.phase] || 'Preparing';
+            if (progress.total > 0) {
+                text += ` · ${progress.percent.toFixed(0)}%`;
+                text += ` · ${this.formatFederationBytes(progress.received)} / ${this.formatFederationBytes(progress.total)}`;
+            }
+            if (progress.bytesPerSecond > 0 && progress.phase === 'downloading') {
+                text += ` · ${this.formatFederationBytes(progress.bytesPerSecond)}/s`;
+            }
+            return text;
+        },
+
+        formatFederationBytes(value) {
+            const bytes = Math.max(0, Number(value || 0));
+            if (bytes < 1024) return `${Math.round(bytes)} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+            return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
         },
 
         playSearchTrack(idx) {
@@ -4748,14 +5783,31 @@ document.addEventListener('alpine:init', () => {
             this.picker = { trackIds };
         },
 
+        showFederationPicker(track) {
+            this.picker = { trackIds: [], federationTrack: track };
+        },
+
         async addToPicked(playlistId) {
             if (!this.picker) return;
             try {
-                await fetch(`/api/player/playlists/${playlistId}/tracks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ track_ids: this.picker.trackIds }),
-                });
+                if (this.picker.federationTrack) {
+                    const track = this.picker.federationTrack;
+                    await fetch('/api/player/tracks/content/playlist', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            playlist_id: Number(playlistId),
+                            content_id: track.key.content_id,
+                            federation: Alpine.store('library').federationWireTrack(track),
+                        }),
+                    });
+                } else {
+                    await fetch(`/api/player/playlists/${playlistId}/tracks`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ track_ids: this.picker.trackIds }),
+                    });
+                }
                 await this.reload();
             } catch {}
             this.picker = null;

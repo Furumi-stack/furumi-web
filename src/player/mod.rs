@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use bytes::Bytes;
 use cot::db::Database;
 use cot::http::StatusCode;
 use cot::http::header::{
@@ -13,6 +14,7 @@ use cot::router::method::{delete, get, post};
 use cot::router::{Route, Router};
 use cot::session::Session;
 use cot::{App, Body, Template};
+use sqlx::Row as _;
 
 use crate::auth;
 use crate::config::AppConfig;
@@ -223,6 +225,22 @@ impl PlayerDeviceHub {
                 last_seen_ms: now,
             },
         );
+        // Match the trusted-device playback contract used by the TUI: a
+        // background/stale active snapshot must not steal playback from a
+        // browser that is actively playing. An explicit web handoff changes
+        // `active_device_by_user` to the federated virtual device before the
+        // snapshot arrives, so it still passes through here.
+        let local_playback_is_protected = state
+            .active_device_by_user
+            .get(&user_id)
+            .is_some_and(|active_id| !is_fed_virtual_device_id(active_id))
+            && state
+                .playback_state_by_user
+                .get(&user_id)
+                .is_some_and(|playback| playback.track.is_some() && !playback.paused);
+        if active && local_playback_is_protected {
+            return Ok(());
+        }
         let should_update_playback = active
             || state
                 .active_device_by_user
@@ -1097,6 +1115,76 @@ mod device_tests {
             Some("fed:dev_e5ffc3b65642770c26c53ecf".to_string())
         );
     }
+
+    #[test]
+    fn federated_snapshot_does_not_steal_active_browser_playback() {
+        let hub = PlayerDeviceHub::default();
+        let user_id = 7;
+        {
+            let mut state = hub.state.lock().expect("device hub");
+            state.devices_by_user.entry(user_id).or_default().insert(
+                "browser".to_string(),
+                PlayerDevice {
+                    id: "browser".to_string(),
+                    name: "Browser".to_string(),
+                    kind: "computer".to_string(),
+                    last_seen_ms: current_millis(),
+                },
+            );
+            state
+                .active_device_by_user
+                .insert(user_id, "browser".to_string());
+            state.playback_state_by_user.insert(
+                user_id,
+                PlayerDevicePlaybackStateDto {
+                    track: Some(serde_json::json!({"id": 1})),
+                    tracks: vec![],
+                    index: 0,
+                    position_seconds: 10.0,
+                    duration_seconds: 100.0,
+                    paused: false,
+                    shuffle: false,
+                    repeat_mode: "off".to_string(),
+                    volume: 0.7,
+                    updated_at_ms: current_millis(),
+                },
+            );
+        }
+
+        hub.apply_fed_playback_state_json(
+            user_id,
+            "remote",
+            "Remote",
+            true,
+            serde_json::json!({
+                "track": {"id": 2},
+                "tracks": [],
+                "index": 0,
+                "position_seconds": 0.0,
+                "duration_seconds": 100.0,
+                "paused": false,
+                "shuffle": false,
+                "repeat_mode": "off",
+                "volume": 0.7
+            }),
+        )
+        .expect("valid snapshot");
+
+        let state = hub.state.lock().expect("device hub");
+        assert_eq!(
+            state
+                .active_device_by_user
+                .get(&user_id)
+                .map(String::as_str),
+            Some("browser")
+        );
+        assert!(
+            state
+                .devices_by_user
+                .get(&user_id)
+                .is_some_and(|devices| devices.contains_key("fed:remote"))
+        );
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1153,12 +1241,16 @@ async fn me_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
 
-    let liked_tracks: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM furumusic__user_liked_track WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let liked_tracks: (i64,) = sqlx::query_as(
+        "SELECT
+            (SELECT COUNT(*) FROM furumusic__user_liked_track WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM furumusic__fed_state_like
+              WHERE user_id = $1 AND liked = true AND local_track_id IS NULL)",
+    )
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let playlists: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM furumusic__playlist WHERE owner_id = $1")
@@ -2683,6 +2775,7 @@ async fn load_user_upload_tracks(
             UserUploadTrack {
                 track: TrackItem {
                     id: row.id,
+                    content_id: None,
                     title: row.title,
                     track_number: row.track_number,
                     disc_number: row.disc_number,
@@ -3733,12 +3826,16 @@ async fn playlists_handler(
     };
 
     // Count liked tracks for the virtual Likes playlist
-    let likes_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM furumusic__user_liked_track WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let likes_count: (i64,) = sqlx::query_as(
+        "SELECT
+            (SELECT COUNT(*) FROM furumusic__user_liked_track WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM furumusic__fed_state_like
+              WHERE user_id = $1 AND liked = true AND local_track_id IS NULL)",
+    )
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let mut cards = vec![PlaylistCard {
         id: -1,
@@ -3778,16 +3875,31 @@ async fn playlists_handler(
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    cards.extend(rows.into_iter().map(|r| PlaylistCard {
-        id: r.id,
-        title: r.title,
-        track_count: r.track_count,
-        is_own: r.is_own,
-        owner_name: Some(r.owner_name),
-        is_public: r.is_public,
-        is_saved: r.is_saved,
-        kind: "user".to_string(),
-    }));
+    for r in rows {
+        let federated_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+               FROM furumusic__fed_state_playlist_item i
+               JOIN furumusic__fed_state_playlist p
+                 ON p.user_id = i.user_id AND p.playlist_id = i.playlist_id
+              WHERE i.user_id = $1 AND p.local_playlist_id = $2
+                AND i.present = true AND i.local_track_id IS NULL",
+        )
+        .bind(user.id)
+        .bind(r.id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        cards.push(PlaylistCard {
+            id: r.id,
+            title: r.title,
+            track_count: r.track_count + federated_count,
+            is_own: r.is_own,
+            owner_name: Some(r.owner_name),
+            is_public: r.is_public,
+            is_saved: r.is_saved,
+            kind: "user".to_string(),
+        });
+    }
 
     Json(cards).into_response()
 }
@@ -3888,6 +4000,25 @@ async fn build_track_items(
     pool: &sqlx::PgPool,
 ) -> cot::Result<Vec<TrackItem>> {
     let track_ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
+    let mut content_ids: HashMap<i64, String> = if track_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query(
+            "SELECT t.id AS track_id, c.content_id
+               FROM furumusic__track t
+               JOIN furumusic__media_file m ON m.id = t.audio_file_id
+               JOIN furumusic__federation_content_id_cache c
+                 ON c.media_file_id = m.id AND c.sha256_hash = m.sha256_hash
+              WHERE t.id = ANY($1)",
+        )
+        .bind(&track_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?
+        .into_iter()
+        .map(|row| (row.get("track_id"), row.get("content_id")))
+        .collect()
+    };
 
     let track_artists = if track_ids.is_empty() {
         Vec::new()
@@ -3934,6 +4065,7 @@ async fn build_track_items(
             let tid = t.id;
             TrackItem {
                 id: t.id,
+                content_id: content_ids.remove(&tid),
                 title: t.title,
                 track_number: t.track_number,
                 disc_number: t.disc_number,
@@ -4298,6 +4430,56 @@ async fn stream_handler(
         .expect("valid response");
 
     Ok(response)
+}
+
+async fn federation_cache_stream_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    request: cot::request::Request,
+    Path(path): Path<PathStringId>,
+) -> cot::Result<cot::http::Response<Body>> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let Some((full_path, mime)) = crate::federation::handle().prepared_cache_file(&path.id) else {
+        return Ok(json_error(
+            StatusCode::NOT_FOUND,
+            "federated cache entry not found",
+        ));
+    };
+    let file_size = tokio::fs::metadata(&full_path)
+        .await
+        .map_err(|err| cot::Error::internal(err.to_string()))?
+        .len();
+    if let Some(range) = request
+        .headers()
+        .get(RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| parse_range(value, file_size))
+    {
+        let (start, end) = range;
+        let chunk_size = end - start + 1;
+        let data = read_file_range(&full_path, start, chunk_size).await?;
+        return Ok(cot::http::Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(CONTENT_TYPE, mime)
+            .header(ACCEPT_RANGES, "bytes")
+            .header(CONTENT_RANGE, format!("bytes {start}-{end}/{file_size}"))
+            .header(CONTENT_LENGTH, chunk_size.to_string())
+            .body(Body::fixed(data))
+            .expect("valid response"));
+    }
+    let data = tokio::fs::read(full_path)
+        .await
+        .map_err(|err| cot::Error::internal(err.to_string()))?;
+    Ok(cot::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, mime)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CONTENT_LENGTH, file_size.to_string())
+        .body(Body::fixed(data))
+        .expect("valid response"))
 }
 
 async fn local_upload_handler(
@@ -4706,6 +4888,21 @@ async fn devices_select_handler(
             .filter(|previous| *previous != fed_device_id);
         if let Err(err) = crate::federation::handle()
             .fed_device_web_active_transfer(user.id, fed_device_id, previous_fed_device_id, state)
+            .await
+        {
+            return Ok(json_error(StatusCode::BAD_REQUEST, &format!("{err}")));
+        }
+    } else if let Some(previous_fed_device_id) = previous_active_id
+        .as_deref()
+        .and_then(fed_device_id_from_virtual)
+        && let Some(playback_state) = response.playback_state.clone()
+    {
+        let state = match serde_json::to_value(playback_state) {
+            Ok(state) => state,
+            Err(err) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("{err}"))),
+        };
+        if let Err(err) = crate::federation::handle()
+            .fed_device_web_active_takeover(user.id, previous_fed_device_id, state)
             .await
         {
             return Ok(json_error(StatusCode::BAD_REQUEST, &format!("{err}")));
@@ -5429,6 +5626,7 @@ async fn history_list_handler(
                     let tid = row.id;
                     TrackItem {
                         id: row.id,
+                        content_id: None,
                         title: row.title,
                         track_number: row.track_number,
                         disc_number: row.disc_number,
@@ -5798,6 +5996,7 @@ async fn search_handler(
             let tid = t.id;
             TrackItem {
                 id: t.id,
+                content_id: None,
                 title: t.title,
                 track_number: t.track_number,
                 disc_number: t.disc_number,
@@ -5833,6 +6032,421 @@ async fn search_handler(
         tracks,
     })
     .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/player/federation/search/events?q=...
+// ---------------------------------------------------------------------------
+
+async fn federation_search_events_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    query: cot::request::extractors::UrlQuery<SearchQuery>,
+) -> cot::Result<cot::response::Response> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let q = query.0.q.trim().to_owned();
+    if q.is_empty() || q.chars().count() > 200 {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid search query"));
+    }
+
+    let search_id = uuid::Uuid::new_v4().to_string();
+    let body_search_id = search_id.clone();
+    let body = Body::streaming(async_stream::try_stream! {
+        let started = serde_json::json!({
+            "search_id": body_search_id,
+            "sequence": 0,
+            "kind": "search.started",
+            "entity_key": null,
+            "entity": { "query": q },
+        });
+        yield Bytes::from(format!("event: search.started\ndata: {started}\n\n"));
+
+        match crate::federation::handle().search_events(&body_search_id, &q).await {
+            Ok(events) => {
+                let mut last_sequence = 0;
+                for event in events {
+                    last_sequence = event.sequence;
+                    let data = serde_json::to_string(&event)
+                        .map_err(|err| cot::Error::internal(err.to_string()))?;
+                    yield Bytes::from(format!("event: {}\ndata: {data}\n\n", event.kind));
+                }
+                let completed = serde_json::json!({
+                    "search_id": body_search_id,
+                    "sequence": last_sequence + 1,
+                    "kind": "search.completed",
+                    "entity_key": null,
+                    "entity": { "partial": false },
+                });
+                yield Bytes::from(format!("event: search.completed\ndata: {completed}\n\n"));
+            }
+            Err(err) => {
+                let failed = serde_json::json!({
+                    "search_id": body_search_id,
+                    "sequence": 1,
+                    "kind": "search.failed",
+                    "entity_key": null,
+                    "entity": { "message": err.to_string() },
+                });
+                yield Bytes::from(format!("event: search.failed\ndata: {failed}\n\n"));
+            }
+        }
+    });
+    cot::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header("cache-control", "no-cache, no-transform")
+        .header("x-accel-buffering", "no")
+        .body(body)
+        .map_err(|err| cot::Error::internal(err.to_string()))
+}
+
+async fn federation_artist_events_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    UrlQuery(query): UrlQuery<FederationArtistQuery>,
+) -> cot::Result<cot::response::Response> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let name = query.name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 200 {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid artist name"));
+    }
+    let mut catalogs = crate::federation::handle().stream_artist_catalogs(name.clone());
+    let body = Body::streaming(async_stream::try_stream! {
+        let started = serde_json::json!({ "kind": "artist.started", "entity": { "name": name } });
+        yield Bytes::from(format!("event: artist.started\ndata: {started}\n\n"));
+        let mut sequence = 0u64;
+        while let Some(result) = catalogs.recv().await {
+            sequence += 1;
+            match result {
+                Ok((owner, artist)) => {
+                    let event = serde_json::json!({
+                        "kind": "federation.artist.catalog",
+                        "sequence": sequence,
+                        "peer": owner,
+                        "entity": artist,
+                    });
+                    yield Bytes::from(format!("event: federation.artist.catalog\ndata: {event}\n\n"));
+                }
+                Err(err) => {
+                    tracing::debug!(artist = %name, "federated artist catalog skipped: {err:#}");
+                }
+            }
+        }
+        let completed = serde_json::json!({
+            "kind": "artist.completed",
+            "sequence": sequence + 1,
+            "entity": { "partial": false },
+        });
+        yield Bytes::from(format!("event: artist.completed\ndata: {completed}\n\n"));
+    });
+    cot::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header("cache-control", "no-cache, no-transform")
+        .header("x-accel-buffering", "no")
+        .body(body)
+        .map_err(|err| cot::Error::internal(err.to_string()))
+}
+
+async fn content_like_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    pool: &sqlx::PgPool,
+    Json(body): Json<ContentTrackMutation>,
+) -> cot::Result<cot::response::Response> {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let liked = body.liked.unwrap_or(true);
+    crate::federation::devices::record_content_like(
+        pool,
+        user.id,
+        &body.content_id,
+        liked,
+        body.federation,
+    )
+    .await
+    .map_err(|err| cot::Error::internal(err.to_string()))?;
+    Json(serde_json::json!({ "ok": true, "liked": liked })).into_response()
+}
+
+async fn content_likes_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    pool: &sqlx::PgPool,
+) -> cot::Result<cot::response::Response> {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let ids = sqlx::query_scalar::<_, String>(
+        "SELECT content_id FROM furumusic__fed_state_like
+          WHERE user_id = $1 AND liked = true ORDER BY hlc_ms DESC",
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await
+    .map_err(|err| cot::Error::internal(err.to_string()))?;
+    Json(ids).into_response()
+}
+
+async fn content_playlist_add_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    pool: &sqlx::PgPool,
+    Json(body): Json<ContentTrackMutation>,
+) -> cot::Result<cot::response::Response> {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let Some(playlist_id) = body.playlist_id else {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "missing playlist id"));
+    };
+    let owns: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM furumusic__playlist WHERE id = $1 AND owner_id = $2
+         )",
+    )
+    .bind(playlist_id)
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| cot::Error::internal(err.to_string()))?;
+    if !owns {
+        return Ok(json_error(StatusCode::FORBIDDEN, "not your playlist"));
+    }
+    let position = match body.position {
+        Some(position) => position,
+        None => sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(MAX(position), -1) + 1
+               FROM furumusic__fed_state_playlist_item i
+               JOIN furumusic__fed_state_playlist p
+                 ON p.user_id = i.user_id AND p.playlist_id = i.playlist_id
+              WHERE p.user_id = $1 AND p.local_playlist_id = $2 AND i.present = true",
+        )
+        .bind(user.id)
+        .bind(playlist_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0),
+    };
+    crate::federation::devices::record_content_playlist_add(
+        pool,
+        user.id,
+        playlist_id,
+        &body.content_id,
+        position,
+        body.federation,
+    )
+    .await
+    .map_err(|err| cot::Error::internal(err.to_string()))?;
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn federation_playlist_tracks_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    pool: &sqlx::PgPool,
+    Path(path): Path<PathId>,
+) -> cot::Result<cot::response::Response> {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let rows = if path.id == -1 {
+        sqlx::query(
+            "SELECT content_id, 0::bigint AS position, fed_json
+               FROM furumusic__fed_state_like
+              WHERE user_id = $1 AND liked = true
+                AND local_track_id IS NULL AND fed_json IS NOT NULL
+              ORDER BY hlc_ms DESC",
+        )
+        .bind(user.id)
+        .fetch_all(pool)
+        .await
+    } else {
+        let accessible: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM furumusic__playlist p
+                 WHERE p.id = $1
+                   AND (p.owner_id = $2 OR p.is_public = true OR EXISTS (
+                       SELECT 1 FROM furumusic__saved_playlist sp
+                        WHERE sp.user_id = $2 AND sp.playlist_id = p.id
+                   ))
+            )",
+        )
+        .bind(path.id)
+        .bind(user.id)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| cot::Error::internal(err.to_string()))?;
+        if !accessible {
+            return Ok(json_error(StatusCode::NOT_FOUND, "playlist not found"));
+        }
+        sqlx::query(
+            "SELECT i.content_id, i.position, i.fed_json
+               FROM furumusic__fed_state_playlist_item i
+               JOIN furumusic__fed_state_playlist p
+                 ON p.user_id = i.user_id AND p.playlist_id = i.playlist_id
+              WHERE i.user_id = $1 AND p.local_playlist_id = $2
+                AND i.present = true AND i.local_track_id IS NULL
+                AND i.fed_json IS NOT NULL
+              ORDER BY i.position",
+        )
+        .bind(user.id)
+        .bind(path.id)
+        .fetch_all(pool)
+        .await
+    }
+    .map_err(|err| cot::Error::internal(err.to_string()))?;
+    let tracks = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "content_id": row.get::<String, _>("content_id"),
+                "position": row.get::<i64, _>("position"),
+                "federation": row.get::<serde_json::Value, _>("fed_json"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(tracks).into_response()
+}
+
+async fn prepare_federated_track_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    Json(body): Json<PrepareFederatedTrackRequest>,
+) -> cot::Result<cot::response::Response> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let progress_sender = sender.clone();
+    tokio::spawn(async move {
+        let result = crate::federation::handle()
+            .prepare_content_with_progress(
+                &body.content_id,
+                &body.owner,
+                &body.item_id,
+                move |progress| {
+                    let _ = progress_sender.send(serde_json::json!({
+                        "kind": "progress",
+                        "phase": progress.phase,
+                        "received": progress.received,
+                        "total": progress.total,
+                    }));
+                },
+            )
+            .await;
+        let event = match result {
+            Ok(prepared) => serde_json::json!({
+                "kind": "completed",
+                "ok": true,
+                "local_track_id": prepared.local_track_id,
+                "stream_url": prepared.stream_url,
+            }),
+            Err(err) => serde_json::json!({
+                "kind": "failed",
+                "error": err.to_string(),
+            }),
+        };
+        let _ = sender.send(event);
+    });
+    let response_body = Body::streaming(async_stream::try_stream! {
+        while let Some(event) = receiver.recv().await {
+            let line = serde_json::to_string(&event)
+                .map_err(|err| cot::Error::internal(err.to_string()))?;
+            yield Bytes::from(format!("{line}\n"));
+        }
+    });
+    cot::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/x-ndjson")
+        .header("cache-control", "no-cache, no-transform")
+        .header("x-accel-buffering", "no")
+        .body(response_body)
+        .map_err(|err| cot::Error::internal(err.to_string()))
+}
+
+async fn federation_track_artwork_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    UrlQuery(query): UrlQuery<FederationArtworkQuery>,
+) -> cot::Result<cot::response::Response> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    match crate::federation::handle()
+        .track_artwork(&query.owner, &query.item_id)
+        .await
+    {
+        Ok(Some((bytes, mime))) => Ok(cot::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, mime)
+            .header("cache-control", "private, max-age=86400")
+            .body(Body::fixed(bytes))
+            .expect("valid response")),
+        Ok(None) => Ok(json_error(StatusCode::NOT_FOUND, "artwork not available")),
+        Err(err) => Ok(json_error(StatusCode::BAD_GATEWAY, &err.to_string())),
+    }
+}
+
+async fn federation_catalog_artwork_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    UrlQuery(query): UrlQuery<FederationCatalogArtworkQuery>,
+) -> cot::Result<cot::response::Response> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    match crate::federation::handle()
+        .catalog_artwork(&query.owner, &query.artist, query.release.as_deref())
+        .await
+    {
+        Ok(Some((bytes, mime))) => Ok(cot::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, mime)
+            .header("cache-control", "private, max-age=86400")
+            .body(Body::fixed(bytes))
+            .expect("valid response")),
+        Ok(None) => Ok(json_error(StatusCode::NOT_FOUND, "artwork not available")),
+        Err(err) => Ok(json_error(StatusCode::BAD_GATEWAY, &err.to_string())),
+    }
+}
+
+async fn federation_artwork_discovery_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    UrlQuery(query): UrlQuery<FederationArtworkDiscoveryQuery>,
+) -> cot::Result<cot::response::Response> {
+    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    match crate::federation::handle()
+        .discover_catalog_artwork(&query.artist, query.release.as_deref())
+        .await
+    {
+        Ok(Some((bytes, mime))) => Ok(cot::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, mime)
+            .header("cache-control", "private, max-age=300")
+            .body(Body::fixed(bytes))
+            .expect("valid response")),
+        Ok(None) => Ok(json_error(StatusCode::NOT_FOUND, "artwork not available")),
+        Err(err) => Ok(json_error(StatusCode::BAD_GATEWAY, &err.to_string())),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -8926,6 +9540,195 @@ impl App for PlayerApp {
                     }
                 }),
                 "player_search",
+            ),
+            Route::with_handler_and_name(
+                "/federation/search/events",
+                get(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          query: cot::request::extractors::UrlQuery<SearchQuery>| async move {
+                        federation_search_events_handler(auth_ctx, session, db, query).await
+                    },
+                ),
+                "player_federation_search_events",
+            ),
+            Route::with_handler_and_name(
+                "/tracks/content/like",
+                get({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext, session: Session, db: Database| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("player pool")
+                                })
+                                .await;
+                            content_likes_handler(auth_ctx, session, db, pg_pool).await
+                        }
+                    }
+                })
+                .post({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          json: Json<ContentTrackMutation>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("player pool")
+                                })
+                                .await;
+                            content_like_handler(auth_ctx, session, db, pg_pool, json).await
+                        }
+                    }
+                }),
+                "player_content_like",
+            ),
+            Route::with_handler_and_name(
+                "/tracks/content/playlist",
+                post({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          json: Json<ContentTrackMutation>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("player pool")
+                                })
+                                .await;
+                            content_playlist_add_handler(auth_ctx, session, db, pg_pool, json).await
+                        }
+                    }
+                }),
+                "player_content_playlist",
+            ),
+            Route::with_handler_and_name(
+                "/federation/tracks/prepare",
+                post(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          json: Json<PrepareFederatedTrackRequest>| async move {
+                        prepare_federated_track_handler(auth_ctx, session, db, json).await
+                    },
+                ),
+                "player_federation_track_prepare",
+            ),
+            Route::with_handler_and_name(
+                "/playlists/{id}/federation-tracks",
+                get({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          path: Path<PathId>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("player pool")
+                                })
+                                .await;
+                            federation_playlist_tracks_handler(
+                                auth_ctx, session, db, pg_pool, path,
+                            )
+                            .await
+                        }
+                    }
+                }),
+                "player_federation_playlist_tracks",
+            ),
+            Route::with_handler_and_name(
+                "/federation/artists/events",
+                get(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          query: UrlQuery<FederationArtistQuery>| async move {
+                        federation_artist_events_handler(auth_ctx, session, db, query).await
+                    },
+                ),
+                "player_federation_artist_events",
+            ),
+            Route::with_handler_and_name(
+                "/federation/tracks/artwork",
+                get(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          query: UrlQuery<FederationArtworkQuery>| async move {
+                        federation_track_artwork_handler(auth_ctx, session, db, query).await
+                    },
+                ),
+                "player_federation_track_artwork",
+            ),
+            Route::with_handler_and_name(
+                "/federation/catalog/artwork",
+                get(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          query: UrlQuery<FederationCatalogArtworkQuery>| async move {
+                        federation_catalog_artwork_handler(auth_ctx, session, db, query).await
+                    },
+                ),
+                "player_federation_catalog_artwork",
+            ),
+            Route::with_handler_and_name(
+                "/federation/catalog/artwork/discover",
+                get(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          query: UrlQuery<FederationArtworkDiscoveryQuery>| async move {
+                        federation_artwork_discovery_handler(auth_ctx, session, db, query).await
+                    },
+                ),
+                "player_federation_artwork_discovery",
+            ),
+            Route::with_handler_and_name(
+                "/federation/cache/{id}",
+                get(
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          request: cot::request::Request,
+                          path: Path<PathStringId>| async move {
+                        federation_cache_stream_handler(auth_ctx, session, db, request, path).await
+                    },
+                ),
+                "player_federation_cache_stream",
             ),
             // -- Tracks by IDs --
             Route::with_handler_and_name(

@@ -67,9 +67,15 @@ body {
 
 .user-widget-main {
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) 32px;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
+}
+
+.user-widget-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
 }
 
 .user-avatar {
@@ -1357,19 +1363,49 @@ button.user-stat:hover {
 }
 
 .queue-track-cover {
+    position: relative;
     width: 40px;
     height: 40px;
     border-radius: 4px;
     background: var(--bg-elevated);
-    overflow: hidden;
+    overflow: visible;
     flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
-.queue-track-cover img { width: 100%; height: 100%; object-fit: cover; }
+.queue-track-cover img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .queue-track-cover svg { width: 20px; height: 20px; color: var(--text-subdued); }
+
+.queue-track-cover .queue-federation-status {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    z-index: 3;
+    width: 18px;
+    min-width: 18px;
+    max-width: 18px;
+    height: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    box-sizing: border-box;
+    flex: none;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    box-shadow: 0 0 0 1px var(--bg-secondary);
+}
+.queue-track-cover .queue-federation-status > svg {
+    width: 13px;
+    height: 13px;
+}
+.queue-track-cover .queue-federation-status .federation-download-progress,
+.queue-track-cover .queue-federation-status .federation-download-progress svg {
+    width: 18px !important;
+    min-width: 18px;
+    height: 18px !important;
+    min-height: 18px;
+}
 
 .queue-track-info { overflow: hidden; flex: 1; }
 .queue-track-title {
@@ -1955,6 +1991,33 @@ button.user-stat:hover {
     text-transform: uppercase;
 }
 
+.device-group-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 7px 8px 3px;
+    color: #b8d6ff;
+    font-size: 10px;
+    font-weight: 750;
+    text-transform: uppercase;
+}
+.device-group-divider::before,
+.device-group-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: var(--border-color);
+}
+.device-group-divider span {
+    white-space: nowrap;
+}
+.federation-device-row {
+    color: #c9dcff;
+}
+.federation-device-icon {
+    color: #78a9ff;
+}
+
 .fed-section-label {
     margin-top: 4px;
     color: #b8d6ff;
@@ -2436,9 +2499,16 @@ button.user-stat:hover {
 }
 
 .mobile-account-logout {
-    width: 100%;
-    margin-top: 12px;
+    flex: 1;
+    margin: 0;
     justify-content: center;
+}
+
+.mobile-account-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
 }
 
 .torrent-import-btn {
@@ -2632,6 +2702,105 @@ button.user-stat:hover {
 
 /* Search results */
 .search-section { margin-bottom: 24px; }
+.federation-search-section {
+    border-top: 1px solid var(--border);
+    padding-top: 18px;
+}
+.federation-live-badge {
+    margin-left: 8px;
+    color: var(--accent);
+    font-size: 10px;
+    letter-spacing: .12em;
+}
+.federation-search-status {
+    color: var(--text-muted);
+    padding: 12px 0;
+}
+.federation-search-status.error { color: var(--danger, #e66); }
+.federation-track-status {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.federation-track-status > svg {
+    width: 18px;
+    height: 18px;
+    color: var(--accent);
+}
+.federation-download-progress {
+    position: relative;
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+}
+.federation-download-progress svg {
+    width: 22px !important;
+    height: 22px !important;
+    transform: rotate(-90deg);
+    overflow: hidden;
+}
+.federation-download-progress circle {
+    fill: none;
+    stroke-width: 2;
+}
+.federation-download-progress .progress-track {
+    stroke: color-mix(in srgb, var(--text-muted) 28%, transparent);
+}
+.federation-download-progress .progress-value {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    stroke-dasharray: 50.27;
+    transition: stroke-dashoffset 160ms linear;
+}
+.federation-download-progress.indeterminate .progress-value {
+    stroke-dasharray: 12.57 37.70;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: federation-progress-spin .8s linear infinite;
+}
+.federation-download-progress .progress-percent {
+    position: absolute;
+    color: var(--text);
+    font-size: 7px;
+    font-weight: 700;
+    line-height: 1;
+}
+.federation-download-tooltip {
+    position: absolute;
+    z-index: 1000;
+    left: calc(100% + 10px);
+    top: 50%;
+    width: max-content;
+    max-width: 290px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.35;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(3px, -50%);
+    transition: opacity 120ms ease, transform 120ms ease;
+}
+.federation-download-progress:hover .federation-download-tooltip {
+    opacity: 1;
+    transform: translate(0, -50%);
+}
+@keyframes federation-progress-spin {
+    to { transform: rotate(360deg); }
+}
+.federation-source-count {
+    color: var(--text-muted);
+    font-size: 12px;
+}
 .search-section-title {
     font-size: 18px;
     font-weight: 700;
@@ -2675,7 +2844,7 @@ button.user-stat:hover {
     position: relative;
 }
 
-.search-artist-img img { width: 100%; height: 100%; object-fit: cover; }
+.search-artist-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .search-artist-img svg { width: 32px; height: 32px; color: var(--text-subdued); }
 
 .search-artist-name {
@@ -3369,6 +3538,105 @@ button.user-stat:hover {
 .history-modal {
     width: min(980px, calc(100vw - 32px));
     max-width: 980px;
+}
+
+.user-settings-modal {
+    width: min(760px, calc(100vw - 32px));
+    max-width: 760px;
+    max-height: min(86dvh, 820px);
+    overflow-y: auto;
+}
+.user-settings-head,
+.user-settings-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+.user-settings-head {
+    margin-bottom: 16px;
+}
+.user-settings-head h3,
+.user-settings-section h4 {
+    margin: 0;
+}
+.user-settings-head p,
+.user-settings-section p {
+    margin: 4px 0 0;
+    color: var(--text-subdued);
+    font-size: 12px;
+    line-height: 1.45;
+}
+.user-settings-section {
+    padding: 16px 0;
+    border-top: 1px solid var(--border-color);
+}
+.user-settings-devices {
+    display: grid;
+    gap: 12px;
+}
+.settings-device-group {
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+}
+.settings-device-label {
+    padding: 8px 11px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-subdued);
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+.settings-device-row {
+    min-height: 48px;
+    padding: 8px 11px;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+.settings-device-row:last-child {
+    border-bottom: 0;
+}
+.settings-device-row.federation {
+    background: rgba(82, 145, 255, 0.035);
+}
+.settings-primary-btn,
+.settings-secondary-btn {
+    min-height: 34px;
+    padding: 7px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 750;
+    white-space: nowrap;
+}
+.settings-primary-btn {
+    border-color: rgba(82, 145, 255, 0.4);
+    background: rgba(82, 145, 255, 0.18);
+    color: #d5e4ff;
+}
+.settings-primary-btn:hover,
+.settings-secondary-btn:hover {
+    filter: brightness(1.12);
+}
+.settings-primary-btn:disabled,
+.settings-secondary-btn:disabled {
+    cursor: default;
+    opacity: .55;
+}
+.settings-pairing-actions {
+    display: grid;
+    gap: 8px;
+}
+.settings-pairing-actions > .settings-primary-btn {
+    justify-self: start;
 }
 
 .history-head {

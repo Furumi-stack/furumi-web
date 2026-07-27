@@ -2293,6 +2293,17 @@ tbody tr:hover {
                                     <input x-model="settingsDraft.federation_network_id" placeholder="my-crew-music-7f3a" autocomplete="off" />
                                     <div class="setting-help">Every peer using the same id finds the others automatically.</div>
                                 </div>
+                                <div class="setting-field">
+                                    <label>
+                                        <span>Save federated tracks on play</span>
+                                        <span class="source-pill" :class="sourceClass('federation_save_on_listen')" x-text="settingSource('federation_save_on_listen')"></span>
+                                    </label>
+                                    <div class="setting-toggle-row">
+                                        <span x-text="settingsDraft.federation_save_on_listen ? 'Import into the shared library' : 'Use temporary cache'"></span>
+                                        <input type="checkbox" x-model="settingsDraft.federation_save_on_listen" />
+                                    </div>
+                                    <div class="setting-help">Server-wide policy. Imported tracks become available to every user and are published by this peer. Federation metadata is trusted and bypasses the AI agent.</div>
+                                </div>
                             </div>
                             <div class="probe-body" x-show="federationStatus.node">
                                 <div class="probe-table" x-show="federationStatus.node && federationStatus.node.running">
@@ -2924,7 +2935,8 @@ function adminV2() {
             agent_context_limit: '',
             agent_concurrency: '',
             federation_enabled: false,
-            federation_network_id: ''
+            federation_network_id: '',
+            federation_save_on_listen: false
         },
         settingsProbe: { status: 'idle', ok: false },
         settingsProbeLoading: false,

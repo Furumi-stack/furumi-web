@@ -771,6 +771,149 @@ pub async fn record_track_like(
     Ok(())
 }
 
+/// Records a like for a content-addressed track that need not be local yet.
+/// The ordinary local likes table remains a projection for materialized
+/// tracks; the durable user intent lives under `content_id`.
+pub async fn record_content_like(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    content_id: &str,
+    liked: bool,
+    fed: Option<serde_json::Value>,
+) -> Result<()> {
+    let content_id =
+        music_dht::normalize_content_id(content_id).context("invalid track content id")?;
+    let fed = fed
+        .map(serde_json::from_value::<SyncedFedTrack>)
+        .transpose()
+        .context("invalid federated track metadata")?;
+    record_local_op(
+        pool,
+        user_id,
+        SyncOpPayload::TrackLikeSet {
+            content_id,
+            liked,
+            fed: liked.then_some(fed).flatten(),
+        },
+    )
+    .await
+}
+
+/// Adds a content-addressed track to a user's playlist without requiring a
+/// local numeric track row. Materialization later fills `local_track_id`
+/// without replacing this playlist item.
+pub async fn record_content_playlist_add(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    playlist_id: i64,
+    content_id: &str,
+    position: i64,
+    fed: Option<serde_json::Value>,
+) -> Result<()> {
+    let content_id =
+        music_dht::normalize_content_id(content_id).context("invalid track content id")?;
+    let fed = fed
+        .map(serde_json::from_value::<SyncedFedTrack>)
+        .transpose()
+        .context("invalid federated track metadata")?;
+    let title = playlist_title(pool, playlist_id)
+        .await?
+        .context("playlist not found")?;
+    let sync_id = ensure_local_playlist_sync_id(pool, user_id, playlist_id, &title).await?;
+    record_local_op(
+        pool,
+        user_id,
+        SyncOpPayload::PlaylistTrackAdded {
+            playlist_id: sync_id,
+            content_id,
+            position,
+            fed,
+        },
+    )
+    .await
+}
+
+/// Reconciles content-addressed user state after a track becomes local.
+/// History is intentionally not touched: only actual web playback writes it.
+pub async fn materialize_content_state(
+    pool: &sqlx::PgPool,
+    content_id: &str,
+    track_id: i64,
+) -> Result<()> {
+    let content_id =
+        music_dht::normalize_content_id(content_id).context("invalid track content id")?;
+    let likes = sqlx::query(
+        "SELECT user_id, liked, hlc_ms
+           FROM furumusic__fed_state_like WHERE content_id = $1",
+    )
+    .bind(&content_id)
+    .fetch_all(pool)
+    .await?;
+    for row in likes {
+        let user_id: i64 = row.get("user_id");
+        let liked: bool = row.get("liked");
+        if liked {
+            sqlx::query(
+                "INSERT INTO furumusic__user_liked_track
+                    (user_id, track_id, created_at)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (user_id, track_id) DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(track_id)
+            .bind(iso_from_ms(row.get("hlc_ms")))
+            .execute(pool)
+            .await?;
+        }
+    }
+    let playlist_items = sqlx::query(
+        "SELECT i.user_id, i.playlist_id, i.position
+           FROM furumusic__fed_state_playlist_item i
+          WHERE i.content_id = $1 AND i.present = true",
+    )
+    .bind(&content_id)
+    .fetch_all(pool)
+    .await?;
+    for row in playlist_items {
+        let user_id: i64 = row.get("user_id");
+        let sync_id: String = row.get("playlist_id");
+        let playlist_id = ensure_playlist_for_item(pool, user_id, &sync_id).await?;
+        sqlx::query(
+            "INSERT INTO furumusic__playlist_track
+                (playlist_id, track_id, position, added_at, added_by_user_id)
+             SELECT $1, $2, $3, $4, $5
+              WHERE NOT EXISTS (
+                SELECT 1 FROM furumusic__playlist_track
+                 WHERE playlist_id = $1 AND track_id = $2
+              )",
+        )
+        .bind(playlist_id)
+        .bind(track_id)
+        .bind(row.get::<i64, _>("position") as i32)
+        .bind(now_iso())
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE furumusic__fed_state_like
+            SET local_track_id = $2 WHERE content_id = $1",
+    )
+    .bind(&content_id)
+    .bind(track_id)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE furumusic__fed_state_playlist_item
+            SET local_track_id = $2 WHERE content_id = $1",
+    )
+    .bind(&content_id)
+    .bind(track_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn record_playlist_created(
     pool: &sqlx::PgPool,
     user_id: i64,
@@ -2661,6 +2804,31 @@ pub async fn record_web_active_transfer(
         )
         .await?;
     }
+    Ok(())
+}
+
+pub async fn record_web_active_takeover(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    previous_device_id: &str,
+    state: serde_json::Value,
+) -> Result<()> {
+    ensure_web_playback_target(pool, user_id, previous_device_id).await?;
+    let identity = ensure_identity(pool, user_id, "").await?;
+    let wire = playback_state_from_browser_json(pool, state).await?;
+    record_local_op(
+        pool,
+        user_id,
+        SyncOpPayload::PlaybackCommand {
+            target_device_id: previous_device_id.to_string(),
+            command: PlaybackCommand::ActiveChanged {
+                active_device_id: identity.device_id,
+                active_device_name: identity.name,
+                state: wire,
+            },
+        },
+    )
+    .await?;
     Ok(())
 }
 

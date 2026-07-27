@@ -137,6 +137,7 @@ pub struct ConfigSources {
     pub lastfm_shared_secret: ConfigSource,
     pub federation_enabled: ConfigSource,
     pub federation_network_id: ConfigSource,
+    pub federation_save_on_listen: ConfigSource,
 }
 
 impl Default for ConfigSources {
@@ -166,6 +167,7 @@ impl Default for ConfigSources {
             lastfm_shared_secret: ConfigSource::Default,
             federation_enabled: ConfigSource::Default,
             federation_network_id: ConfigSource::Default,
+            federation_save_on_listen: ConfigSource::Default,
         }
     }
 }
@@ -280,6 +282,9 @@ pub struct AppConfig {
     /// Federation network id — the shared secret every peer of the network
     /// uses to find the others.
     pub federation_network_id: String,
+    /// Whether a federated track requested for playback is imported into the
+    /// shared local library. This is a server-wide administrator policy.
+    pub federation_save_on_listen: bool,
 }
 
 impl Default for AppConfig {
@@ -309,6 +314,7 @@ impl Default for AppConfig {
             lastfm_shared_secret: String::new(),
             federation_enabled: false,
             federation_network_id: String::new(),
+            federation_save_on_listen: false,
         }
     }
 }
@@ -339,6 +345,7 @@ impl_env_overrides!(
     lastfm_shared_secret,
     federation_enabled,
     federation_network_id,
+    federation_save_on_listen,
 );
 
 impl AppConfig {
@@ -468,6 +475,7 @@ impl AppConfig {
         apply_db_field!(lastfm_shared_secret);
         apply_db_field!(federation_enabled);
         apply_db_field!(federation_network_id);
+        apply_db_field!(federation_save_on_listen);
     }
 }
 
