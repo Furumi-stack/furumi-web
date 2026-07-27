@@ -1269,7 +1269,7 @@ async fn me_handler(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let listened_seconds: Option<i64> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(listened_ms), 0) / 1000
+        "SELECT (COALESCE(SUM(listened_ms), 0) / 1000)::bigint
            FROM furumusic__listen_event
           WHERE user_id = $1 AND qualified = true",
     )
