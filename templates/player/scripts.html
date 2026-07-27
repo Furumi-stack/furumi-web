@@ -3288,10 +3288,17 @@ document.addEventListener('alpine:init', () => {
                 if (federationResponse.ok) {
                     const references = await federationResponse.json();
                     const federated = (references || [])
-                        .map(reference => this.federationTrackFromWire(reference.federation))
-                        .filter(Boolean)
-                        .map(track => this.federationQueueTrack(track));
+                        .map(reference => {
+                            const track = this.federationTrackFromWire(reference.federation);
+                            if (!track) return null;
+                            return {
+                                ...this.federationQueueTrack(track),
+                                sort_key: Number(reference.position || 0),
+                            };
+                        })
+                        .filter(Boolean);
                     playlist.tracks = [...(playlist.tracks || []), ...federated];
+                    if (Number(id) === -1) playlist.tracks = this.sortLikeTracks(playlist.tracks);
                 }
                 this.currentPlaylist = playlist;
             } catch {}
@@ -3777,7 +3784,13 @@ document.addEventListener('alpine:init', () => {
                 if (liked && !this.currentPlaylist.tracks.some(item => item.content_id === contentId)) {
                     this.currentPlaylist = {
                         ...this.currentPlaylist,
-                        tracks: [...this.currentPlaylist.tracks, this.federationQueueTrack(track)],
+                        tracks: this.sortLikeTracks([
+                            ...this.currentPlaylist.tracks,
+                            {
+                                ...this.federationQueueTrack(track),
+                                sort_key: Date.now(),
+                            },
+                        ]),
                     };
                 } else if (!liked) {
                     this.currentPlaylist = {
@@ -3786,6 +3799,22 @@ document.addEventListener('alpine:init', () => {
                     };
                 }
             }
+        },
+
+        sortLikeTracks(tracks) {
+            return [...(tracks || [])].sort((left, right) => {
+                const order = Number(right.sort_key || 0) - Number(left.sort_key || 0);
+                if (order) return order;
+                const stable = String(left.content_id || left.id || '')
+                    .localeCompare(String(right.content_id || right.id || ''));
+                if (stable) return stable;
+                const title = String(left.title || '').localeCompare(
+                    String(right.title || ''),
+                    undefined,
+                    { sensitivity: 'base' },
+                );
+                return title;
+            });
         },
 
         isMixedReleaseLiked(release) {

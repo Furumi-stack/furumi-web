@@ -78,6 +78,8 @@ pub(super) struct TrackItem {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct PlaylistTrackItem {
     pub(super) playlist_track_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) sort_key: Option<i64>,
     #[serde(flatten)]
     pub(super) track: TrackItem,
 }

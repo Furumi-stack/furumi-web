@@ -4111,6 +4111,7 @@ async fn build_playlist_track_items(
         .zip(playlist_track_ids)
         .map(|(track, playlist_track_id)| PlaylistTrackItem {
             playlist_track_id,
+            sort_key: None,
             track,
         })
         .collect())
@@ -4309,14 +4310,50 @@ async fn likes_playlist_handler(
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let track_items = build_track_items(tracks, pool)
+    let order_rows = sqlx::query(
+        "SELECT ult.track_id,
+                COALESCE(
+                    fsl.hlc_ms,
+                    (EXTRACT(EPOCH FROM ult.created_at::timestamptz) * 1000)::bigint,
+                    0
+                ) AS sort_key
+           FROM furumusic__user_liked_track ult
+           JOIN furumusic__track t ON t.id = ult.track_id
+           LEFT JOIN furumusic__media_file m ON m.id = t.audio_file_id
+           LEFT JOIN furumusic__federation_content_id_cache c
+                  ON c.media_file_id = m.id AND c.sha256_hash = m.sha256_hash
+           LEFT JOIN furumusic__fed_state_like fsl
+                  ON fsl.user_id = ult.user_id
+                 AND fsl.content_id = c.content_id
+                 AND fsl.liked = true
+          WHERE ult.user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let order_by_track = order_rows
+        .into_iter()
+        .map(|row| (row.get::<i64, _>("track_id"), row.get::<i64, _>("sort_key")))
+        .collect::<HashMap<_, _>>();
+
+    let mut track_items = build_track_items(tracks, pool)
         .await?
         .into_iter()
         .map(|track| PlaylistTrackItem {
             playlist_track_id: None,
+            sort_key: order_by_track.get(&track.id).copied(),
             track,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    track_items.sort_by(|left, right| {
+        right
+            .sort_key
+            .cmp(&left.sort_key)
+            .then_with(|| left.track.content_id.cmp(&right.track.content_id))
+            .then_with(|| left.track.title.cmp(&right.track.title))
+            .then_with(|| left.track.id.cmp(&right.track.id))
+    });
 
     Json(PlaylistDetail {
         id: -1,
@@ -6293,7 +6330,7 @@ async fn federation_playlist_tracks_handler(
     };
     let rows = if path.id == -1 {
         sqlx::query(
-            "SELECT content_id, 0::bigint AS position, fed_json
+            "SELECT content_id, hlc_ms AS position, fed_json
                FROM furumusic__fed_state_like
               WHERE user_id = $1 AND liked = true
                 AND local_track_id IS NULL AND fed_json IS NOT NULL

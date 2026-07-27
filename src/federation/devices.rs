@@ -1712,7 +1712,7 @@ async fn local_seed_needs_metadata_backfill(pool: &sqlx::PgPool, user_id: i64) -
 async fn seed_local_user_state(pool: &sqlx::PgPool, user_id: i64) -> Result<()> {
     let now = now_ms();
     let like_rows = sqlx::query(
-        "SELECT ult.track_id, c.content_id
+        "SELECT ult.track_id, ult.created_at, c.content_id
          FROM furumusic__user_liked_track ult
          JOIN furumusic__track t ON t.id = ult.track_id
          JOIN furumusic__media_file m ON m.id = t.audio_file_id
@@ -1729,6 +1729,7 @@ async fn seed_local_user_state(pool: &sqlx::PgPool, user_id: i64) -> Result<()> 
             continue;
         };
         let track_id: i64 = row.get("track_id");
+        let liked_hlc_ms = timestamp_from_iso(&row.get::<String, _>("created_at")).unwrap_or(now);
         let fed_json = synced_fed_track_for_track(pool, track_id, &content_id)
             .await?
             .map(serde_json::to_value)
@@ -1743,7 +1744,7 @@ async fn seed_local_user_state(pool: &sqlx::PgPool, user_id: i64) -> Result<()> 
         )
         .bind(user_id)
         .bind(&content_id)
-        .bind(now)
+        .bind(liked_hlc_ms)
         .bind(format!("local_seed:like:{track_id}"))
         .bind(track_id)
         .bind(fed_json)
@@ -4534,6 +4535,12 @@ fn iso_from_ms(ms: i64) -> String {
         .unwrap_or_else(chrono::Utc::now)
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string()
+}
+
+fn timestamp_from_iso(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.timestamp_millis())
 }
 
 fn now_label() -> String {
