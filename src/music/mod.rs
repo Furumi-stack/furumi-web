@@ -2322,6 +2322,118 @@ pub mod db_migrations {
             &[Operation::custom(create_content_addressed_music_refs).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_synced_listen_history(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__listen_event (
+                    user_id BIGINT NOT NULL,
+                    listen_id TEXT NOT NULL,
+                    content_id TEXT NOT NULL,
+                    local_track_id BIGINT,
+                    origin_device_id TEXT NOT NULL,
+                    started_at_ms BIGINT NOT NULL,
+                    listened_ms BIGINT NOT NULL,
+                    track_duration_ms BIGINT,
+                    ended_reason TEXT NOT NULL,
+                    qualified BOOLEAN NOT NULL,
+                    metadata_json JSONB NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, listen_id)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_listen_event_user_time
+                   ON furumusic__listen_event (user_id, started_at_ms DESC, listen_id)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_listen_event_content
+                   ON furumusic__listen_event (user_id, content_id)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "INSERT INTO furumusic__listen_event
+                    (user_id, listen_id, content_id, local_track_id,
+                     origin_device_id, started_at_ms, listened_ms,
+                     track_duration_ms, ended_reason, qualified,
+                     metadata_json, created_at)
+                 SELECT ph.user_id,
+                        'legacy-web:' || ph.id::text,
+                        tr.content_id,
+                        ph.track_id,
+                        ident.device_id,
+                        (EXTRACT(EPOCH FROM ph.played_at::timestamptz) * 1000)::bigint,
+                        COALESCE(ph.duration_listened, 0)::bigint * 1000,
+                        (t.duration_seconds * 1000)::bigint,
+                        CASE WHEN ph.completed THEN '\"finished\"' ELSE '\"unknown\"' END,
+                        ph.completed,
+                        jsonb_build_object(
+                            'title', t.title::text,
+                            'artist_names', COALESCE((
+                                SELECT jsonb_agg(a.name::text ORDER BY ta.position)
+                                  FROM furumusic__track_artist ta
+                                  JOIN furumusic__artist a ON a.id = ta.artist_id
+                                 WHERE ta.track_id = t.id
+                                   AND ta.role <> 'featuring'
+                            ), '[]'::jsonb),
+                            'featured_artist_names', COALESCE((
+                                SELECT jsonb_agg(a.name::text ORDER BY ta.position)
+                                  FROM furumusic__track_artist ta
+                                  JOIN furumusic__artist a ON a.id = ta.artist_id
+                                 WHERE ta.track_id = t.id
+                                   AND ta.role = 'featuring'
+                            ), '[]'::jsonb),
+                            'release_title', r.title::text
+                        ),
+                        ph.played_at::text
+                   FROM furumusic__play_history ph
+                   JOIN furumusic__track t ON t.id = ph.track_id
+                   JOIN furumusic__track_ref tr ON tr.local_track_id = ph.track_id
+                   JOIN furumusic__fed_device_identity ident
+                     ON ident.user_id = ph.user_id
+                   LEFT JOIN furumusic__release r ON r.id = t.release_id
+                 ON CONFLICT (user_id, listen_id) DO NOTHING",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__lastfm_scrobble_outbox
+                   ALTER COLUMN track_id DROP NOT NULL",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__lastfm_scrobble_outbox
+                   ADD COLUMN IF NOT EXISTS track_title TEXT,
+                   ADD COLUMN IF NOT EXISTS artist_name TEXT,
+                   ADD COLUMN IF NOT EXISTS album_title TEXT",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0041CreateSyncedListenHistory;
+
+    impl migrations::Migration for M0041CreateSyncedListenHistory {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0041_create_synced_listen_history";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0040_create_content_addressed_music_refs",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_synced_listen_history).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2353,5 +2465,6 @@ pub mod db_migrations {
         &M0038CreateFedDeviceSync,
         &M0039EnsureFederationContentIdCache,
         &M0040CreateContentAddressedMusicRefs,
+        &M0041CreateSyncedListenHistory,
     ];
 }

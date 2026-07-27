@@ -726,6 +726,7 @@ document.addEventListener('alpine:init', () => {
         _historyRecorded: false,
         _nowPlayingSent: false,
         _playbackStartedAt: null,
+        _listenId: null,
         _listenedSeconds: 0,
         _lastAudioTime: 0,
         _localSourceTrackId: null,
@@ -754,7 +755,7 @@ document.addEventListener('alpine:init', () => {
 
             audio.addEventListener('ended', () => {
                 this._trackListenedDelta();
-                this._recordHistory(true);
+                this._recordHistory('finished');
                 if (Alpine.store('devices')?.shouldPlayJamLocally()) {
                     this.isPlaying = false;
                     return;
@@ -1437,21 +1438,24 @@ document.addEventListener('alpine:init', () => {
             } catch {}
         },
 
-        _recordHistory(completed) {
+        _recordHistory(endedReason) {
             if (this._historyRecorded || !this.currentTrack) return;
             if (!Number.isInteger(Number(this.currentTrack.id)) || this.currentTrack.federated_cache) {
                 return;
             }
             this._historyRecorded = true;
+            const completed = endedReason === 'finished';
             const listenedSeconds = this._historyListenedSeconds(completed);
             fetch('/api/player/history', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     track_id: this.currentTrack.id,
+                    listen_id: this._listenId,
                     started_at: this._playbackStartedAt,
                     duration_listened: listenedSeconds,
                     completed: completed,
+                    ended_reason: endedReason,
                 }),
             }).catch(() => {});
         },
@@ -1464,13 +1468,15 @@ document.addEventListener('alpine:init', () => {
             const listened = Math.floor(Number(this._listenedSeconds || 0));
             const threshold = Math.ceil(duration / 2);
             if (threshold <= 0 || listened < threshold) return false;
-            this._recordHistory(true);
+            this._recordHistory('unknown');
             return true;
         },
 
         _resetPlaybackTracking() {
             this._nowPlayingSent = false;
             this._playbackStartedAt = null;
+            this._listenId = (globalThis.crypto?.randomUUID?.()
+                || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
             this._listenedSeconds = 0;
             this._lastAudioTime = 0;
         },

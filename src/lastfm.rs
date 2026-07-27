@@ -447,17 +447,17 @@ async fn fetch_pending_scrobbles(
                   o.duration_seconds,
                   o.attempt_count,
                   a.session_key::text AS session_key,
-                  t.title::text AS title,
-                  r.title::text AS album_title,
+                  COALESCE(o.track_title, t.title::text) AS title,
+                  COALESCE(o.album_title, r.title::text) AS album_title,
                   t.track_number,
-                  (
+                  COALESCE(o.artist_name, (
                     SELECT ar.name::text
                       FROM furumusic__track_artist ta
                       JOIN furumusic__artist ar ON ar.id = ta.artist_id
                      WHERE ta.track_id = t.id AND ta.role <> 'featuring'
                      ORDER BY ta.position
                      LIMIT 1
-                  ) AS artist_name,
+                  )) AS artist_name,
                   (
                     SELECT ar.name::text
                       FROM furumusic__release_artist ra
@@ -468,7 +468,7 @@ async fn fetch_pending_scrobbles(
                   ) AS album_artist_name
              FROM furumusic__lastfm_scrobble_outbox o
              JOIN furumusic__lastfm_account a ON a.user_id = o.user_id
-             JOIN furumusic__track t ON t.id = o.track_id
+             LEFT JOIN furumusic__track t ON t.id = o.track_id
              LEFT JOIN furumusic__release r ON r.id = t.release_id
             WHERE o.user_id = $1
               AND o.status IN ('pending', 'retry')

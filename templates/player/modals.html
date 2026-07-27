@@ -821,7 +821,12 @@
                                 </template>
                             </button>
                             <div class="track-info">
-                                <div class="track-title" x-text="item.track?.title || item.track_title"></div>
+                                <div class="track-title">
+                                    <span x-text="item.track?.title || item.track_title"></span>
+                                    <span class="history-device-badge"
+                                          :title="item.device_id"
+                                          x-text="item.device_name"></span>
+                                </div>
                                 <div class="track-artists-inline">
                                     <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
                                         <span>

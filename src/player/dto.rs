@@ -541,14 +541,16 @@ pub(super) struct UserUploadReviewUpdateRequest {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct PlayHistoryItem {
-    pub(super) id: i64,
-    pub(super) track_id: i64,
+    pub(super) id: String,
+    pub(super) track_id: Option<i64>,
     pub(super) track_title: String,
     pub(super) release_title: Option<String>,
-    pub(super) track: TrackItem,
+    pub(super) track: serde_json::Value,
     pub(super) played_at: String,
     pub(super) duration_listened: Option<i32>,
     pub(super) completed: bool,
+    pub(super) device_id: String,
+    pub(super) device_name: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -576,8 +578,8 @@ pub(super) struct ContentTrackMutation {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct PrepareFederatedTrackRequest {
     pub(super) content_id: String,
-    pub(super) owner: String,
-    pub(super) item_id: String,
+    pub(super) owner: Option<String>,
+    pub(super) item_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

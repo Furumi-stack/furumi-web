@@ -5563,139 +5563,131 @@ async fn history_list_handler(
     let per_page = query.0.limit.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1) as i64 * per_page as i64;
 
-    let total: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM furumusic__play_history WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-
-    let rows = sqlx::query_as::<_, PlayHistoryTrackRow>(
-        r#"SELECT ph.id AS history_id,
-                  ph.played_at::text AS played_at,
-                  ph.duration_listened,
-                  ph.completed,
-                  t.id,
-                  t.title::text as title,
-                  t.track_number,
-                  t.disc_number,
-                  t.duration_seconds,
-                  t.cover_file_id,
-                  r.cover_file_id as release_cover_file_id,
-                  t.release_id,
-                  COALESCE(r.title::text, '') as release_title,
-                  r.year as release_year,
-                  COALESCE(mf.uploader_name, 'UFO')::text AS uploader_name,
-                  mf.audio_format,
-                  mf.audio_bitrate,
-                  mf.audio_sample_rate,
-                  mf.audio_bit_depth,
-                  mf.file_size_bytes,
-                  t.lastfm_listeners,
-                  t.lastfm_playcount,
-                  t.lastfm_rating,
-                  t.lastfm_updated_at
-           FROM furumusic__play_history ph
-           JOIN furumusic__track t ON t.id = ph.track_id
-           LEFT JOIN furumusic__release r ON r.id = t.release_id
-           LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
-           WHERE ph.user_id = $1
-           ORDER BY ph.played_at DESC, ph.id DESC
-           LIMIT $2 OFFSET $3"#,
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM furumusic__listen_event
+          WHERE user_id = $1 AND qualified = true",
     )
     .bind(user.id)
-    .bind(per_page as i64)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
+
+    let rows = sqlx::query(
+        "SELECT le.listen_id, le.content_id, le.local_track_id,
+                le.origin_device_id, le.started_at_ms, le.listened_ms,
+                le.track_duration_ms, le.metadata_json,
+                COALESCE(NULLIF(d.name, ''), le.origin_device_id) AS device_name,
+                t.release_id, r.year AS release_year, t.cover_file_id,
+                r.cover_file_id AS release_cover_file_id
+           FROM furumusic__listen_event le
+           LEFT JOIN furumusic__fed_device d
+             ON d.user_id = le.user_id AND d.device_id = le.origin_device_id
+           LEFT JOIN furumusic__track t ON t.id = le.local_track_id
+           LEFT JOIN furumusic__release r ON r.id = t.release_id
+          WHERE le.user_id = $1 AND le.qualified = true
+          ORDER BY le.started_at_ms DESC, le.listen_id DESC
+          LIMIT $2 OFFSET $3",
+    )
+    .bind(user.id)
+    .bind(i64::from(per_page))
     .bind(offset)
     .fetch_all(pool)
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let track_ids: Vec<i64> = rows.iter().map(|t| t.id).collect();
-    let track_artists = if track_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, TrackArtistRow>(
-            r#"SELECT ta.track_id, ta.artist_id, a.name::text as artist_name, ta.role::text as role
-               FROM furumusic__track_artist ta
-               JOIN furumusic__artist a ON a.id = ta.artist_id
-               WHERE ta.track_id = ANY($1)
-               ORDER BY ta.track_id, ta.position"#,
-        )
-        .bind(&track_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?
-    };
-
-    let mut track_main_artists: HashMap<i64, Vec<ArtistRef>> = HashMap::new();
-    let mut track_feat_artists: HashMap<i64, Vec<ArtistRef>> = HashMap::new();
-    for ta in &track_artists {
-        let artist_ref = ArtistRef {
-            id: ta.artist_id,
-            name: ta.artist_name.clone(),
-        };
-        if ta.role == "featuring" {
-            track_feat_artists
-                .entry(ta.track_id)
-                .or_default()
-                .push(artist_ref);
-        } else {
-            track_main_artists
-                .entry(ta.track_id)
-                .or_default()
-                .push(artist_ref);
-        }
-    }
+    let items = rows
+        .into_iter()
+        .map(|row| {
+            let listen_id: String = row.get("listen_id");
+            let content_id: String = row.get("content_id");
+            let local_track_id: Option<i64> = row.get("local_track_id");
+            let metadata: serde_json::Value = row.get("metadata_json");
+            let title = metadata
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Unknown track")
+                .to_string();
+            let release_title = metadata
+                .get("release_title")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            let artist_values = |key: &str| {
+                metadata
+                    .get(key)
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|name| serde_json::json!({"id": null, "name": name}))
+                    .collect::<Vec<_>>()
+            };
+            let duration_ms: Option<i64> = row.get("track_duration_ms");
+            let release_id: Option<i64> = row.get("release_id");
+            let cover_url = track_cover_variant_url(
+                row.get("cover_file_id"),
+                row.get("release_cover_file_id"),
+                "medium",
+            );
+            let track = serde_json::json!({
+                "id": local_track_id.map_or_else(
+                    || format!("history:{content_id}"),
+                    |id| id.to_string(),
+                ),
+                "content_id": content_id,
+                "title": title,
+                "track_number": null,
+                "disc_number": null,
+                "duration_seconds": duration_ms.unwrap_or_default() as f64 / 1000.0,
+                "artists": artist_values("artist_names"),
+                "featured_artists": artist_values("featured_artist_names"),
+                "release_id": release_id,
+                "release_title": release_title.clone().unwrap_or_default(),
+                "release_year": row.get::<Option<i32>, _>("release_year"),
+                "cover_url": cover_url,
+                "stream_url": local_track_id
+                    .map(|id| format!("/api/player/stream/{id}"))
+                    .unwrap_or_default(),
+                "uploader_name": if local_track_id.is_some() { "Web" } else { "Federation" },
+                "federation_pending": local_track_id.is_none(),
+                "_federationTrack": if local_track_id.is_none() {
+                    Some(serde_json::json!({
+                        "key": {"content_id": content_id},
+                        "metadata": metadata,
+                        "availability": {
+                            "state": "federated",
+                            "local": null,
+                            "federation": [{"owner": "", "item_id": ""}],
+                        },
+                    }))
+                } else {
+                    None
+                },
+            });
+            let started_at_ms: i64 = row.get("started_at_ms");
+            let played_at = chrono::DateTime::from_timestamp_millis(started_at_ms)
+                .unwrap_or_else(chrono::Utc::now)
+                .to_rfc3339();
+            PlayHistoryItem {
+                id: listen_id,
+                track_id: local_track_id,
+                track_title: title,
+                release_title,
+                track,
+                played_at,
+                duration_listened: Some(
+                    row.get::<i64, _>("listened_ms")
+                        .div_euclid(1_000)
+                        .clamp(0, i64::from(i32::MAX)) as i32,
+                ),
+                completed: true,
+                device_id: row.get("origin_device_id"),
+                device_name: row.get("device_name"),
+            }
+        })
+        .collect();
 
     Json(PlayHistoryPage {
-        items: rows
-            .into_iter()
-            .map(|row| PlayHistoryItem {
-                id: row.history_id,
-                track_id: row.id,
-                track_title: row.title.clone(),
-                release_title: if row.release_title.trim().is_empty() {
-                    None
-                } else {
-                    Some(row.release_title.clone())
-                },
-                track: {
-                    let tid = row.id;
-                    TrackItem {
-                        id: row.id,
-                        content_id: None,
-                        title: row.title,
-                        track_number: row.track_number,
-                        disc_number: row.disc_number,
-                        duration_seconds: row.duration_seconds,
-                        artists: track_main_artists.remove(&tid).unwrap_or_default(),
-                        featured_artists: track_feat_artists.remove(&tid).unwrap_or_default(),
-                        release_id: row.release_id,
-                        release_title: row.release_title,
-                        release_year: row.release_year,
-                        cover_url: track_cover_variant_url(
-                            row.cover_file_id,
-                            row.release_cover_file_id,
-                            "medium",
-                        ),
-                        stream_url: format!("/api/player/stream/{tid}"),
-                        uploader_name: row.uploader_name,
-                        audio_format: row.audio_format,
-                        audio_bitrate: row.audio_bitrate,
-                        audio_sample_rate: row.audio_sample_rate,
-                        audio_bit_depth: row.audio_bit_depth,
-                        file_size_bytes: row.file_size_bytes,
-                        lastfm_listeners: row.lastfm_listeners,
-                        lastfm_playcount: row.lastfm_playcount,
-                        lastfm_rating: row.lastfm_rating,
-                        lastfm_updated_at: row.lastfm_updated_at,
-                    }
-                },
-                played_at: row.played_at,
-                duration_listened: row.duration_listened,
-                completed: row.completed,
-            })
-            .collect(),
+        items,
         total,
         page,
         per_page,
@@ -5714,60 +5706,32 @@ async fn history_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
 
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-    sqlx::query(
-        r#"INSERT INTO furumusic__play_history (user_id, track_id, played_at, duration_listened, completed)
-           VALUES ($1, $2, $3, $4, $5)"#,
+    let listened_seconds = entry.duration_listened.unwrap_or_default().max(0);
+    let started_at = entry
+        .started_at
+        .unwrap_or_else(|| chrono::Utc::now().timestamp() - i64::from(listened_seconds));
+    let listen_id = entry
+        .listen_id
+        .unwrap_or_else(|| format!("legacy-web:{}:{}:{started_at}", user.id, entry.track_id));
+    let ended_reason = match entry.ended_reason.as_deref() {
+        Some("finished") => music_dht::device_sync::ListenEndReason::Finished,
+        Some("skipped") => music_dht::device_sync::ListenEndReason::Skipped,
+        Some("replaced") => music_dht::device_sync::ListenEndReason::Replaced,
+        Some("stopped") => music_dht::device_sync::ListenEndReason::Stopped,
+        _ => music_dht::device_sync::ListenEndReason::Unknown,
+    };
+    crate::federation::devices::record_track_listen(
+        pool,
+        user.id,
+        entry.track_id,
+        listen_id,
+        started_at.saturating_mul(1_000),
+        i64::from(listened_seconds).saturating_mul(1_000),
+        ended_reason,
     )
-    .bind(user.id)
-    .bind(entry.track_id)
-    .bind(&now)
-    .bind(entry.duration_listened)
-    .bind(entry.completed)
-    .execute(pool)
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
     crate::metrics::record_play_history(entry.duration_listened, entry.completed);
-
-    if let Some(listened_seconds) = entry.duration_listened {
-        let (config, _) = AppConfig::load_with_db(&db).await;
-        match enqueue_lastfm_scrobble(
-            pool,
-            &config,
-            user.id,
-            entry.track_id,
-            entry.started_at,
-            listened_seconds,
-        )
-        .await
-        {
-            Ok(result) if result.queued => {
-                tracing::info!(
-                    user_id = user.id,
-                    track_id = entry.track_id,
-                    sent = result.sent,
-                    "Queued Last.fm scrobble from play history"
-                );
-            }
-            Ok(result) => {
-                tracing::debug!(
-                    user_id = user.id,
-                    track_id = entry.track_id,
-                    message = ?result.message,
-                    "Play history did not queue Last.fm scrobble"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    user_id = user.id,
-                    track_id = entry.track_id,
-                    error = %err,
-                    "Failed to queue Last.fm scrobble from play history"
-                );
-            }
-        }
-    }
 
     Json(serde_json::json!({"ok": true})).into_response()
 }
@@ -6397,23 +6361,40 @@ async fn prepare_federated_track_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
-    let progress_sender = sender.clone();
     tokio::spawn(async move {
-        let result = crate::federation::handle()
-            .prepare_content_with_progress(
-                &body.content_id,
-                &body.owner,
-                &body.item_id,
-                move |progress| {
-                    let _ = progress_sender.send(serde_json::json!({
-                        "kind": "progress",
-                        "phase": progress.phase,
-                        "received": progress.received,
-                        "total": progress.total,
-                    }));
-                },
-            )
-            .await;
+        let federation = crate::federation::handle();
+        let progress_sender = sender.clone();
+        let result = match (body.owner.as_deref(), body.item_id.as_deref()) {
+            (Some(owner), Some(item_id)) if !owner.is_empty() && !item_id.is_empty() => {
+                federation
+                    .prepare_content_with_progress(
+                        &body.content_id,
+                        owner,
+                        item_id,
+                        move |progress| {
+                            let _ = progress_sender.send(serde_json::json!({
+                                "kind": "progress",
+                                "phase": progress.phase,
+                                "received": progress.received,
+                                "total": progress.total,
+                            }));
+                        },
+                    )
+                    .await
+            }
+            _ => {
+                federation
+                    .prepare_discovered_content_with_progress(&body.content_id, move |progress| {
+                        let _ = progress_sender.send(serde_json::json!({
+                            "kind": "progress",
+                            "phase": progress.phase,
+                            "received": progress.received,
+                            "total": progress.total,
+                        }));
+                    })
+                    .await
+            }
+        };
         let event = match result {
             Ok(prepared) => serde_json::json!({
                 "kind": "completed",

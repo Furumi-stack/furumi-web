@@ -3,9 +3,11 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub(super) struct HistoryEntry {
     pub(super) track_id: i64,
+    pub(super) listen_id: Option<String>,
     pub(super) started_at: Option<i64>,
     pub(super) duration_listened: Option<i32>,
     pub(super) completed: bool,
+    pub(super) ended_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

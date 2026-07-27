@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use music_dht::device_sync::{ListenEndReason, ListenEvent, ListenTrackMetadata};
 use music_dht::{ByteStream, MusicDhtService, NetworkId, PeerTicket, SecretKey, StreamAcceptor};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -20,10 +21,10 @@ use crate::player::PlayerDeviceHub;
 
 use super::{TransportStats, record_stream_transport};
 
-pub const SYNC_ALPN: &[u8] = b"furumi/sync/1";
+pub const SYNC_ALPN: &[u8] = b"furumi/sync/2";
 
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PROTOCOL_VERSION: u16 = 1;
+const PROTOCOL_VERSION: u16 = 2;
 const INVITE_TTL_MS: i64 = 10 * 60 * 1000;
 const PAIRING_WAIT_MS: i64 = 5 * 60 * 1000;
 const PAIRING_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -268,6 +269,9 @@ enum SyncOpPayload {
     PlaybackCommand {
         target_device_id: String,
         command: PlaybackCommand,
+    },
+    ListenRecorded {
+        event: ListenEvent,
     },
 }
 
@@ -767,6 +771,41 @@ pub async fn record_track_like(
             },
         )
         .await?;
+    }
+    Ok(())
+}
+
+pub async fn record_track_listen(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    track_id: i64,
+    listen_id: String,
+    started_at_ms: i64,
+    listened_ms: i64,
+    ended_reason: ListenEndReason,
+) -> Result<()> {
+    let content_id = track_content_id(pool, track_id)
+        .await?
+        .context("track content id is not ready")?;
+    let track = synced_fed_track_for_track(pool, track_id, &content_id)
+        .await?
+        .context("track metadata is not available")?;
+    let event = ListenEvent {
+        listen_id,
+        content_id,
+        started_at_ms,
+        listened_ms,
+        track_duration_ms: track.duration_seconds.map(|seconds| seconds * 1_000),
+        ended_reason,
+        track: ListenTrackMetadata {
+            title: track.title,
+            artist_names: track.artist_names,
+            featured_artist_names: track.featured_artist_names,
+            release_title: track.release_title,
+        },
+    };
+    if event.should_record() {
+        record_local_op(pool, user_id, SyncOpPayload::ListenRecorded { event }).await?;
     }
     Ok(())
 }
@@ -2159,7 +2198,106 @@ async fn apply_op(
                 .await?;
             Ok(false)
         }
+        SyncOpPayload::ListenRecorded { event } => {
+            apply_listen_event(pool, user_id, &op.origin_device_id, event).await
+        }
     }
+}
+
+async fn apply_listen_event(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    origin_device_id: &str,
+    event: &ListenEvent,
+) -> Result<bool> {
+    if !event.should_record() || origin_device_id.trim().is_empty() {
+        return Ok(false);
+    }
+    let content_id =
+        music_dht::normalize_content_id(&event.content_id).context("invalid listen content id")?;
+    let local_track_id: Option<i64> = sqlx::query_scalar(
+        "SELECT local_track_id
+           FROM furumusic__track_ref
+          WHERE content_id = $1",
+    )
+    .bind(&content_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    let inserted = sqlx::query(
+        "INSERT INTO furumusic__listen_event
+            (user_id, listen_id, content_id, local_track_id, origin_device_id,
+             started_at_ms, listened_ms, track_duration_ms, ended_reason,
+             qualified, metadata_json, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (user_id, listen_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(&event.listen_id)
+    .bind(&content_id)
+    .bind(local_track_id)
+    .bind(origin_device_id)
+    .bind(event.started_at_ms)
+    .bind(event.listened_ms)
+    .bind(event.track_duration_ms)
+    .bind(serde_json::to_string(&event.ended_reason)?)
+    .bind(event.qualifies_as_play())
+    .bind(serde_json::to_value(&event.track)?)
+    .bind(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string())
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0;
+    if !inserted || !event.qualifies_as_play() {
+        return Ok(inserted);
+    }
+
+    let Some(artist_name) = event
+        .track
+        .artist_names
+        .iter()
+        .find(|name| !name.trim().is_empty())
+    else {
+        return Ok(true);
+    };
+    let duration_seconds = event
+        .track_duration_ms
+        .unwrap_or_default()
+        .div_euclid(1_000)
+        .clamp(0, i64::from(i32::MAX)) as i32;
+    if duration_seconds <= 30 {
+        return Ok(true);
+    }
+    let listened_seconds = event
+        .listened_ms
+        .div_euclid(1_000)
+        .clamp(0, i64::from(i32::MAX)) as i32;
+    let started_at = event.started_at_ms.div_euclid(1_000);
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    sqlx::query(
+        "INSERT INTO furumusic__lastfm_scrobble_outbox
+            (user_id, track_id, started_at, listened_seconds, duration_seconds,
+             status, created_at, updated_at, dedupe_key, track_title,
+             artist_name, album_title)
+         SELECT $1, $2, $3, $4, $5, 'pending', $6, $6, $7, $8, $9, $10
+          WHERE EXISTS (
+                SELECT 1 FROM furumusic__lastfm_account WHERE user_id = $1
+          )
+         ON CONFLICT (dedupe_key) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(local_track_id)
+    .bind(started_at)
+    .bind(listened_seconds)
+    .bind(duration_seconds)
+    .bind(&now)
+    .bind(format!("listen:{user_id}:{}", event.listen_id))
+    .bind(&event.track.title)
+    .bind(artist_name)
+    .bind(event.track.release_title.as_deref())
+    .execute(pool)
+    .await?;
+    Ok(true)
 }
 
 async fn apply_like_state(
@@ -4422,6 +4560,7 @@ fn payload_kind(payload: &SyncOpPayload) -> &'static str {
         SyncOpPayload::DeviceTrusted { .. } => "device_trusted",
         SyncOpPayload::DeviceRevoked { .. } => "device_revoked",
         SyncOpPayload::PlaybackCommand { .. } => "playback_command",
+        SyncOpPayload::ListenRecorded { .. } => "listen_recorded",
     }
 }
 

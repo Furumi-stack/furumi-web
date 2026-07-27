@@ -229,6 +229,36 @@ impl Federation {
         }
     }
 
+    pub async fn prepare_discovered_content_with_progress<F>(
+        self: &std::sync::Arc<Self>,
+        content_id: &str,
+        progress: F,
+    ) -> Result<PreparedTrack>
+    where
+        F: FnMut(DownloadProgress) + Send,
+    {
+        let content_id =
+            music_dht::normalize_content_id(content_id).context("invalid content id")?;
+        let service = self.service().await?;
+        let outcome = service.search_content_id(&content_id).await?;
+        let item = outcome
+            .local_results
+            .into_iter()
+            .chain(outcome.network_results)
+            .find(|item| {
+                item.kind == music_dht::ItemKind::Track
+                    && item.content_id.as_deref() == Some(content_id.as_str())
+            })
+            .context("no peer currently advertises this content id")?;
+        self.prepare_content_with_progress(
+            &content_id,
+            &item.owner.to_string(),
+            &hex_encode(item.id.as_bytes()),
+            progress,
+        )
+        .await
+    }
+
     pub async fn prepare_content_with_progress<F>(
         self: &std::sync::Arc<Self>,
         content_id: &str,
