@@ -2495,6 +2495,7 @@ document.addEventListener('alpine:init', () => {
         federationSearch: { loading: false, error: '', artists: [], releases: [], tracks: [] },
         artistFederation: { loading: false, error: '', releases: [], tracks: [] },
         federationPreparing: {},
+        federationFailures: {},
         trackAvailability: {},
         _federatedReleaseCache: {},
         federationLiked: [],
@@ -3863,6 +3864,11 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
             if (!contentId || sources.length === 0) return;
+            if (this.federationFailures[contentId]) {
+                const failures = { ...this.federationFailures };
+                delete failures[contentId];
+                this.federationFailures = failures;
+            }
             if (this.federationPreparing[contentId]) {
                 if (options.playAfterPrepare !== false) {
                     this.federationPreparing = {
@@ -4023,7 +4029,13 @@ document.addEventListener('alpine:init', () => {
                     Alpine.store('queue').playRelease([playable], 0);
                 }
             } catch (error) {
-                window.alert(error?.message || 'Federated track download failed');
+                this.federationFailures = {
+                    ...this.federationFailures,
+                    [contentId]: {
+                        message: error?.message || 'Federated track is temporarily unavailable',
+                        failedAt: Date.now(),
+                    },
+                };
             } finally {
                 const next = { ...this.federationPreparing };
                 delete next[contentId];
@@ -4035,12 +4047,17 @@ document.addEventListener('alpine:init', () => {
             return this.federationPreparing[contentId] || null;
         },
 
+        federationFailure(contentId) {
+            return this.federationFailures[contentId] || null;
+        },
+
         federationDownloadTooltip(contentId) {
             const progress = this.federationDownload(contentId);
             if (!progress) return '';
             const phases = {
                 checking: 'Checking local library',
                 connecting: 'Connecting to peer',
+                discovering: 'Looking for another peer',
                 downloading: 'Downloading',
                 verifying: 'Verifying content ID',
                 saving: 'Adding to library',

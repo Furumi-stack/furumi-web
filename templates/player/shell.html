@@ -562,12 +562,16 @@
                                     <div class="track-row federation-track-row"
                                          @dblclick="$store.library.playFederatedTrack(track)">
                                         <span class="track-num federation-track-status">
-                                            <template x-if="!$store.library.federationDownload(track.key.content_id) && !$store.library.isTrackLocal(track)">
+                                            <template x-if="!$store.library.federationDownload(track.key.content_id) && !$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                                     <circle cx="12" cy="12" r="3"/>
                                                     <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
                                                     <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
                                                 </svg>
+                                            </template>
+                                            <template x-if="$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
+                                                <span class="federation-error-badge"
+                                                      :title="$store.library.federationFailure(track.key.content_id).message">!</span>
                                             </template>
                                             <template x-if="$store.library.federationDownload(track.key.content_id)">
                                                 <span class="federation-download-progress"
@@ -905,11 +909,15 @@
                                 <div class="track-row federation-track-row"
                                      @dblclick="$store.library.playFederatedTrack(track)">
                                     <span class="track-num federation-track-status">
-                                        <template x-if="!$store.library.federationDownload(track.key.content_id) && !$store.library.isTrackLocal(track)">
+                                        <template x-if="!$store.library.federationDownload(track.key.content_id) && !$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
                                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                                 <circle cx="12" cy="12" r="3"/>
                                                 <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
                                             </svg>
+                                        </template>
+                                        <template x-if="$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
+                                            <span class="federation-error-badge"
+                                                  :title="$store.library.federationFailure(track.key.content_id).message">!</span>
                                         </template>
                                         <template x-if="$store.library.federationDownload(track.key.content_id)">
                                             <span class="federation-download-progress"
@@ -1158,12 +1166,16 @@
                                 <template x-if="!track.federation_pending">
                                     <span x-text="track.track_number || (idx + 1)"></span>
                                 </template>
-                                <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
+                                <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && !$store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                         <circle cx="12" cy="12" r="3"/>
                                         <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
                                         <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
                                     </svg>
+                                </template>
+                                <template x-if="track.federation_pending && $store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
+                                    <span class="federation-error-badge"
+                                          :title="$store.library.federationFailure(track.content_id).message">!</span>
                                 </template>
                                 <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && $store.library.isTrackLocal(track._federationTrack)">
                                     <span x-text="track.track_number || (idx + 1)"></span>
@@ -1312,12 +1324,16 @@
                                 <template x-if="!track.federation_pending || $store.library.isTrackLocal(track._federationTrack)">
                                     <span x-text="idx + 1"></span>
                                 </template>
-                                <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
+                                <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && !$store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                         <circle cx="12" cy="12" r="3"/>
                                         <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
                                         <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
                                     </svg>
+                                </template>
+                                <template x-if="track.federation_pending && $store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
+                                    <span class="federation-error-badge"
+                                          :title="$store.library.federationFailure(track.content_id).message">!</span>
                                 </template>
                                 <template x-if="track.federation_pending && $store.library.federationDownload(track.content_id)">
                                     <span class="federation-download-progress"
@@ -1452,11 +1468,15 @@
                             <span class="queue-federation-status federation-track-status"
                                   x-show="item.track.federation_pending"
                                   x-cloak>
-                                <template x-if="!$store.library.federationDownload(item.track.content_id)">
+                                <template x-if="!$store.library.federationDownload(item.track.content_id) && !$store.library.federationFailure(item.track.content_id)">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                         <circle cx="12" cy="12" r="3"/>
                                         <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
                                     </svg>
+                                </template>
+                                <template x-if="$store.library.federationFailure(item.track.content_id)">
+                                    <span class="federation-error-badge"
+                                          :title="$store.library.federationFailure(item.track.content_id).message">!</span>
                                 </template>
                                 <template x-if="$store.library.federationDownload(item.track.content_id)">
                                     <span class="federation-download-progress"

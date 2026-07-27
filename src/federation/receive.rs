@@ -295,7 +295,60 @@ impl Federation {
         let dir = storage_root.join("federation");
         tokio::fs::create_dir_all(&dir).await?;
         let downloaded =
-            download(&service, owner, item_id, &content_id, &dir, &mut progress).await?;
+            match download(&service, owner, item_id, &content_id, &dir, &mut progress).await {
+                Ok(downloaded) => downloaded,
+                Err(primary_error) => {
+                    progress(DownloadProgress {
+                        phase: "discovering",
+                        received: 0,
+                        total: 0,
+                    });
+                    let outcome = service
+                        .search_content_id(&content_id)
+                        .await
+                        .map_err(|err| {
+                            anyhow::anyhow!("{primary_error:#}; content lookup also failed: {err}")
+                        })?;
+                    let mut last_error = primary_error;
+                    let mut downloaded = None;
+                    for item in outcome
+                        .local_results
+                        .into_iter()
+                        .chain(outcome.network_results)
+                    {
+                        if item.kind != music_dht::ItemKind::Track
+                            || item.content_id.as_deref() != Some(content_id.as_str())
+                        {
+                            continue;
+                        }
+                        let candidate_item_id = hex_encode(item.id.as_bytes());
+                        if item.owner == owner && candidate_item_id == item_id {
+                            continue;
+                        }
+                        match download(
+                            &service,
+                            item.owner,
+                            &candidate_item_id,
+                            &content_id,
+                            &dir,
+                            &mut progress,
+                        )
+                        .await
+                        {
+                            Ok(candidate) => {
+                                downloaded = Some(candidate);
+                                break;
+                            }
+                            Err(err) => last_error = err,
+                        }
+                    }
+                    downloaded.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no reachable peer currently provides this track: {last_error:#}"
+                        )
+                    })?
+                }
+            };
         if !save {
             super::lock(&self.prepared_cache)
                 .insert(token.clone(), (downloaded.path, downloaded.mime));
@@ -306,15 +359,20 @@ impl Federation {
         }
         progress(DownloadProgress {
             phase: "saving",
-            received: 1,
-            total: 1,
+            received: 0,
+            total: 0,
         });
         let track_id = materialize(&pool, &storage_root, &content_id, downloaded).await?;
-        // The normal periodic sync will publish it; this immediate sync keeps
-        // save-on-listen useful to the federation without waiting a minute.
-        if let Err(err) = self.sync_now().await {
-            tracing::warn!(track_id, "post-import federation publish failed: {err:#}");
-        }
+        // Materialization is the playback boundary: return the local track
+        // immediately so the browser can replace the pending queue entry and
+        // start it. Publishing must not keep the prepare stream stuck at 100%
+        // when a federation peer is slow or offline.
+        let federation = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(err) = federation.sync_now().await {
+                tracing::warn!(track_id, "post-import federation publish failed: {err:#}");
+            }
+        });
         Ok(PreparedTrack {
             local_track_id: Some(track_id),
             stream_url: format!("/api/player/stream/{track_id}"),
@@ -360,6 +418,10 @@ fn cache_artwork(federation: &Federation, key: String, artwork: &(Vec<u8>, Strin
             fetched_at: std::time::Instant::now(),
         },
     );
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 async fn download(
