@@ -1626,7 +1626,11 @@
                      x-text="'-' + formatTime(Math.max(0, $store.player.duration - $store.player.currentTime)) + ' / ' + formatTime($store.player.duration)"></div>
                 <span class="player-time" x-text="formatTime($store.player.duration)"></span>
             </div>
-            <div class="player-version-chip">v{{ t.app_version() }}</div>
+            <a class="player-version-chip"
+               href="https://github.com/house-of-vanity/furumusic"
+               target="_blank"
+               rel="noopener noreferrer"
+               aria-label="Furumusic on GitHub">v{{ t.app_version() }}</a>
             </div>
 
             <div class="player-right">

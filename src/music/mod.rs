@@ -2434,6 +2434,48 @@ pub mod db_migrations {
             &[Operation::custom(create_synced_listen_history).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn repair_legacy_listen_qualification(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "UPDATE furumusic__listen_event le
+                    SET qualified = (
+                        ph.completed
+                        OR (
+                            COALESCE(ph.duration_listened, 0) >= 5
+                            AND COALESCE(t.duration_seconds, 0) > 0
+                            AND COALESCE(ph.duration_listened, 0) >= LEAST(
+                                COALESCE(t.duration_seconds, 0) / 2.0,
+                                240.0
+                            )
+                        )
+                    )
+                   FROM furumusic__play_history ph
+                   JOIN furumusic__track t ON t.id = ph.track_id
+                  WHERE le.user_id = ph.user_id
+                    AND le.listen_id = 'legacy-web:' || ph.id::text",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0042RepairLegacyListenQualification;
+
+    impl migrations::Migration for M0042RepairLegacyListenQualification {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0042_repair_legacy_listen_qualification";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0041_create_synced_listen_history",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(repair_legacy_listen_qualification).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2466,5 +2508,6 @@ pub mod db_migrations {
         &M0039EnsureFederationContentIdCache,
         &M0040CreateContentAddressedMusicRefs,
         &M0041CreateSyncedListenHistory,
+        &M0042RepairLegacyListenQualification,
     ];
 }

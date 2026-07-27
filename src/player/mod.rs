@@ -1259,15 +1259,19 @@ async fn me_handler(
             .await
             .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let plays: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM furumusic__play_history WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let plays: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM furumusic__listen_event
+          WHERE user_id = $1 AND qualified = true",
+    )
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let listened_seconds: Option<i64> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(duration_listened), 0) FROM furumusic__play_history WHERE user_id = $1",
+        "SELECT COALESCE(SUM(listened_ms), 0) / 1000
+           FROM furumusic__listen_event
+          WHERE user_id = $1 AND qualified = true",
     )
     .bind(user.id)
     .fetch_one(pool)
@@ -5573,7 +5577,8 @@ async fn history_list_handler(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let rows = sqlx::query(
-        "SELECT le.listen_id, le.content_id, le.local_track_id,
+        "SELECT le.listen_id, le.content_id,
+                COALESCE(le.local_track_id, tr.local_track_id) AS local_track_id,
                 le.origin_device_id, le.started_at_ms, le.listened_ms,
                 le.track_duration_ms, le.metadata_json,
                 COALESCE(NULLIF(d.name, ''), le.origin_device_id) AS device_name,
@@ -5582,7 +5587,9 @@ async fn history_list_handler(
            FROM furumusic__listen_event le
            LEFT JOIN furumusic__fed_device d
              ON d.user_id = le.user_id AND d.device_id = le.origin_device_id
-           LEFT JOIN furumusic__track t ON t.id = le.local_track_id
+           LEFT JOIN furumusic__track_ref tr ON tr.content_id = le.content_id
+           LEFT JOIN furumusic__track t
+             ON t.id = COALESCE(le.local_track_id, tr.local_track_id)
            LEFT JOIN furumusic__release r ON r.id = t.release_id
           WHERE le.user_id = $1 AND le.qualified = true
           ORDER BY le.started_at_ms DESC, le.listen_id DESC
