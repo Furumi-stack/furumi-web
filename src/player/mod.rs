@@ -5759,6 +5759,10 @@ async fn search_handler(
         })
         .into_response();
     }
+    let normalized_q = match music_dht::normalize_name(&q) {
+        normalized if !normalized.is_empty() => normalized,
+        _ => q.clone(),
+    };
 
     let limit = query.0.limit.unwrap_or(10).clamp(1, 50) as i64;
     let short = q.chars().count() < 3;
@@ -5774,11 +5778,14 @@ async fn search_handler(
                                 JOIN furumusic__track t ON t.release_id = r.id AND t.is_hidden = false
                                 WHERE ra.artist_id = a.id), 0) AS track_count
                FROM furumusic__artist a
-               WHERE a.is_hidden = false AND a.name_sort ILIKE '%' || $1 || '%'
+               WHERE a.is_hidden = false
+                 AND (a.name_sort ILIKE '%' || $1 || '%'
+                      OR a.name_sort ILIKE '%' || $3 || '%')
                ORDER BY a.name_sort LIMIT $2"#,
         )
         .bind(&q)
         .bind(limit)
+        .bind(&normalized_q)
         .fetch_all(pool);
 
         let r = sqlx::query_as::<_, SearchReleaseRow>(
@@ -5786,11 +5793,14 @@ async fn search_handler(
                       r.year, r.cover_file_id,
                       COALESCE((SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id = r.id AND t.is_hidden = false), 0) AS track_count
                FROM furumusic__release r
-               WHERE r.is_hidden = false AND r.title_sort ILIKE '%' || $1 || '%'
+               WHERE r.is_hidden = false
+                 AND (r.title_sort ILIKE '%' || $1 || '%'
+                      OR r.title_sort ILIKE '%' || $3 || '%')
                ORDER BY r.title_sort LIMIT $2"#,
         )
         .bind(&q)
         .bind(limit)
+        .bind(&normalized_q)
         .fetch_all(pool);
 
         let t = sqlx::query_as::<_, SearchTrackRow>(
@@ -5813,11 +5823,14 @@ async fn search_handler(
                FROM furumusic__track t
                JOIN furumusic__release rel ON rel.id = t.release_id
                LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
-               WHERE t.is_hidden = false AND t.title_sort ILIKE '%' || $1 || '%'
+               WHERE t.is_hidden = false
+                 AND (t.title_sort ILIKE '%' || $1 || '%'
+                      OR t.title_sort ILIKE '%' || $3 || '%')
                ORDER BY t.title_sort LIMIT $2"#,
         )
         .bind(&q)
         .bind(limit)
+        .bind(&normalized_q)
         .fetch_all(pool);
 
         tokio::try_join!(a, r, t).map_err(|e| cot::Error::internal(e.to_string()))?
@@ -5834,11 +5847,16 @@ async fn search_handler(
                                  WHERE ra.artist_id = a.id), 0) AS track_count,
                        MAX(sim) AS similarity
                 FROM (
-                    SELECT id, name, image_file_id, name_sort, similarity(name_sort, $1) AS sim
-                    FROM furumusic__artist WHERE is_hidden = false AND name_sort % $1
+                    SELECT id, name, image_file_id, name_sort,
+                           GREATEST(similarity(name_sort, $1), similarity(name_sort, $3)) AS sim
+                    FROM furumusic__artist
+                    WHERE is_hidden = false AND (name_sort % $1 OR name_sort % $3)
                     UNION ALL
                     SELECT id, name, image_file_id, name_sort, 0.01::real AS sim
-                    FROM furumusic__artist WHERE is_hidden = false AND name_sort ILIKE '%' || $1 || '%'
+                    FROM furumusic__artist
+                    WHERE is_hidden
+                      = false AND (name_sort ILIKE '%' || $1 || '%'
+                                   OR name_sort ILIKE '%' || $3 || '%')
                 ) a
                 GROUP BY a.id, a.name, a.image_file_id
                 ORDER BY similarity DESC
@@ -5847,6 +5865,7 @@ async fn search_handler(
         )
         .bind(&q)
         .bind(limit)
+        .bind(&normalized_q)
         .fetch_all(pool);
 
         let r = sqlx::query_as::<_, SearchReleaseRow>(
@@ -5856,11 +5875,16 @@ async fn search_handler(
                        COALESCE((SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id = r.id AND t.is_hidden = false), 0) AS track_count,
                        MAX(sim) AS similarity
                 FROM (
-                    SELECT id, title, release_type, year, cover_file_id, title_sort, similarity(title_sort, $1) AS sim
-                    FROM furumusic__release WHERE is_hidden = false AND title_sort % $1
+                    SELECT id, title, release_type, year, cover_file_id, title_sort,
+                           GREATEST(similarity(title_sort, $1), similarity(title_sort, $3)) AS sim
+                    FROM furumusic__release
+                    WHERE is_hidden = false AND (title_sort % $1 OR title_sort % $3)
                     UNION ALL
                     SELECT id, title, release_type, year, cover_file_id, title_sort, 0.01::real AS sim
-                    FROM furumusic__release WHERE is_hidden = false AND title_sort ILIKE '%' || $1 || '%'
+                    FROM furumusic__release
+                    WHERE is_hidden = false
+                      AND (title_sort ILIKE '%' || $1 || '%'
+                           OR title_sort ILIKE '%' || $3 || '%')
                 ) r
                 GROUP BY r.id, r.title, r.release_type, r.year, r.cover_file_id
                 ORDER BY similarity DESC
@@ -5869,6 +5893,7 @@ async fn search_handler(
         )
         .bind(&q)
         .bind(limit)
+        .bind(&normalized_q)
         .fetch_all(pool);
 
         let t = sqlx::query_as::<_, SearchTrackRow>(
@@ -5895,13 +5920,17 @@ async fn search_handler(
                 FROM (
                     SELECT id, title, title_sort, track_number, disc_number, duration_seconds, cover_file_id, release_id, audio_file_id,
                            lastfm_listeners, lastfm_playcount, lastfm_rating, lastfm_updated_at,
-                           similarity(title_sort, $1) AS sim
-                    FROM furumusic__track WHERE is_hidden = false AND title_sort % $1
+                           GREATEST(similarity(title_sort, $1), similarity(title_sort, $3)) AS sim
+                    FROM furumusic__track
+                    WHERE is_hidden = false AND (title_sort % $1 OR title_sort % $3)
                     UNION ALL
                     SELECT id, title, title_sort, track_number, disc_number, duration_seconds, cover_file_id, release_id, audio_file_id,
                            lastfm_listeners, lastfm_playcount, lastfm_rating, lastfm_updated_at,
                            0.01::real AS sim
-                    FROM furumusic__track WHERE is_hidden = false AND title_sort ILIKE '%' || $1 || '%'
+                    FROM furumusic__track
+                    WHERE is_hidden = false
+                      AND (title_sort ILIKE '%' || $1 || '%'
+                           OR title_sort ILIKE '%' || $3 || '%')
                 ) t
                 JOIN furumusic__release rel ON rel.id = t.release_id
                 LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
@@ -5914,6 +5943,7 @@ async fn search_handler(
         )
         .bind(&q)
         .bind(limit)
+        .bind(&normalized_q)
         .fetch_all(pool);
 
         tokio::try_join!(a, r, t).map_err(|e| cot::Error::internal(e.to_string()))?
