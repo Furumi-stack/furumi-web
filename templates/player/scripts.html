@@ -4019,6 +4019,9 @@ document.addEventListener('alpine:init', () => {
                         playable,
                     });
                     this.refreshMaterializedArtwork(track);
+                    Alpine.store('likes')?.reload();
+                    const history = Alpine.store('history');
+                    if (history?.modal) history.load(history.page);
                 }
                 const finalProgress = this.federationPreparing[contentId] || {};
                 const queueIndex = Number.isInteger(finalProgress.queueIndex)
@@ -4129,10 +4132,16 @@ document.addEventListener('alpine:init', () => {
         _set: new Set(),
 
         init() {
-            fetch('/api/player/likes')
-                .then(r => r.json())
-                .then(d => { this._set = new Set(d.track_ids || []); })
-                .catch(() => {});
+            this.reload();
+        },
+
+        async reload() {
+            try {
+                const response = await fetch('/api/player/likes');
+                if (!response.ok) return;
+                const data = await response.json();
+                this._set = new Set(data.track_ids || []);
+            } catch {}
         },
 
         has(trackId) {

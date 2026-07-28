@@ -5602,19 +5602,62 @@ async fn history_list_handler(
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
+    // Listen metadata is an immutable snapshot. Once federated content has
+    // been materialized, resolve it through the content cache and use the
+    // normal local TrackItem as the presentation/action authority.
+    let content_ids = rows
+        .iter()
+        .map(|row| row.get::<String, _>("content_id"))
+        .collect::<Vec<_>>();
+    let local_rows = if content_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query(
+            r#"SELECT DISTINCT ON (c.content_id) c.content_id, t.id AS track_id
+                 FROM furumusic__federation_content_id_cache c
+                 JOIN furumusic__media_file m
+                   ON m.id = c.media_file_id AND m.sha256_hash = c.sha256_hash
+                 JOIN furumusic__track t ON t.audio_file_id = m.id
+                 JOIN furumusic__release r ON r.id = t.release_id
+                WHERE c.content_id = ANY($1)
+                  AND t.is_hidden = false
+                  AND r.is_hidden = false
+                ORDER BY c.content_id, t.id"#,
+        )
+        .bind(&content_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?
+    };
+    let local_by_content = local_rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("content_id"),
+                row.get::<i64, _>("track_id"),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let local_ids = local_by_content.values().copied().collect::<Vec<_>>();
+    let local_tracks = load_track_items_by_ids(pool, &local_ids)
+        .await?
+        .into_iter()
+        .map(|track| (track.id, track))
+        .collect::<HashMap<_, _>>();
+
     let items = rows
         .into_iter()
         .map(|row| {
             let listen_id: String = row.get("listen_id");
             let content_id: String = row.get("content_id");
-            let local_track_id: Option<i64> = row.get("local_track_id");
+            let local_track_id = local_by_content.get(&content_id).copied();
             let metadata: serde_json::Value = row.get("metadata_json");
-            let title = metadata
+            let snapshot_title = metadata
                 .get("title")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("Unknown track")
                 .to_string();
-            let release_title = metadata
+            let snapshot_release_title = metadata
                 .get("release_title")
                 .and_then(serde_json::Value::as_str)
                 .map(ToOwned::to_owned);
@@ -5635,20 +5678,20 @@ async fn history_list_handler(
                 row.get("release_cover_file_id"),
                 "medium",
             );
-            let track = serde_json::json!({
+            let fallback_track = serde_json::json!({
                 "id": local_track_id.map_or_else(
                     || format!("history:{content_id}"),
                     |id| id.to_string(),
                 ),
                 "content_id": content_id,
-                "title": title,
+                "title": snapshot_title,
                 "track_number": null,
                 "disc_number": null,
                 "duration_seconds": duration_ms.unwrap_or_default() as f64 / 1000.0,
                 "artists": artist_values("artist_names"),
                 "featured_artists": artist_values("featured_artist_names"),
                 "release_id": release_id,
-                "release_title": release_title.clone().unwrap_or_default(),
+                "release_title": snapshot_release_title.clone().unwrap_or_default(),
                 "release_year": row.get::<Option<i32>, _>("release_year"),
                 "cover_url": cover_url,
                 "stream_url": local_track_id
@@ -5670,6 +5713,16 @@ async fn history_list_handler(
                     None
                 },
             });
+            let local_track = local_track_id.and_then(|id| local_tracks.get(&id));
+            let track = local_track
+                .and_then(|track| serde_json::to_value(track).ok())
+                .unwrap_or(fallback_track);
+            let title = local_track
+                .map(|track| track.title.clone())
+                .unwrap_or(snapshot_title);
+            let release_title = local_track
+                .map(|track| track.release_title.clone())
+                .or(snapshot_release_title);
             let started_at_ms: i64 = row.get("started_at_ms");
             let played_at = chrono::DateTime::from_timestamp_millis(started_at_ms)
                 .unwrap_or_else(chrono::Utc::now)
