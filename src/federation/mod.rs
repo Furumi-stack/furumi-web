@@ -12,6 +12,7 @@
 //! `federation_network_id`, `federation_save_on_listen`) and apply on the fly — saving the settings
 //! starts, stops or re-joins the node without a server restart.
 
+mod capabilities;
 pub mod client;
 pub mod devices;
 mod receive;
@@ -24,6 +25,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use music_dht::capabilities::CAPABILITIES_ALPN;
 use music_dht::{
     ByteStream, ByteStreamConnectionStats, ItemKind, ItemSpec, MusicDhtConfig, MusicDhtService,
     NetworkId, PeerTicket, PublishStats, RendezvousConfig, SyncStats,
@@ -380,6 +382,7 @@ impl Federation {
             .stream_protocol(AUDIO_ALPN)
             .stream_protocol(CATALOG_ALPN)
             .stream_protocol(devices::SYNC_ALPN)
+            .schema_independent_stream_protocol(CAPABILITIES_ALPN)
             .build()
             .map_err(|err| anyhow::anyhow!("invalid federation config: {err}"))?;
         let (service, mut events) =
@@ -447,6 +450,10 @@ impl Federation {
             device_hub,
             Arc::clone(&self.transport_stats),
         ));
+        let capabilities_acceptor = service
+            .stream_acceptor(CAPABILITIES_ALPN)
+            .map_err(|err| anyhow::anyhow!("failed to take the capabilities acceptor: {err}"))?;
+        let capabilities_task = tokio::spawn(capabilities::serve(capabilities_acceptor));
 
         *guard = Some(Running {
             service,
@@ -458,6 +465,7 @@ impl Federation {
                 catalog_task,
                 device_task,
                 device_sync_task,
+                capabilities_task,
             ],
         });
         self.set_error(None);

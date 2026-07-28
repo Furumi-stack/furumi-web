@@ -1,6 +1,6 @@
 [package]
 name = "furumusic"
-version = "0.9.6"
+version = "0.9.7"
 edition = "2024"
 description = "Reusable web-app boilerplate: auth, OIDC/SSO, admin panel, user management, i18n, PostgreSQL"
 
@@ -39,4 +39,4 @@ uuid = "1"
 librqbit = { version = "8.1.1", features = ["disable-upload"] }
 # P2P federation: publishes the library into a shared DHT and serves audio /
 # catalogs to furumi peers (TUI clients) over the frid stack.
-music-dht = { git = "https://gt.hexor.cy/ab/frid.git" }
+music-dht = "0.3"

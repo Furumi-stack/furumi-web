@@ -1707,8 +1707,9 @@ dependencies = [
 
 [[package]]
 name = "federation-net"
-version = "0.1.0"
-source = "git+https://gt.hexor.cy/ab/frid.git#8de7d1292708fa0b225e5a4a9d5ab4f0676202d3"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15a8707baeccb46b5935138f9cb3df3c988c0730b807a2634d901f26b39250d6"
 dependencies = [
  "blake3",
  "data-encoding",
@@ -3613,8 +3614,9 @@ dependencies = [
 
 [[package]]
 name = "music-dht"
-version = "0.2.0"
-source = "git+https://gt.hexor.cy/ab/frid.git#8de7d1292708fa0b225e5a4a9d5ab4f0676202d3"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f32daa9edf769fb5686e92ae6884e9fda6ea082452e4208309fc14301e26aef"
 dependencies = [
  "async-trait",
  "blake3",
