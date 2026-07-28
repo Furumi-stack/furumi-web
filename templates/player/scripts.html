@@ -735,6 +735,7 @@ document.addEventListener('alpine:init', () => {
         _remoteStateReceivedAt: 0,
         _remoteStateTimer: null,
         _prefetchedQueueKey: null,
+        _baseDocumentTitle: '',
 
         _hasInitialShareLink() {
             const params = new URLSearchParams(window.location.search);
@@ -744,6 +745,10 @@ document.addEventListener('alpine:init', () => {
 
         init() {
             audio.volume = this.volume;
+            this._baseDocumentTitle = document.title.replace(/^▶\s*/, '');
+            Alpine.effect(() => {
+                document.title = `${this.isPlaying ? '▶ ' : ''}${this._baseDocumentTitle}`;
+            });
 
             audio.addEventListener('timeupdate', () => {
                 this.currentTime = audio.currentTime;
