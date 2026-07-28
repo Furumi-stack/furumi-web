@@ -3420,12 +3420,16 @@ async fn local_playback_snapshot(
     user_id: i64,
     identity: &Identity,
 ) -> Option<PlaybackSnapshot> {
-    let state = hub.current_playback_state_json(user_id)?;
+    // Keep publishing an inactive snapshot after a handoff. Omitting the
+    // snapshot left the last `active: true` value alive on trusted peers until
+    // its TTL elapsed, allowing the always-on web peer to reclaim playback.
+    let active = hub.federation_playback_is_local(user_id);
+    let state = hub.playback_state_json_for_commands(user_id)?;
     let wire = playback_state_from_browser_json(pool, state).await.ok()?;
     Some(PlaybackSnapshot {
         device_id: identity.device_id.clone(),
         device_name: identity.name.clone(),
-        active: true,
+        active,
         updated_at_ms: now_ms(),
         state: wire,
     })

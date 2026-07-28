@@ -54,6 +54,7 @@ struct LocalUploadResponse {
 }
 
 const PLAYER_DEVICE_TTL_MS: i64 = 30_000;
+const PLAYER_DEVICE_RETURN_TAKEOVER_MS: i64 = 30 * 60 * 1_000;
 const PLAYER_DEVICE_COMMAND_TTL_MS: i64 = 20_000;
 const PLAYER_DEVICE_MAX_COMMANDS: usize = 32;
 const PLAYER_JAM_IDLE_TTL_MS: i64 = 4 * 60 * 60 * 1000;
@@ -104,6 +105,7 @@ struct PlayerJamSession {
 #[derive(Debug, Default)]
 struct PlayerDeviceHubState {
     devices_by_user: HashMap<i64, HashMap<String, PlayerDevice>>,
+    device_last_seen_ms: HashMap<(i64, String), i64>,
     active_device_by_user: HashMap<i64, String>,
     commands_by_device: HashMap<(i64, String), VecDeque<PendingPlayerDeviceCommand>>,
     playback_state_by_user: HashMap<i64, PlayerDevicePlaybackStateDto>,
@@ -153,19 +155,12 @@ impl PlayerDeviceHub {
         Ok(())
     }
 
-    pub(crate) fn current_playback_state_json(&self, user_id: i64) -> Option<serde_json::Value> {
+    pub(crate) fn federation_playback_is_local(&self, user_id: i64) -> bool {
         let state = self.state.lock().expect("player device hub lock");
-        if state
+        !state
             .active_device_by_user
             .get(&user_id)
             .is_some_and(|id| is_fed_virtual_device_id(id))
-        {
-            return None;
-        }
-        state
-            .playback_state_by_user
-            .get(&user_id)
-            .and_then(|playback| serde_json::to_value(playback).ok())
     }
 
     pub(crate) fn playback_state_json_for_commands(
@@ -264,14 +259,58 @@ impl PlayerDeviceHub {
         user_agent: Option<&str>,
         current_jam_id: Option<&str>,
         playback_state: Option<PlayerDevicePlaybackStateDto>,
-    ) -> PlayerDevicesResponse {
+    ) -> (PlayerDevicesResponse, Option<String>) {
         let now = current_millis();
         let mut state = self.state.lock().expect("player device hub lock");
         self.prune_locked(&mut state, now);
+        let is_new_or_returning = state
+            .device_last_seen_ms
+            .get(&(user_id, device_id.to_string()))
+            .is_none_or(|last_seen| {
+                now.saturating_sub(*last_seen) >= PLAYER_DEVICE_RETURN_TAKEOVER_MS
+            });
+        let previous_active_id = state.active_device_by_user.get(&user_id).cloned();
         self.touch_locked(&mut state, user_id, device_id, user_agent, now);
+        let active_is_playing = state
+            .playback_state_by_user
+            .get(&user_id)
+            .is_some_and(|playback| playback.track.is_some() && !playback.paused);
+        let should_claim_idle_playback = is_new_or_returning
+            && previous_active_id.as_deref() != Some(device_id)
+            && !active_is_playing;
+        if should_claim_idle_playback {
+            let transfer_state = state
+                .playback_state_by_user
+                .get(&user_id)
+                .cloned()
+                .map(|playback| playback_state_at(playback, now));
+            state
+                .active_device_by_user
+                .insert(user_id, device_id.to_string());
+            if let Some(transfer_state) = transfer_state {
+                state
+                    .playback_state_by_user
+                    .insert(user_id, transfer_state.clone());
+                if let Ok(payload) = serde_json::to_value(transfer_state) {
+                    self.enqueue_command_locked(
+                        &mut state,
+                        user_id,
+                        device_id,
+                        "transfer_state",
+                        payload,
+                        now,
+                    );
+                }
+            }
+        }
         self.update_playback_state_locked(&mut state, user_id, device_id, playback_state, now);
         self.touch_jam_locked(&mut state, user_id, device_id, current_jam_id, now);
-        self.snapshot_locked(&state, user_id, device_id, current_jam_id, now)
+        (
+            self.snapshot_locked(&state, user_id, device_id, current_jam_id, now),
+            should_claim_idle_playback
+                .then_some(previous_active_id)
+                .flatten(),
+        )
     }
 
     fn poll(
@@ -448,6 +487,9 @@ impl PlayerDeviceHub {
             last_seen_ms: now,
         };
         devices.insert(device_id.to_string(), device);
+        state
+            .device_last_seen_ms
+            .insert((user_id, device_id.to_string()), now);
 
         let active_online = state
             .active_device_by_user
@@ -868,6 +910,9 @@ impl PlayerDeviceHub {
     }
 
     fn prune_locked(&self, state: &mut PlayerDeviceHubState, now: i64) {
+        state.device_last_seen_ms.retain(|_, last_seen| {
+            now.saturating_sub(*last_seen) <= PLAYER_DEVICE_RETURN_TAKEOVER_MS
+        });
         state
             .jams_by_id
             .retain(|_, jam| now.saturating_sub(jam.host_last_seen_ms) <= PLAYER_JAM_IDLE_TTL_MS);
@@ -1184,6 +1229,109 @@ mod device_tests {
                 .get(&user_id)
                 .is_some_and(|devices| devices.contains_key("fed:remote"))
         );
+    }
+
+    #[test]
+    fn new_browser_claims_an_idle_federated_player() {
+        let hub = PlayerDeviceHub::default();
+        let user_id = 8;
+        hub.apply_fed_playback_state_json(
+            user_id,
+            "remote",
+            "Remote",
+            true,
+            serde_json::json!({
+                "track": {"id": 2},
+                "tracks": [],
+                "index": 0,
+                "position_seconds": 12.0,
+                "duration_seconds": 100.0,
+                "paused": true,
+                "shuffle": false,
+                "repeat_mode": "off",
+                "volume": 0.7
+            }),
+        )
+        .expect("valid snapshot");
+
+        let (response, previous) = hub.heartbeat(user_id, "browser", None, None, None);
+
+        assert_eq!(response.active_device_id.as_deref(), Some("browser"));
+        assert_eq!(previous.as_deref(), Some("fed:remote"));
+    }
+
+    #[test]
+    fn new_browser_does_not_claim_a_playing_federated_player() {
+        let hub = PlayerDeviceHub::default();
+        let user_id = 9;
+        hub.apply_fed_playback_state_json(
+            user_id,
+            "remote",
+            "Remote",
+            true,
+            serde_json::json!({
+                "track": {"id": 2},
+                "tracks": [],
+                "index": 0,
+                "position_seconds": 12.0,
+                "duration_seconds": 100.0,
+                "paused": false,
+                "shuffle": false,
+                "repeat_mode": "off",
+                "volume": 0.7
+            }),
+        )
+        .expect("valid snapshot");
+
+        let (response, previous) = hub.heartbeat(user_id, "browser", None, None, None);
+
+        assert_eq!(response.active_device_id.as_deref(), Some("fed:remote"));
+        assert_eq!(previous, None);
+    }
+
+    #[test]
+    fn refreshed_control_browser_keeps_its_control_role() {
+        let hub = PlayerDeviceHub::default();
+        let user_id = 10;
+        hub.apply_fed_playback_state_json(
+            user_id,
+            "remote",
+            "Remote",
+            true,
+            serde_json::json!({
+                "track": {"id": 2},
+                "tracks": [],
+                "index": 0,
+                "position_seconds": 12.0,
+                "duration_seconds": 100.0,
+                "paused": true,
+                "shuffle": false,
+                "repeat_mode": "off",
+                "volume": 0.7
+            }),
+        )
+        .expect("valid snapshot");
+        {
+            let mut state = hub.state.lock().expect("device hub");
+            let now = current_millis();
+            state.devices_by_user.entry(user_id).or_default().insert(
+                "browser".to_string(),
+                PlayerDevice {
+                    id: "browser".to_string(),
+                    name: "Browser".to_string(),
+                    kind: "computer".to_string(),
+                    last_seen_ms: now,
+                },
+            );
+            state
+                .device_last_seen_ms
+                .insert((user_id, "browser".to_string()), now);
+        }
+
+        let (response, previous) = hub.heartbeat(user_id, "browser", None, None, None);
+
+        assert_eq!(response.active_device_id.as_deref(), Some("fed:remote"));
+        assert_eq!(previous, None);
     }
 }
 
@@ -4846,7 +4994,7 @@ async fn devices_heartbeat_handler(
         return Ok(json_error(StatusCode::BAD_REQUEST, "invalid device id"));
     };
 
-    let response = hub.heartbeat(
+    let (response, previous_active_id) = hub.heartbeat(
         user.id,
         &device_id,
         dto.user_agent.as_deref(),
@@ -4856,6 +5004,22 @@ async fn devices_heartbeat_handler(
             .as_deref(),
         dto.playback_state,
     );
+    if let Some(previous_fed_device_id) = previous_active_id
+        .as_deref()
+        .and_then(fed_device_id_from_virtual)
+        && let Some(playback_state) = response.playback_state.clone()
+    {
+        let state = match serde_json::to_value(playback_state) {
+            Ok(state) => state,
+            Err(err) => return Ok(json_error(StatusCode::BAD_REQUEST, &format!("{err}"))),
+        };
+        if let Err(err) = crate::federation::handle()
+            .fed_device_web_active_takeover(user.id, previous_fed_device_id, state)
+            .await
+        {
+            return Ok(json_error(StatusCode::BAD_REQUEST, &format!("{err}")));
+        }
+    }
     Json(response).into_response()
 }
 
