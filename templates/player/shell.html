@@ -757,8 +757,22 @@
                         </div>
                     </div>
                     <template x-if="$store.library.currentArtist.top_tracks && $store.library.currentArtist.top_tracks.length > 0">
-                        <section class="artist-release-group">
-                            <h2 class="artist-release-group-title">{{ t.player_top_tracks }}</h2>
+                        <section class="artist-release-group" x-data="{ expanded: false }">
+                            <div class="artist-release-group-heading">
+                                <h2 class="artist-release-group-title">{{ t.player_top_tracks }}</h2>
+                                <button class="artist-top-tracks-toggle"
+                                        type="button"
+                                        x-show="$store.library.currentArtist.top_tracks.length > 5"
+                                        @click="expanded = !expanded"
+                                        :aria-expanded="expanded"
+                                        x-cloak>
+                                    <span x-text="expanded ? '{{ t.player_collapse }}' : '{{ t.player_expand_all }}'"></span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                         :class="{ expanded: expanded }">
+                                        <polyline points="6 9 12 15 18 9"/>
+                                    </svg>
+                                </button>
+                            </div>
                             <div class="track-list-header">
                                 <span>#</span>
                                 <span>{{ t.player_title }}</span>
@@ -766,7 +780,9 @@
                                 <span></span>
                                 <span style="text-align:right">{{ t.player_duration }}</span>
                             </div>
-                            <template x-for="(track, idx) in $store.library.currentArtist.top_tracks" :key="track.id">
+                            <template x-for="(track, idx) in (expanded
+                                ? $store.library.currentArtist.top_tracks
+                                : $store.library.currentArtist.top_tracks.slice(0, 5))" :key="track.id">
                                 <div class="track-row artist-appearance-row"
                                      :class="{ playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id }"
                                      @dblclick="$store.queue.playRelease($store.library.currentArtist.top_tracks, idx)">

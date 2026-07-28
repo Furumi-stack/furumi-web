@@ -84,6 +84,7 @@ struct Identity {
 #[derive(Debug, Clone)]
 struct StoredDevice {
     device_id: String,
+    endpoint_id: String,
     endpoint_ticket: String,
 }
 
@@ -1573,8 +1574,7 @@ async fn sync_device(
     user_id: i64,
     device: &StoredDevice,
 ) -> Result<()> {
-    let ticket: PeerTicket = device.endpoint_ticket.parse()?;
-    let peer = service.connect(ticket).await?;
+    let peer = resolve_device_peer(&service, device).await?;
     let own_ticket = service.ticket().await?.to_string();
     let identity = ensure_identity(pool, user_id, "").await?;
     let profile = own_profile(pool, user_id, "", &own_ticket).await?;
@@ -4118,7 +4118,7 @@ pub async fn playlist_content_ids_for_removal(
 async fn active_remote_devices(pool: &sqlx::PgPool, user_id: i64) -> Result<Vec<StoredDevice>> {
     let identity = ensure_identity(pool, user_id, "").await?;
     let rows = sqlx::query(
-        "SELECT device_id, endpoint_ticket
+        "SELECT device_id, endpoint_id, endpoint_ticket
          FROM furumusic__fed_device
          WHERE user_id = $1
            AND trusted_at_ms IS NOT NULL
@@ -4134,9 +4134,29 @@ async fn active_remote_devices(pool: &sqlx::PgPool, user_id: i64) -> Result<Vec<
         .into_iter()
         .map(|row| StoredDevice {
             device_id: row.get("device_id"),
+            endpoint_id: row.get("endpoint_id"),
             endpoint_ticket: row.get("endpoint_ticket"),
         })
         .collect())
+}
+
+async fn resolve_device_peer(
+    service: &MusicDhtService,
+    device: &StoredDevice,
+) -> Result<music_dht::EndpointId> {
+    if let Ok(peer) = device.endpoint_id.parse::<music_dht::EndpointId>()
+        && (service.connected_peers().contains(&peer)
+            || service
+                .known_peers()
+                .iter()
+                .any(|contact| contact.peer_id == peer))
+    {
+        // Prefer the live/current-schema DHT contact over a persisted ticket
+        // that may have been issued before a schema upgrade.
+        return Ok(peer);
+    }
+    let ticket: PeerTicket = device.endpoint_ticket.parse()?;
+    service.connect(ticket).await.map_err(Into::into)
 }
 
 async fn active_device_count(pool: &sqlx::PgPool, user_id: i64) -> Result<i64> {
