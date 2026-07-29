@@ -32,6 +32,9 @@ const RESPONSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const DEVICE_SYNC_INTERVAL: Duration = Duration::from_secs(2);
 const LOCAL_SEED_RECHECK_MS: i64 = 60 * 1000;
 const MAX_LINE: usize = 8 * 1024 * 1024;
+/// Playback commands carry queue state but are useful only briefly and only
+/// to their addressed device. They must not inflate a new peer's catch-up.
+const PLAYBACK_COMMAND_TTL_MS: i64 = 5 * 60 * 1_000;
 const MAX_OPS_PER_BATCH: i64 = 1000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -4226,11 +4229,19 @@ async fn ops_for_peer(
           AND a.origin_device_id = o.origin_device_id
          WHERE o.user_id = $1
            AND o.seq > COALESCE(a.max_seq, 0)
+           AND (
+                o.kind != 'playback_command'
+                OR (
+                    o.hlc_ms >= $3
+                    AND o.payload_json->>'target_device_id' = $2
+                )
+           )
          ORDER BY o.hlc_ms, o.op_id
-         LIMIT $3",
+         LIMIT $4",
     )
     .bind(user_id)
     .bind(peer_device_id)
+    .bind(now_ms().saturating_sub(PLAYBACK_COMMAND_TTL_MS))
     .bind(MAX_OPS_PER_BATCH)
     .fetch_all(pool)
     .await?;
