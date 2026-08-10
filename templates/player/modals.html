@@ -656,6 +656,17 @@
                 <section class="user-settings-section">
                     <div class="user-settings-section-head">
                         <div>
+                            <h4>{{ t.player_interface_language }}</h4>
+                            <p>{{ t.player_language_description }}</p>
+                        </div>
+                        <button class="settings-secondary-btn"
+                                onclick="location.href='/set-lang?lang={% if t.lang.code() == "en" %}ru{% else %}en{% endif %}&next='+encodeURIComponent(location.pathname+location.search+location.hash)">{{ t.player_switch_language }}</button>
+                    </div>
+                </section>
+
+                <section class="user-settings-section">
+                    <div class="user-settings-section-head">
+                        <div>
                             <h4>Listening history</h4>
                             <p>Review plays recorded by this web player.</p>
                         </div>

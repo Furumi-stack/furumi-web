@@ -2192,6 +2192,63 @@ tbody tr:hover {
                                 </div>
                             </div>
                         </section>
+
+                        <section class="panel">
+                            <div class="panel-head">
+                                <div class="panel-title">
+                                    <strong>Similarity Search</strong>
+                                    <span>Local audio embeddings and federated nearest-track search</span>
+                                </div>
+                            </div>
+                            <div class="settings-grid">
+                                <div class="setting-toggle settings-wide">
+                                    <label>
+                                        <span>Similarity search enabled</span>
+                                        <span class="source-pill" :class="sourceClass('similarity_enabled')" x-text="settingSource('similarity_enabled')"></span>
+                                    </label>
+                                    <div class="setting-toggle-row">
+                                        <span x-text="settingsDraft.similarity_enabled ? 'Enabled for this instance' : 'Disabled'"></span>
+                                        <input type="checkbox" x-model="settingsDraft.similarity_enabled" />
+                                    </div>
+                                    <div class="setting-help">Downloads the selected model and processes every visible local track. When federation is also enabled, this instance sends anonymized query embeddings to peers and answers their searches.</div>
+                                </div>
+                                <div class="setting-field settings-wide">
+                                    <label>
+                                        <span>Embedding model</span>
+                                        <span class="source-pill" :class="sourceClass('similarity_model')" x-text="settingSource('similarity_model')"></span>
+                                    </label>
+                                    <select x-model="settingsDraft.similarity_model">
+                                        <template x-for="model in similarityStatus.models || []" :key="model.id">
+                                            <option :value="model.id" x-text="`${model.id} · ${model.dimensions}d`"></option>
+                                        </template>
+                                    </select>
+                                    <div class="setting-help" x-text="(similarityStatus.models || []).find(model => model.id === settingsDraft.similarity_model)?.license || ''"></div>
+                                </div>
+                                <div class="setting-field settings-wide">
+                                    <label>
+                                        <span>Preprocessing profile</span>
+                                        <span class="source-pill" :class="sourceClass('similarity_profile')" x-text="settingSource('similarity_profile')"></span>
+                                    </label>
+                                    <select x-model="settingsDraft.similarity_profile">
+                                        <template x-for="profile in similarityStatus.profiles || []" :key="profile.id">
+                                            <option :value="profile.id" x-text="profile.title"></option>
+                                        </template>
+                                    </select>
+                                    <details class="setting-help" style="margin-top:8px">
+                                        <summary style="cursor:pointer">Show profile details</summary>
+                                        <pre style="white-space:pre-wrap;font:inherit;margin:8px 0 0" x-text="selectedSimilarityProfile()?.details || 'Profile details are loading…'"></pre>
+                                    </details>
+                                </div>
+                                <div class="setting-field">
+                                    <label>
+                                        <span>Background workers</span>
+                                        <span class="source-pill" :class="sourceClass('similarity_workers')" x-text="settingSource('similarity_workers')"></span>
+                                    </label>
+                                    <input type="number" min="1" max="16" step="1" x-model="settingsDraft.similarity_workers" />
+                                    <div class="setting-help">Applied immediately after saving.</div>
+                                </div>
+                            </div>
+                        </section>
                     </div>
 
                     <div class="settings-column settings-side">
@@ -2323,7 +2380,7 @@ tbody tr:hover {
                                     </div>
                                     <div class="probe-row"><span>RTT</span><strong x-text="fedRtt(fedTransport().last_rtt_ms)"></strong></div>
                                     <div class="probe-row"><span>Path samples</span><strong x-text="`${fedTransport().direct_samples || 0} direct · ${fedTransport().relay_samples || 0} relay · ${fedTransport().custom_samples || 0} custom · ${fedTransport().unknown_samples || 0} unknown`"></strong></div>
-                                    <div class="probe-row"><span>Protocols</span><strong x-text="`${fedTransport().audio_samples || 0} audio · ${fedTransport().catalog_samples || 0} catalog · ${fedTransport().sync_samples || 0} sync`"></strong></div>
+                                    <div class="probe-row"><span>Protocols</span><strong x-text="`${fedTransport().audio_samples || 0} audio · ${fedTransport().catalog_samples || 0} catalog · ${fedTransport().similarity_samples || 0} similarity · ${fedTransport().sync_samples || 0} sync`"></strong></div>
                                     <div class="probe-row"><span>Last peer</span><strong x-text="fedShort(fedTransport().last_peer)"></strong></div>
                                 </div>
                                 <div class="probe-table" x-show="fedTransport().last && fedTransport().last.length" style="margin-top:10px">
@@ -2362,6 +2419,44 @@ tbody tr:hover {
                                         <input x-model="fedConnectTicket" placeholder="fnet..." style="flex:1" autocomplete="off" />
                                         <button class="btn" type="button" @click="fedConnect()" :disabled="federationLoading || !fedConnectTicket.trim()">Connect</button>
                                     </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-head">
+                                <div class="panel-title">
+                                    <strong>Similarity Status</strong>
+                                    <span>Model download, indexing, and active profile</span>
+                                </div>
+                                <span class="badge" :class="similarityBadge()" x-text="similarityStatus.status?.phase || 'disabled'"></span>
+                            </div>
+                            <div class="probe-body">
+                                <div class="probe-table">
+                                    <div class="probe-row"><span>Model</span><strong x-text="similarityStatus.status?.model || settingsDraft.similarity_model || '-' "></strong></div>
+                                    <div class="probe-row"><span>Active profile</span><strong :title="similarityStatus.status?.active_profile || ''" x-text="similarityStatus.status?.active_profile ? similarityStatus.status.active_profile.slice(0, 22) + '…' : 'not ready'"></strong></div>
+                                    <div class="probe-row" x-show="similarityStatus.status?.target_profile && similarityStatus.status?.target_profile !== similarityStatus.status?.active_profile">
+                                        <span>Processing profile</span><strong :title="similarityStatus.status?.target_profile || ''" x-text="similarityStatus.status?.target_profile?.slice(0, 22) + '…'"></strong>
+                                    </div>
+                                    <div class="probe-row"><span>Visible tracks</span><strong x-text="similarityStatus.status?.total_tracks ?? 0"></strong></div>
+                                    <div class="probe-row"><span>Processed</span><strong x-text="`${similarityStatus.status?.completed_tracks || 0} · ${similarityProgress()}%`"></strong></div>
+                                    <div class="probe-row"><span>Failed</span><strong x-text="similarityStatus.status?.failed_tracks || 0"></strong></div>
+                                    <div class="probe-row"><span>Stored</span><strong x-text="`${similarityStatus.status?.stored_vectors || 0} vectors · ${formatBytes(similarityStatus.status?.stored_bytes || 0)}`"></strong></div>
+                                    <div class="probe-row" x-show="similarityStatus.status?.current_track"><span>Current track</span><strong x-text="similarityStatus.status?.current_track"></strong></div>
+                                </div>
+                                <div style="height:6px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden;margin-top:12px" x-show="similarityStatus.status?.phase === 'processing'">
+                                    <div style="height:100%;background:var(--accent);transition:width .25s" :style="`width:${similarityProgress()}%`"></div>
+                                </div>
+                                <p class="probe-intro muted" x-show="similarityStatus.status?.last_error" x-text="similarityStatus.status?.last_error"></p>
+                                <div class="toolbar" style="margin-top:14px;flex-wrap:wrap;gap:8px">
+                                    <button class="btn" type="button" @click="loadSimilarity()" :disabled="similarityLoading">
+                                        <i data-lucide="refresh-cw"></i>
+                                        Refresh
+                                    </button>
+                                    <button class="btn danger" type="button" @click="clearSimilarityEmbeddings()" :disabled="similarityLoading || !(similarityStatus.status?.stored_vectors > 0)">
+                                        <i data-lucide="trash-2"></i>
+                                        Clear all embeddings
+                                    </button>
                                 </div>
                             </div>
                         </section>
@@ -2936,7 +3031,11 @@ function adminV2() {
             agent_concurrency: '',
             federation_enabled: false,
             federation_network_id: '',
-            federation_save_on_listen: false
+            federation_save_on_listen: false,
+            similarity_enabled: false,
+            similarity_model: 'discogs-effnet-bsdynamic-1',
+            similarity_profile: 'furumi-full-track-v1',
+            similarity_workers: '1'
         },
         settingsProbe: { status: 'idle', ok: false },
         settingsProbeLoading: false,
@@ -2944,6 +3043,8 @@ function adminV2() {
         federationLoading: false,
         federationTicket: '',
         fedConnectTicket: '',
+        similarityStatus: { status: { phase: 'disabled' }, models: [], profiles: [] },
+        similarityLoading: false,
         settingsSaving: false,
         routeReady: false,
         poller: null,
@@ -3007,6 +3108,11 @@ function adminV2() {
                 ]);
             } else if (this.activeView === 'users') {
                 await Promise.allSettled([this.loadUsers(false)]);
+            } else if (this.activeView === 'settings') {
+                await Promise.allSettled([
+                    this.loadFederation(false),
+                    this.loadSimilarity(false)
+                ]);
             } else {
                 await Promise.allSettled([this.loadJobs(false), this.loadReviews(false)]);
             }
@@ -3069,6 +3175,10 @@ function adminV2() {
             } else if (this.activeView === 'settings') {
                 if (updateRoute) this.setRoute('#settings');
                 await this.loadSettings();
+                await Promise.allSettled([
+                    this.loadFederation(false),
+                    this.loadSimilarity(false)
+                ]);
                 if (!this.settingsProbe.status || this.settingsProbe.status === 'idle') {
                     await this.loadSettingsProbe(false);
                 }
@@ -3216,6 +3326,21 @@ function adminV2() {
 
         async saveSettings() {
             if (this.settingsSaving) return;
+            const networkSimilarityWasEnabled = Boolean(
+                this.settings.values?.similarity_enabled
+                && this.settings.values?.federation_enabled
+            );
+            const networkSimilarityWillBeEnabled = Boolean(
+                this.settingsDraft.similarity_enabled
+                && this.settingsDraft.federation_enabled
+            );
+            if (!networkSimilarityWasEnabled && networkSimilarityWillBeEnabled) {
+                const accepted = window.confirm(
+                    'Similarity searches send an anonymized embedding of the selected track to federation peers. '
+                    + 'Peers do not receive a user identity, but the query can technically reveal what is being searched. Enable this for the instance?'
+                );
+                if (!accepted) return;
+            }
             this.settingsSaving = true;
             try {
                 await this.request(`${this.apiBase}/settings`, {
@@ -3224,6 +3349,7 @@ function adminV2() {
                 });
                 await this.loadSettings(false);
                 await this.loadFederation(false);
+                await this.loadSimilarity(false);
                 this.showToast('Settings saved');
             } catch (error) {
                 this.showToast(error.message);
@@ -3238,6 +3364,7 @@ function adminV2() {
             this.setRoute('#settings');
             await this.loadSettings();
             await this.loadFederation(false);
+            await this.loadSimilarity(false);
             if (!this.settingsProbe.status || this.settingsProbe.status === 'idle') {
                 await this.loadSettingsProbe(false);
             }
@@ -3253,6 +3380,57 @@ function adminV2() {
                 this.federationLoading = false;
                 this.icons();
             }
+        },
+
+        async loadSimilarity(showErrors = true) {
+            this.similarityLoading = true;
+            try {
+                this.similarityStatus = await this.request(`${this.apiBase}/similarity`);
+            } catch (error) {
+                if (showErrors) this.showToast(error.message);
+            } finally {
+                this.similarityLoading = false;
+                this.icons();
+            }
+        },
+
+        async clearSimilarityEmbeddings() {
+            if (!window.confirm('Delete embeddings for every model and preprocessing profile? Audio files are not affected.')) return;
+            this.similarityLoading = true;
+            try {
+                await this.request(`${this.apiBase}/similarity/clear`, {
+                    method: 'POST',
+                    body: '{}'
+                });
+                await this.loadSimilarity(false);
+                this.showToast('All embeddings cleared');
+            } catch (error) {
+                this.showToast(error.message);
+            } finally {
+                this.similarityLoading = false;
+                this.icons();
+            }
+        },
+
+        selectedSimilarityProfile() {
+            return (this.similarityStatus.profiles || []).find(
+                profile => profile.id === this.settingsDraft.similarity_profile
+            ) || null;
+        },
+
+        similarityBadge() {
+            const phase = this.similarityStatus.status?.phase || 'disabled';
+            if (phase === 'ready') return 'ok';
+            if (phase === 'error') return 'failed';
+            if (['downloading', 'loading', 'processing'].includes(phase)) return 'running';
+            return 'disabled';
+        },
+
+        similarityProgress() {
+            const status = this.similarityStatus.status || {};
+            const total = Number(status.total_tracks || 0);
+            const completed = Number(status.completed_tracks || 0);
+            return total > 0 ? Math.min(100, Math.round(completed * 100 / total)) : 0;
         },
 
         async fedSyncNow() {

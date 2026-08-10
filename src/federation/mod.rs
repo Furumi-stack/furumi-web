@@ -5,18 +5,21 @@
 //! releases, tracks — names and small metadata, never files) into the
 //! shared DHT and serves audio, track metadata, cover art and per-artist
 //! catalogs to other peers (TUI clients) over the same wire protocols the
-//! clients speak among themselves. Serve-only: the server does not search
-//! or download from other peers.
+//! clients speak among themselves. The web player also searches known peers
+//! for catalog metadata and, when enabled, compatible similarity embeddings;
+//! local playback and the local library remain independent of the network.
 //!
 //! Settings are the regular admin config entries (`federation_enabled`,
-//! `federation_network_id`, `federation_save_on_listen`) and apply on the fly — saving the settings
-//! starts, stops or re-joins the node without a server restart.
+//! `federation_network_id`, `federation_save_on_listen`) and apply on the fly —
+//! saving the settings starts, stops or re-joins the node without a server
+//! restart.
 
 mod capabilities;
 pub mod client;
 pub mod devices;
 mod receive;
 mod serve;
+mod similarity;
 mod storage;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -38,6 +41,7 @@ use crate::config::AppConfig;
 use storage::PostgresFederationStorage;
 
 pub use serve::{AUDIO_ALPN, CATALOG_ALPN};
+pub use similarity::SIMILARITY_ALPN;
 
 /// How often the published library is re-synchronized with the database.
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
@@ -124,6 +128,7 @@ struct TransportStatsState {
     audio_samples: u64,
     catalog_samples: u64,
     sync_samples: u64,
+    similarity_samples: u64,
     last: VecDeque<TransportSample>,
 }
 
@@ -157,6 +162,7 @@ impl TransportStats {
             "audio" => state.audio_samples += 1,
             "catalog" => state.catalog_samples += 1,
             "device-sync" => state.sync_samples += 1,
+            "similarity" => state.similarity_samples += 1,
             _ => {}
         }
         state.last.push_front(sample);
@@ -177,6 +183,7 @@ impl TransportStats {
             "audio_samples": state.audio_samples,
             "catalog_samples": state.catalog_samples,
             "sync_samples": state.sync_samples,
+            "similarity_samples": state.similarity_samples,
             "last_path": latest.map(|sample| sample.selected_path.clone()),
             "last_rtt_ms": latest.and_then(|sample| sample.selected_rtt_ms),
             "last_peer": latest.map(|sample| sample.peer_id.clone()),
@@ -382,6 +389,7 @@ impl Federation {
             .stream_protocol(AUDIO_ALPN)
             .stream_protocol(CATALOG_ALPN)
             .stream_protocol(devices::SYNC_ALPN)
+            .stream_protocol(SIMILARITY_ALPN)
             .schema_independent_stream_protocol(CAPABILITIES_ALPN)
             .build()
             .map_err(|err| anyhow::anyhow!("invalid federation config: {err}"))?;
@@ -454,6 +462,15 @@ impl Federation {
             .stream_acceptor(CAPABILITIES_ALPN)
             .map_err(|err| anyhow::anyhow!("failed to take the capabilities acceptor: {err}"))?;
         let capabilities_task = tokio::spawn(capabilities::serve(capabilities_acceptor));
+        let similarity_acceptor = service
+            .stream_acceptor(SIMILARITY_ALPN)
+            .map_err(|err| anyhow::anyhow!("failed to take the similarity acceptor: {err}"))?;
+        let similarity_task = tokio::spawn(similarity::serve_peers(
+            similarity_acceptor,
+            crate::similarity::handle(),
+            service.endpoint_id(),
+            Arc::clone(&self.transport_stats),
+        ));
 
         *guard = Some(Running {
             service,
@@ -466,6 +483,7 @@ impl Federation {
                 device_task,
                 device_sync_task,
                 capabilities_task,
+                similarity_task,
             ],
         });
         self.set_error(None);
@@ -825,6 +843,19 @@ impl Federation {
             .await
             .map_err(|err| anyhow::anyhow!("connect failed: {err}"))?;
         Ok(peer.to_string())
+    }
+
+    pub async fn search_similarity(
+        &self,
+        query: crate::similarity::QueryVector,
+        limit: usize,
+    ) -> Result<Vec<similarity::RemoteSimilarityTrack>> {
+        anyhow::ensure!(
+            crate::similarity::handle().enabled(),
+            "similarity search is disabled"
+        );
+        let service = self.service().await?;
+        similarity::search(service, query, limit, Arc::clone(&self.transport_stats)).await
     }
 
     pub async fn fed_device_status(

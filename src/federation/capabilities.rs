@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::Result;
 use music_dht::StreamAcceptor;
 use music_dht::capabilities::{
-    CAPABILITIES_PROTOCOL_VERSION, CapabilityManifest, CapabilityMessage, JAM_ID, read_message,
-    write_message,
+    CAPABILITIES_PROTOCOL_VERSION, CapabilityManifest, CapabilityMessage, JAM_ID, SIMILARITY_ID,
+    read_message, write_message,
 };
 
 use super::serve::AUDIO_PROTOCOL_VERSION;
@@ -16,6 +16,10 @@ fn local_manifest() -> CapabilityManifest {
         // The web server does not expose federation Jam yet.
         .without_protocol(JAM_ID)
         .with_protocol("audio", AUDIO_PROTOCOL_VERSION)
+        .with_protocol(
+            SIMILARITY_ID,
+            music_dht::similarity::SIMILARITY_PROTOCOL_VERSION,
+        )
 }
 
 pub async fn serve(mut acceptor: StreamAcceptor) {
@@ -61,6 +65,10 @@ mod tests {
             Some(&AUDIO_PROTOCOL_VERSION)
         );
         assert!(!manifest.protocols.contains_key(JAM_ID));
+        assert_eq!(
+            manifest.protocols.get(SIMILARITY_ID),
+            Some(&music_dht::similarity::SIMILARITY_PROTOCOL_VERSION)
+        );
         manifest.validate().unwrap();
     }
 }

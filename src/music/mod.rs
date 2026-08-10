@@ -2476,6 +2476,71 @@ pub mod db_migrations {
             &[Operation::custom(repair_legacy_listen_qualification).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_similarity_embeddings(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__similarity_profile (
+                    profile_id TEXT PRIMARY KEY,
+                    model_id TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    model_sha256 TEXT NOT NULL,
+                    preprocessing TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    active BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TEXT NOT NULL
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_similarity_profile_active
+                   ON furumusic__similarity_profile (active)
+                 WHERE active = TRUE",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__track_embedding (
+                    track_id BIGINT NOT NULL REFERENCES furumusic__track(id)
+                        ON DELETE CASCADE,
+                    profile_id TEXT NOT NULL REFERENCES furumusic__similarity_profile(profile_id)
+                        ON DELETE CASCADE,
+                    dimensions INTEGER NOT NULL,
+                    vector BYTEA NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    source_content_id TEXT,
+                    computed_at TEXT NOT NULL,
+                    PRIMARY KEY (track_id, profile_id)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_track_embedding_profile
+                   ON furumusic__track_embedding (profile_id, track_id)",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0043CreateSimilarityEmbeddings;
+
+    impl migrations::Migration for M0043CreateSimilarityEmbeddings {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0043_create_similarity_embeddings";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0042_repair_legacy_listen_qualification",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_similarity_embeddings).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2509,5 +2574,6 @@ pub mod db_migrations {
         &M0040CreateContentAddressedMusicRefs,
         &M0041CreateSyncedListenHistory,
         &M0042RepairLegacyListenQualification,
+        &M0043CreateSimilarityEmbeddings,
     ];
 }

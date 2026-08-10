@@ -138,6 +138,10 @@ pub struct ConfigSources {
     pub federation_enabled: ConfigSource,
     pub federation_network_id: ConfigSource,
     pub federation_save_on_listen: ConfigSource,
+    pub similarity_enabled: ConfigSource,
+    pub similarity_model: ConfigSource,
+    pub similarity_profile: ConfigSource,
+    pub similarity_workers: ConfigSource,
 }
 
 impl Default for ConfigSources {
@@ -168,6 +172,10 @@ impl Default for ConfigSources {
             federation_enabled: ConfigSource::Default,
             federation_network_id: ConfigSource::Default,
             federation_save_on_listen: ConfigSource::Default,
+            similarity_enabled: ConfigSource::Default,
+            similarity_model: ConfigSource::Default,
+            similarity_profile: ConfigSource::Default,
+            similarity_workers: ConfigSource::Default,
         }
     }
 }
@@ -285,6 +293,14 @@ pub struct AppConfig {
     /// Whether a federated track requested for playback is imported into the
     /// shared local library. This is a server-wide administrator policy.
     pub federation_save_on_listen: bool,
+    /// Whether local embedding calculation and similarity search are enabled.
+    pub similarity_enabled: bool,
+    /// Embedding model selected by the administrator.
+    pub similarity_model: String,
+    /// Audio preprocessing profile selected by the administrator.
+    pub similarity_profile: String,
+    /// Maximum number of concurrent CPU embedding workers.
+    pub similarity_workers: u64,
 }
 
 impl Default for AppConfig {
@@ -315,6 +331,12 @@ impl Default for AppConfig {
             federation_enabled: false,
             federation_network_id: String::new(),
             federation_save_on_listen: false,
+            similarity_enabled: false,
+            similarity_model: "discogs-effnet-bsdynamic-1".into(),
+            similarity_profile: "furumi-full-track-v1".into(),
+            similarity_workers: std::thread::available_parallelism()
+                .map(|count| (count.get() / 2).clamp(1, 4) as u64)
+                .unwrap_or(1),
         }
     }
 }
@@ -346,6 +368,10 @@ impl_env_overrides!(
     federation_enabled,
     federation_network_id,
     federation_save_on_listen,
+    similarity_enabled,
+    similarity_model,
+    similarity_profile,
+    similarity_workers,
 );
 
 impl AppConfig {
@@ -476,6 +502,10 @@ impl AppConfig {
         apply_db_field!(federation_enabled);
         apply_db_field!(federation_network_id);
         apply_db_field!(federation_save_on_listen);
+        apply_db_field!(similarity_enabled);
+        apply_db_field!(similarity_model);
+        apply_db_field!(similarity_profile);
+        apply_db_field!(similarity_workers);
     }
 }
 
@@ -495,6 +525,13 @@ mod tests {
         let cfg = AppConfig::default();
         assert!(cfg.database_url.is_empty());
         assert_eq!(cfg.log_level, "info");
+        assert!(!cfg.similarity_enabled);
+        assert_eq!(cfg.similarity_model, crate::similarity::DEFAULT_MODEL_ID);
+        assert_eq!(
+            cfg.similarity_profile,
+            crate::similarity::DEFAULT_PROFILE_ID
+        );
+        assert!((1..=4).contains(&cfg.similarity_workers));
     }
 
     #[test]

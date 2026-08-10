@@ -379,12 +379,23 @@
             <!-- Search Results -->
             <template x-if="$store.library.view === 'search'">
                 <div>
+                    <h2 class="search-similarity-title"
+                        x-show="$store.library.similaritySearchLabel"
+                        x-cloak>
+                        <span>{{ t.player_search_similar_to }}</span>
+                        <strong x-text="$store.library.similaritySearchLabel"></strong>
+                    </h2>
                     <template x-if="$store.library.searchLoading">
                         <div class="loading-spinner"><div class="spinner"></div></div>
                     </template>
+                    <template x-if="!$store.library.searchLoading && $store.library.similaritySearchError">
+                        <div class="empty-state">
+                            <p x-text="$store.library.similaritySearchError"></p>
+                        </div>
+                    </template>
                     <template x-if="!$store.library.searchLoading && $store.library.searchResults">
                         <div>
-                            <template x-if="$store.library.searchResults.artists.length === 0 && $store.library.searchResults.releases.length === 0 && $store.library.searchResults.tracks.length === 0">
+                            <template x-if="!$store.library.similaritySearchError && $store.library.searchResults.artists.length === 0 && $store.library.searchResults.releases.length === 0 && $store.library.searchResults.tracks.length === 0">
                                 <div class="empty-state">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                                     <p>{{ t.player_no_results }}</p>

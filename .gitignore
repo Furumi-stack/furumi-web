@@ -3,3 +3,5 @@
 /.claude
 /media
 /federation
+/similarity-models
+/federation-cache

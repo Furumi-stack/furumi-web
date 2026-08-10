@@ -98,6 +98,66 @@ pub struct SearchEvent {
 }
 
 impl Federation {
+    pub async fn prepare_similarity_tracks(
+        &self,
+        tracks: Vec<super::similarity::RemoteSimilarityTrack>,
+    ) -> Result<Vec<TrackDto>> {
+        let pool = self.pool().await?;
+        let mut prepared = Vec::new();
+        for track in tracks {
+            let Some(content_id) = track.content_id.as_deref().and_then(normalize_content_id)
+            else {
+                continue;
+            };
+            let local = local_availability(&pool, &content_id).await?;
+            // A local result is already present in the first result section.
+            if local.is_some() {
+                continue;
+            }
+            let owner = track.owner;
+            let item_id = track.item_id;
+            let dto = TrackDto {
+                key: TrackKeyDto {
+                    content_id: content_id.clone(),
+                },
+                metadata: TrackMetadataDto {
+                    title: track.title,
+                    artists: artist_refs(&track.artist_names),
+                    featured_artists: artist_refs(&track.featured_artist_names),
+                    release: track.release_title.map(|title| ReleaseRefDto {
+                        key: ReleaseKeyDto {
+                            normalized_title: music_dht::normalize_name(&title),
+                            primary_artists: track
+                                .artist_names
+                                .iter()
+                                .map(|artist| music_dht::normalize_name(artist))
+                                .collect(),
+                            release_type: None,
+                            year: track.year,
+                        },
+                        local_id: None,
+                        title,
+                    }),
+                    year: track.year,
+                    duration_seconds: track.duration_seconds.map(|value| value as f64),
+                    track_number: track.track_number,
+                    disc_number: track.disc_number,
+                    cover_url: Some(format!(
+                        "/api/player/federation/tracks/artwork?owner={owner}&item_id={item_id}"
+                    )),
+                },
+                availability: TrackAvailabilityDto {
+                    state: "federated",
+                    local: None,
+                    federation: vec![FederationSourceDto { owner, item_id }],
+                },
+            };
+            persist_track_ref(&pool, &dto).await?;
+            prepared.push(dto);
+        }
+        Ok(prepared)
+    }
+
     pub fn stream_artist_catalogs(
         self: &std::sync::Arc<Self>,
         name: String,

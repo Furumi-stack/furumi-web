@@ -1,6 +1,6 @@
 [package]
 name = "furumusic"
-version = "0.9.8"
+version = "0.10.0"
 edition = "2024"
 description = "Reusable web-app boilerplate: auth, OIDC/SSO, admin panel, user management, i18n, PostgreSQL"
 
@@ -12,7 +12,7 @@ cot = { version = "0.6.0", default-features = false, features = ["postgres", "js
 schemars = { version = "0.9", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 openidconnect = "4.0"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 tokio = { version = "1", features = ["sync", "fs", "io-util"] }
 async-stream = "0.3"
 bytes = "1"
@@ -31,6 +31,10 @@ md-5 = "0.10"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }
 anyhow = "1.0"
+futures-util = "0.3"
+rodio = { version = "0.22.2", default-features = false, features = ["mp3", "flac", "vorbis", "wav", "symphonia-aac", "symphonia-isomp4", "symphonia-alac", "symphonia-adpcm", "symphonia-aiff", "symphonia-mkv", "symphonia-pcm"] }
+rustfft = "6.4.1"
+tract-onnx = "0.23.4"
 tokio-cron-scheduler = "0.15"
 croner = "3"
 async-trait = "0.1"
@@ -39,4 +43,4 @@ uuid = "1"
 librqbit = { version = "8.1.1", features = ["disable-upload"] }
 # P2P federation: publishes the library into a shared DHT and serves audio /
 # catalogs to furumi peers (TUI clients) over the frid stack.
-music-dht = "0.3"
+music-dht = "0.3.1"

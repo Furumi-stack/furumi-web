@@ -44,6 +44,9 @@ const T = {
     lastfmDisconnectFailed: "{{ t.player_lastfm_disconnect_failed }}",
     startRadio: "{{ t.player_start_radio }}",
     radioFailed: "{{ t.player_radio_failed }}",
+    searchSimilarTo: "{{ t.player_search_similar_to }}",
+    findSimilar: "{{ t.player_find_similar }}",
+    similarityFailed: "{{ t.player_similarity_failed }}",
     share: "{{ t.player_share }}",
     shareTrack: "{{ t.player_share_track }}",
     shareQueue: "{{ t.player_share_queue }}",
@@ -2503,6 +2506,8 @@ document.addEventListener('alpine:init', () => {
         searchQuery: '',
         searchResults: null,
         searchLoading: false,
+        similaritySearchLabel: '',
+        similaritySearchError: '',
         federationSearch: { loading: false, error: '', artists: [], releases: [], tracks: [] },
         artistFederation: { loading: false, error: '', releases: [], tracks: [] },
         federationPreparing: {},
@@ -2594,6 +2599,8 @@ document.addEventListener('alpine:init', () => {
                     this.searchQuery = q;
                     this.search(q, options);
                 }
+            } else if (view === 'similar' && id) {
+                this.searchSimilar(id, options);
             } else {
                 this.goArtists(options);
             }
@@ -3047,6 +3054,7 @@ document.addEventListener('alpine:init', () => {
         openTrackInfo(track) {
             Alpine.store('info').openRows(T.trackInfoTitle, this.trackInfoRows(track), [
                 { label: T.startRadio, run: () => this.startRadio('track', track?.id) },
+                { label: T.findSimilar, run: () => this.searchSimilar(track) },
             ]);
         },
 
@@ -3385,6 +3393,8 @@ document.addEventListener('alpine:init', () => {
             }
             this.view = 'search';
             this.searchLoading = true;
+            this.similaritySearchLabel = '';
+            this.similaritySearchError = '';
             this.startFederationSearch(q);
             try {
                 const res = await fetch(`/api/player/search?q=${encodeURIComponent(q)}&limit=10`);
@@ -3397,11 +3407,59 @@ document.addEventListener('alpine:init', () => {
             this._afterNavigation(options);
         },
 
+        async searchSimilar(trackOrId, options = {}) {
+            const id = Number(typeof trackOrId === 'object' ? trackOrId?.id : trackOrId);
+            if (!Number.isInteger(id) || id <= 0) return;
+            const track = typeof trackOrId === 'object' ? trackOrId : null;
+            const artist = (track?.artists || []).map(item => item.name).filter(Boolean).join(', ');
+            const initialLabel = track
+                ? [track.title, artist].filter(Boolean).join(' — ')
+                : '';
+            this._beginNavigation(`#similar/${id}`, options);
+            if (this.view !== 'search') this._previousView = this.view;
+            this.stopFederationSearch();
+            this.view = 'search';
+            this.searchQuery = initialLabel;
+            this.similaritySearchLabel = initialLabel;
+            this.similaritySearchError = '';
+            this.searchLoading = true;
+            this.searchResults = null;
+            this.federationSearch = { loading: true, error: '', artists: [], releases: [], tracks: [] };
+            Alpine.store('info').close();
+            try {
+                const response = await fetch(`/api/player/similarity/${id}`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || T.similarityFailed);
+                this.similaritySearchLabel = data.label || initialLabel;
+                this.searchQuery = this.similaritySearchLabel;
+                this.searchResults = {
+                    artists: [],
+                    releases: [],
+                    tracks: Array.isArray(data.tracks) ? data.tracks : [],
+                };
+                this.federationSearch = {
+                    loading: false,
+                    error: data.federation_error || '',
+                    artists: [],
+                    releases: [],
+                    tracks: Array.isArray(data.federation_tracks) ? data.federation_tracks : [],
+                };
+            } catch (error) {
+                this.searchResults = { artists: [], releases: [], tracks: [] };
+                this.federationSearch = { loading: false, error: '', artists: [], releases: [], tracks: [] };
+                this.similaritySearchError = error?.message || T.similarityFailed;
+            }
+            this.searchLoading = false;
+            this._afterNavigation(options);
+        },
+
         clearSearch() {
             this.stopFederationSearch();
             this.searchQuery = '';
             this.searchResults = null;
             this.searchLoading = false;
+            this.similaritySearchLabel = '';
+            this.similaritySearchError = '';
             if (this.view === 'search') {
                 this.view = this._previousView || 'artists';
                 this._setHash(this.view === 'my_uploads' ? '#uploads' : '#artists');

@@ -454,6 +454,14 @@ struct AdminSettingsValues {
     federation_network_id: String,
     #[serde(default)]
     federation_save_on_listen: bool,
+    #[serde(default)]
+    similarity_enabled: bool,
+    #[serde(default = "default_similarity_model")]
+    similarity_model: String,
+    #[serde(default = "default_similarity_profile")]
+    similarity_profile: String,
+    #[serde(default = "default_similarity_workers")]
+    similarity_workers: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -481,6 +489,10 @@ struct AdminSettingsSources {
     federation_enabled: &'static str,
     federation_network_id: &'static str,
     federation_save_on_listen: &'static str,
+    similarity_enabled: &'static str,
+    similarity_model: &'static str,
+    similarity_profile: &'static str,
+    similarity_workers: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -511,6 +523,26 @@ pub(super) struct UpdateSettingsRequest {
     federation_network_id: String,
     #[serde(default)]
     federation_save_on_listen: bool,
+    #[serde(default)]
+    similarity_enabled: bool,
+    #[serde(default = "default_similarity_model")]
+    similarity_model: String,
+    #[serde(default = "default_similarity_profile")]
+    similarity_profile: String,
+    #[serde(default = "default_similarity_workers")]
+    similarity_workers: String,
+}
+
+fn default_similarity_model() -> String {
+    crate::similarity::DEFAULT_MODEL_ID.to_owned()
+}
+
+fn default_similarity_profile() -> String {
+    crate::similarity::DEFAULT_PROFILE_ID.to_owned()
+}
+
+fn default_similarity_workers() -> String {
+    "1".to_owned()
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -948,6 +980,29 @@ pub async fn update_settings(
     if let Err(response) = require_admin_json(&session, &db).await {
         return Ok(response);
     }
+    let similarity_model = body.similarity_model.trim();
+    if crate::similarity::model_by_id(similarity_model).is_none() {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "unknown similarity model",
+        ));
+    }
+    let similarity_profile = body.similarity_profile.trim();
+    if crate::similarity::profile_by_id(similarity_profile).is_none() {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "unknown similarity preprocessing profile",
+        ));
+    }
+    let similarity_workers = match body.similarity_workers.trim().parse::<u64>() {
+        Ok(workers @ 1..=16) => workers,
+        _ => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "similarity workers must be an integer from 1 to 16",
+            ));
+        }
+    };
     let fields = [
         (
             "auth_password_enabled",
@@ -1002,6 +1057,10 @@ pub async fn update_settings(
             "federation_save_on_listen",
             body.federation_save_on_listen.to_string(),
         ),
+        ("similarity_enabled", body.similarity_enabled.to_string()),
+        ("similarity_model", similarity_model.to_string()),
+        ("similarity_profile", similarity_profile.to_string()),
+        ("similarity_workers", similarity_workers.to_string()),
     ];
     for (key, value) in fields {
         let mut entry = ConfigEntry::new(key.to_string(), value);
@@ -1014,6 +1073,7 @@ pub async fn update_settings(
     // the freshly saved settings — no server restart involved.
     let (fresh, _) = AppConfig::load_with_db(&db).await;
     tokio::spawn(async move {
+        crate::similarity::handle().apply(&fresh);
         crate::federation::handle().apply(&fresh).await;
     });
     Json(serde_json::json!({ "ok": true })).into_response()
@@ -1031,6 +1091,57 @@ pub async fn federation_status(
         return Ok(response);
     }
     Json(crate::federation::handle().status().await).into_response()
+}
+
+pub async fn similarity_status(
+    session: Session,
+    db: Database,
+) -> cot::Result<cot::response::Response> {
+    if let Err(response) = require_admin_json(&session, &db).await {
+        return Ok(response);
+    }
+    let manager = crate::similarity::handle();
+    let status = manager.status();
+    let model_id = if status.model.is_empty() {
+        crate::similarity::DEFAULT_MODEL_ID
+    } else {
+        &status.model
+    };
+    let profiles = crate::similarity::PROFILES
+        .iter()
+        .map(|profile| {
+            serde_json::json!({
+                "id": profile.id,
+                "title": profile.title,
+                "details": crate::similarity::profile_details(
+                    profile.id,
+                    model_id,
+                ).unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({
+        "status": status,
+        "models": crate::similarity::MODELS,
+        "profiles": profiles,
+    }))
+    .into_response()
+}
+
+pub async fn similarity_clear(
+    session: Session,
+    db: Database,
+) -> cot::Result<cot::response::Response> {
+    if let Err(response) = require_admin_json(&session, &db).await {
+        return Ok(response);
+    }
+    match crate::similarity::handle().clear().await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(error) => Ok(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("embedding cleanup failed: {error:#}"),
+        )),
+    }
 }
 
 pub async fn federation_sync(
@@ -1153,6 +1264,10 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             federation_enabled: config.federation_enabled,
             federation_network_id: config.federation_network_id,
             federation_save_on_listen: config.federation_save_on_listen,
+            similarity_enabled: config.similarity_enabled,
+            similarity_model: config.similarity_model,
+            similarity_profile: config.similarity_profile,
+            similarity_workers: config.similarity_workers.to_string(),
         },
         sources: AdminSettingsSources {
             auth_password_enabled: sources.auth_password_enabled.code(),
@@ -1178,6 +1293,10 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             federation_enabled: sources.federation_enabled.code(),
             federation_network_id: sources.federation_network_id.code(),
             federation_save_on_listen: sources.federation_save_on_listen.code(),
+            similarity_enabled: sources.similarity_enabled.code(),
+            similarity_model: sources.similarity_model.code(),
+            similarity_profile: sources.similarity_profile.code(),
+            similarity_workers: sources.similarity_workers.code(),
         },
     }
 }

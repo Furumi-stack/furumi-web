@@ -298,6 +298,9 @@ translations! {
     player_likes_playlist:   "Likes"                           , "Лайки";
     player_listened:         "listened"                        , "прослушано";
     player_search_placeholder: "Search artists, releases, tracks..." , "Поиск артистов, релизов, треков...";
+    player_search_similar_to: "Search similar to:"                , "Поиск похожих на:";
+    player_find_similar:      "Find similar tracks"                , "Найти похожие треки";
+    player_similarity_failed: "Similarity search failed"           , "Не удалось найти похожие треки";
     player_connection_lost: "Server connection lost"             , "Нет соединения с сервером";
     player_connection_lost_detail: "Player cannot reach the server. Retrying..." , "Плеер не может связаться с сервером. Повторяю...";
     player_active_device:   "Active device"                   , "Активный девайс";
@@ -314,6 +317,9 @@ translations! {
     player_delete_playlist_confirm: "Delete this playlist?"     , "Удалить этот плейлист?";
     player_rename:           "Rename"                          , "Переименовать";
     player_close:            "Close"                           , "Закрыть";
+    player_interface_language: "Interface language"             , "Язык интерфейса";
+    player_language_description: "Choose the language used by the web player." , "Выберите язык интерфейса веб-плеера.";
+    player_switch_language:  "Русский"                         , "English";
     player_log_out:          "Log out"                         , "Выйти";
     player_admin_panel:      "Admin Panel"                     , "Админка";
     player_info:             "Info"                            , "Информация";

@@ -13,6 +13,7 @@ mod music;
 mod oidc;
 mod player;
 mod scheduler;
+mod similarity;
 mod torrents;
 mod user;
 
@@ -565,6 +566,13 @@ impl Project for FuruProject {
         let fed_config = Arc::clone(&self.app_config);
         tokio::spawn(async move {
             federation::handle().boot(&fed_config).await;
+        });
+
+        // Embedding calculation is an independent, server-wide background
+        // service. It remains useful locally when federation is disabled.
+        let similarity_config = Arc::clone(&self.app_config);
+        tokio::spawn(async move {
+            similarity::handle().boot(&similarity_config).await;
         });
 
         apps.register(cot::session::db::SessionApp::new());

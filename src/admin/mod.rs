@@ -423,6 +423,20 @@ impl App for AdminApp {
                 "admin_v2_federation_status",
             ),
             Route::with_handler_and_name(
+                "/v2/api/similarity",
+                get(move |session: Session, db: Database| async move {
+                    v2::similarity_status(session, db).await
+                }),
+                "admin_v2_similarity_status",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/similarity/clear",
+                cot::router::method::post(move |session: Session, db: Database| async move {
+                    v2::similarity_clear(session, db).await
+                }),
+                "admin_v2_similarity_clear",
+            ),
+            Route::with_handler_and_name(
                 "/v2/api/federation/sync",
                 cot::router::method::post(move |session: Session, db: Database| async move {
                     v2::federation_sync(session, db).await
