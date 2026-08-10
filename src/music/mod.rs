@@ -2541,6 +2541,34 @@ pub mod db_migrations {
             &[Operation::custom(create_similarity_embeddings).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn add_similarity_routing_signature(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__track_embedding
+                 ADD COLUMN IF NOT EXISTS routing_signature BYTEA",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0044AddSimilarityRoutingSignature;
+
+    impl migrations::Migration for M0044AddSimilarityRoutingSignature {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0044_add_similarity_routing_signature";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0043_create_similarity_embeddings",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(add_similarity_routing_signature).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2575,5 +2603,6 @@ pub mod db_migrations {
         &M0041CreateSyncedListenHistory,
         &M0042RepairLegacyListenQualification,
         &M0043CreateSimilarityEmbeddings,
+        &M0044AddSimilarityRoutingSignature,
     ];
 }

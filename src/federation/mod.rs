@@ -29,6 +29,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use music_dht::capabilities::CAPABILITIES_ALPN;
+use music_dht::similarity_dht::SimilarityDht;
+use music_dht::similarity_lsh::SIMILARITY_DHT_ALPN;
 use music_dht::{
     ByteStream, ByteStreamConnectionStats, ItemKind, ItemSpec, MusicDhtConfig, MusicDhtService,
     NetworkId, PeerTicket, PublishStats, RendezvousConfig, SyncStats,
@@ -49,6 +51,7 @@ const TRANSPORT_SAMPLE_LIMIT: usize = 16;
 
 struct Running {
     service: Arc<MusicDhtService>,
+    similarity_dht: Arc<SimilarityDht>,
     network_name: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -221,7 +224,8 @@ pub fn record_stream_transport(
 }
 
 pub struct Federation {
-    /// Transport data directory; server-side DHT state and identity live in PostgreSQL.
+    /// Transport files and replaceable similarity-routing cache. Durable
+    /// catalog DHT state and identity live in PostgreSQL.
     data_dir: PathBuf,
     database_url: std::sync::Mutex<String>,
     storage_dir: std::sync::Mutex<String>,
@@ -380,6 +384,9 @@ impl Federation {
         let dht_storage = Arc::new(PostgresFederationStorage::new(pool.clone()).await?);
         let secret_key = dht_storage.load_or_create_secret_key().await?;
         self.transport_stats.reset();
+        tokio::fs::create_dir_all(&self.data_dir)
+            .await
+            .with_context(|| format!("creating {}", self.data_dir.display()))?;
 
         let config = MusicDhtConfig::builder()
             .data_dir(&self.data_dir)
@@ -389,7 +396,8 @@ impl Federation {
             .stream_protocol(AUDIO_ALPN)
             .stream_protocol(CATALOG_ALPN)
             .stream_protocol(devices::SYNC_ALPN)
-            .stream_protocol(SIMILARITY_ALPN)
+            .schema_independent_stream_protocol(SIMILARITY_ALPN)
+            .schema_independent_stream_protocol(SIMILARITY_DHT_ALPN)
             .schema_independent_stream_protocol(CAPABILITIES_ALPN)
             .build()
             .map_err(|err| anyhow::anyhow!("invalid federation config: {err}"))?;
@@ -403,6 +411,25 @@ impl Federation {
             network = %network_name,
             "federation started"
         );
+
+        let similarity_dht = SimilarityDht::open(
+            Arc::clone(&service),
+            self.data_dir.join("similarity-routing.sqlite3"),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to start the similarity DHT: {error}"))?;
+        let similarity_dht_acceptor = service
+            .stream_acceptor(SIMILARITY_DHT_ALPN)
+            .map_err(|error| anyhow::anyhow!("failed to take similarity DHT acceptor: {error}"))?;
+        let similarity_dht_serve_task =
+            tokio::spawn(Arc::clone(&similarity_dht).serve(similarity_dht_acceptor));
+        let similarity_dht_maintenance_task =
+            tokio::spawn(Arc::clone(&similarity_dht).maintenance());
+        let similarity_manager = crate::similarity::handle();
+        let similarity_dht_sync_task = tokio::spawn(similarity_route_sync_loop(
+            Arc::clone(&similarity_dht),
+            Arc::clone(&similarity_manager),
+        ));
 
         // Drain DHT events into the log; the channel is bounded.
         let event_task = tokio::spawn(async move {
@@ -467,13 +494,14 @@ impl Federation {
             .map_err(|err| anyhow::anyhow!("failed to take the similarity acceptor: {err}"))?;
         let similarity_task = tokio::spawn(similarity::serve_peers(
             similarity_acceptor,
-            crate::similarity::handle(),
+            similarity_manager,
             service.endpoint_id(),
             Arc::clone(&self.transport_stats),
         ));
 
         *guard = Some(Running {
             service,
+            similarity_dht,
             network_name,
             tasks: vec![
                 event_task,
@@ -484,6 +512,9 @@ impl Federation {
                 device_sync_task,
                 capabilities_task,
                 similarity_task,
+                similarity_dht_serve_task,
+                similarity_dht_maintenance_task,
+                similarity_dht_sync_task,
             ],
         });
         self.set_error(None);
@@ -504,6 +535,20 @@ impl Federation {
             .await
             .as_ref()
             .map(|running| Arc::clone(&running.service))
+            .context("federation is not running")
+    }
+
+    async fn similarity_services(&self) -> Result<(Arc<MusicDhtService>, Arc<SimilarityDht>)> {
+        self.running
+            .lock()
+            .await
+            .as_ref()
+            .map(|running| {
+                (
+                    Arc::clone(&running.service),
+                    Arc::clone(&running.similarity_dht),
+                )
+            })
             .context("federation is not running")
     }
 
@@ -810,6 +855,7 @@ impl Federation {
                     "endpoint_id": service.endpoint_id().to_string(),
                     "connected_peers": peers,
                     "known_contacts": service.known_peers().len(),
+                    "similarity_routing_peers": running.similarity_dht.known_peers(),
                     "published_items": published,
                     "transport": self.transport_stats.snapshot(),
                 })
@@ -854,8 +900,15 @@ impl Federation {
             crate::similarity::handle().enabled(),
             "similarity search is disabled"
         );
-        let service = self.service().await?;
-        similarity::search(service, query, limit, Arc::clone(&self.transport_stats)).await
+        let (service, similarity_dht) = self.similarity_services().await?;
+        similarity::search(
+            service,
+            similarity_dht,
+            query,
+            limit,
+            Arc::clone(&self.transport_stats),
+        )
+        .await
     }
 
     pub async fn fed_device_status(
@@ -980,6 +1033,65 @@ impl Federation {
     ) -> Result<()> {
         let pool = self.pool().await?;
         devices::record_web_active_takeover(&pool, user_id, previous_device_id, state).await
+    }
+}
+
+async fn similarity_route_sync_loop(
+    routing: Arc<SimilarityDht>,
+    manager: Arc<crate::similarity::Manager>,
+) {
+    let mut interval = tokio::time::interval(SYNC_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut published_marker: Option<(String, blake3::Hash)> = None;
+    loop {
+        interval.tick().await;
+        if !manager.enabled() {
+            if published_marker.take().is_some() {
+                routing.clear_local_signatures();
+                tracing::info!("local similarity DHT publication disabled");
+            }
+            continue;
+        }
+        let status = manager.status();
+        let Some(profile_id) = status.active_profile else {
+            continue;
+        };
+        if status.phase != crate::similarity::Phase::Ready {
+            continue;
+        }
+        let signatures = match manager.routing_signatures(&profile_id).await {
+            Ok(signatures) => signatures,
+            Err(error) => {
+                tracing::warn!(%error, %profile_id, "similarity routing signatures unavailable");
+                continue;
+            }
+        };
+        let mut hasher = blake3::Hasher::new();
+        for signature in &signatures {
+            hasher.update(signature);
+        }
+        let marker = (profile_id.clone(), hasher.finalize());
+        if published_marker.as_ref() == Some(&marker) {
+            continue;
+        }
+        match routing
+            .sync_local_signatures(profile_id.clone(), signatures)
+            .await
+        {
+            Ok(stats) => {
+                tracing::info!(
+                    profile = %profile_id,
+                    records = stats.records,
+                    keys = stats.keys,
+                    remote_nodes = stats.remote_nodes,
+                    "local similarity DHT index synchronized"
+                );
+                published_marker = Some(marker);
+            }
+            Err(error) => {
+                tracing::warn!(%error, %profile_id, "similarity DHT synchronization failed");
+            }
+        }
     }
 }
 

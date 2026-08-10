@@ -1,5 +1,12 @@
 # furumusic
 
+Furumusic can join the decentralized Furumi federation while remaining a
+complete local web player. Optional similarity search stores versioned audio
+embeddings in PostgreSQL and uses signed two-level LSH summaries in a separate
+DHT to discover compatible peers without a central recommendation index. The
+shared `music-dht` layer owns routing and wire compatibility; model inference
+and exact cosine ranking stay local to each instance.
+
 Reusable web-app boilerplate: auth, OIDC/SSO, admin panel, user management, i18n, PostgreSQL.
 
 Built with Rust ([cot](https://cot.rs) framework).

@@ -69,6 +69,12 @@ mod tests {
             manifest.protocols.get(SIMILARITY_ID),
             Some(&music_dht::similarity::SIMILARITY_PROTOCOL_VERSION)
         );
+        assert_eq!(
+            manifest
+                .protocols
+                .get(music_dht::capabilities::SIMILARITY_DHT_ID),
+            Some(&music_dht::similarity_lsh::SIMILARITY_DHT_PROTOCOL_VERSION)
+        );
         manifest.validate().unwrap();
     }
 }

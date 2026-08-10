@@ -7,7 +7,10 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use futures_util::stream::{self, StreamExt as _};
 use music_dht::similarity::{self as wire, SimilarityHit, SimilarityRequest, SimilarityResponse};
-use music_dht::{ByteStream, EndpointId, ItemId, ItemKind, MusicDhtService, StreamAcceptor};
+use music_dht::similarity_dht::SimilarityDht;
+use music_dht::{
+    ByteStream, EndpointId, ItemId, ItemKind, MusicDhtService, PeerTicket, StreamAcceptor,
+};
 
 use crate::similarity::{Manager, QueryVector};
 
@@ -15,9 +18,11 @@ use super::TransportStats;
 
 pub use music_dht::similarity::SIMILARITY_ALPN;
 
-const MAX_QUERY_PEERS: usize = 16;
-const QUERY_CONCURRENCY: usize = 6;
+const INITIAL_QUERY_PEERS: usize = 16;
+const MAX_QUERY_PEERS: usize = 48;
+const QUERY_CONCURRENCY: usize = 8;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const ROUTING_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PER_ARTIST: usize = 3;
 const MAX_NEAR_DUPLICATE_SIGNATURE_DISTANCE: u32 = 8;
 
@@ -142,20 +147,49 @@ async fn serve_one(
 
 pub async fn search(
     service: Arc<MusicDhtService>,
+    routing: Arc<SimilarityDht>,
     query: QueryVector,
     limit: usize,
     transport: Arc<TransportStats>,
 ) -> Result<Vec<RemoteSimilarityTrack>> {
     let own = service.endpoint_id();
-    let mut peers = Vec::new();
+    let routed = match tokio::time::timeout(
+        ROUTING_TIMEOUT,
+        routing.find_peers(&query.profile_id, &query.vector, MAX_QUERY_PEERS),
+    )
+    .await
+    {
+        Ok(Ok(peers)) => peers,
+        Err(_) => {
+            tracing::debug!("similarity DHT lookup timed out; using known peers");
+            Vec::new()
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "similarity DHT lookup unavailable; using known peers");
+            Vec::new()
+        }
+    };
     let mut seen = HashSet::new();
+    let mut peers: Vec<QueryPeer> = routed
+        .into_iter()
+        .filter_map(|ticket| {
+            let owner = ticket.endpoint_id();
+            (owner != own && seen.insert(owner)).then_some(QueryPeer {
+                owner,
+                ticket: Some(ticket),
+            })
+        })
+        .collect();
     for peer in service
         .connected_peers()
         .into_iter()
         .chain(service.known_peers().into_iter().map(|peer| peer.peer_id))
     {
         if peer != own && seen.insert(peer) {
-            peers.push(peer);
+            peers.push(QueryPeer {
+                owner: peer,
+                ticket: None,
+            });
         }
         if peers.len() >= MAX_QUERY_PEERS {
             break;
@@ -168,28 +202,38 @@ pub async fn search(
         limit.clamp(1, wire::MAX_SIMILARITY_RESULTS),
     )?);
 
-    let responses = stream::iter(peers.into_iter().map(|peer| {
-        let service = Arc::clone(&service);
-        let request = Arc::clone(&request);
-        let transport = Arc::clone(&transport);
-        async move {
-            tokio::time::timeout(
-                QUERY_TIMEOUT,
-                query_peer(service, peer, &request, transport),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("similarity peer timed out"))?
-        }
-    }))
-    .buffer_unordered(QUERY_CONCURRENCY)
-    .collect::<Vec<_>>()
-    .await;
-
     let mut hits = Vec::new();
+    let initial = peers.len().min(INITIAL_QUERY_PEERS);
+    let responses = query_peers(
+        Arc::clone(&service),
+        &peers[..initial],
+        Arc::clone(&request),
+        Arc::clone(&transport),
+    )
+    .await;
+    let mut successful = 0usize;
     for response in responses {
         match response {
-            Ok(peer_hits) => hits.extend(peer_hits),
+            Ok(peer_hits) => {
+                successful += 1;
+                hits.extend(peer_hits);
+            }
             Err(error) => tracing::debug!(%error, "similarity peer query skipped"),
+        }
+    }
+    if initial < peers.len() && (hits.len() < limit || successful < initial.min(4)) {
+        for response in query_peers(
+            Arc::clone(&service),
+            &peers[initial..],
+            Arc::clone(&request),
+            Arc::clone(&transport),
+        )
+        .await
+        {
+            match response {
+                Ok(peer_hits) => hits.extend(peer_hits),
+                Err(error) => tracing::debug!(%error, "fallback similarity peer query skipped"),
+            }
         }
     }
     hits.sort_by(|left, right| right.1.total_cmp(&left.1));
@@ -241,22 +285,54 @@ pub async fn search(
     Ok(tracks)
 }
 
+type PeerHits = Vec<(
+    RemoteSimilarityTrack,
+    f32,
+    Option<[u8; wire::SIMILARITY_SIGNATURE_BYTES]>,
+)>;
+
+#[derive(Clone)]
+struct QueryPeer {
+    owner: EndpointId,
+    ticket: Option<PeerTicket>,
+}
+
+async fn query_peers(
+    service: Arc<MusicDhtService>,
+    peers: &[QueryPeer],
+    request: Arc<SimilarityRequest>,
+    transport: Arc<TransportStats>,
+) -> Vec<Result<PeerHits>> {
+    stream::iter(peers.iter().cloned().map(|peer| {
+        let service = Arc::clone(&service);
+        let request = Arc::clone(&request);
+        let transport = Arc::clone(&transport);
+        async move {
+            tokio::time::timeout(
+                QUERY_TIMEOUT,
+                query_peer(service, peer, &request, transport),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("similarity peer timed out"))?
+        }
+    }))
+    .buffer_unordered(QUERY_CONCURRENCY)
+    .collect()
+    .await
+}
+
 async fn query_peer(
     service: Arc<MusicDhtService>,
-    owner: EndpointId,
+    peer: QueryPeer,
     request: &SimilarityRequest,
     transport: Arc<TransportStats>,
-) -> Result<
-    Vec<(
-        RemoteSimilarityTrack,
-        f32,
-        Option<[u8; wire::SIMILARITY_SIGNATURE_BYTES]>,
-    )>,
-> {
-    let mut stream = service
-        .open_stream(owner, SIMILARITY_ALPN)
-        .await
-        .map_err(|error| anyhow::anyhow!("cannot reach similarity peer: {error}"))?;
+) -> Result<PeerHits> {
+    let owner = peer.owner;
+    let mut stream = match peer.ticket {
+        Some(ticket) => service.open_stream_to(&ticket, SIMILARITY_ALPN).await,
+        None => service.open_stream(owner, SIMILARITY_ALPN).await,
+    }
+    .map_err(|error| anyhow::anyhow!("cannot reach similarity peer: {error}"))?;
     super::record_stream_transport(&transport, "similarity", "outbound", "open", &stream);
     let response = wire::exchange(&mut stream, request).await?;
     super::record_stream_transport(&transport, "similarity", "outbound", "done", &stream);

@@ -2210,7 +2210,7 @@ tbody tr:hover {
                                         <span x-text="settingsDraft.similarity_enabled ? 'Enabled for this instance' : 'Disabled'"></span>
                                         <input type="checkbox" x-model="settingsDraft.similarity_enabled" />
                                     </div>
-                                    <div class="setting-help">Downloads the selected model and processes every visible local track. When federation is also enabled, this instance sends anonymized query embeddings to peers and answers their searches.</div>
+                                    <div class="setting-help">Downloads the selected model and processes every visible local track. With federation enabled, signed anonymous LSH summaries discover likely peers; full query embeddings are sent only to those peers, and this instance answers their searches.</div>
                                 </div>
                                 <div class="setting-field settings-wide">
                                     <label>
@@ -2368,6 +2368,7 @@ tbody tr:hover {
                                     <div class="probe-row"><span>Network</span><strong x-text="(federationStatus.node && federationStatus.node.network) || '-'"></strong></div>
                                     <div class="probe-row"><span>Connected peers</span><strong x-text="federationStatus.node && federationStatus.node.connected_peers ? federationStatus.node.connected_peers.length : 0"></strong></div>
                                     <div class="probe-row"><span>Known contacts</span><strong x-text="(federationStatus.node && federationStatus.node.known_contacts) ?? '-'"></strong></div>
+                                    <div class="probe-row"><span>Similarity routing peers</span><strong x-text="(federationStatus.node && federationStatus.node.similarity_routing_peers) ?? '-'"></strong></div>
                                     <div class="probe-row"><span>Published items</span><strong x-text="(federationStatus.node && federationStatus.node.published_items) ?? '-'"></strong></div>
                                     <div class="probe-row"><span>Last sync</span><strong x-text="federationStatus.last_sync || 'not yet'"></strong></div>
                                 </div>

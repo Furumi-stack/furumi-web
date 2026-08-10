@@ -283,6 +283,90 @@ impl Manager {
         lock(&self.status).clone()
     }
 
+    /// Loads compact routing signatures for every current visible embedding.
+    /// Embeddings created before DHT routing existed are upgraded in place;
+    /// the CPU-heavy projection runs outside the async runtime.
+    pub async fn routing_signatures(&self, profile_id: &str) -> Result<Vec<[u8; 32]>> {
+        let pool = self.pool().await?;
+        let missing = sqlx::query(
+            "SELECT e.track_id, e.dimensions, e.vector
+               FROM furumusic__track_embedding e
+               JOIN furumusic__track t ON t.id = e.track_id
+               JOIN furumusic__release r ON r.id = t.release_id
+               JOIN furumusic__media_file m ON m.id = t.audio_file_id
+              WHERE e.profile_id = $1 AND e.source_sha256 = m.sha256_hash
+                AND t.is_hidden = FALSE AND r.is_hidden = FALSE
+                AND (e.routing_signature IS NULL
+                     OR octet_length(e.routing_signature) != 32)
+              ORDER BY e.track_id",
+        )
+        .bind(profile_id)
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<i64, _>(0),
+                row.get::<i32, _>(1),
+                row.get::<Vec<u8>, _>(2),
+            )
+        })
+        .collect::<Vec<_>>();
+
+        let computed = tokio::task::spawn_blocking(move || {
+            missing
+                .into_iter()
+                .map(|(track_id, dimensions, bytes)| {
+                    let vector = embedding_from_bytes(dimensions, &bytes)?;
+                    let signature = music_dht::similarity_lsh::routing_signature(&vector)?;
+                    Ok::<_, anyhow::Error>((track_id, signature))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .await
+        .context("similarity routing backfill task failed")??;
+
+        if !computed.is_empty() {
+            let mut transaction = pool.begin().await?;
+            for (track_id, signature) in computed {
+                sqlx::query(
+                    "UPDATE furumusic__track_embedding
+                        SET routing_signature = $3
+                      WHERE track_id = $1 AND profile_id = $2
+                        AND (routing_signature IS NULL
+                             OR octet_length(routing_signature) != 32)",
+                )
+                .bind(track_id)
+                .bind(profile_id)
+                .bind(signature.as_slice())
+                .execute(&mut *transaction)
+                .await?;
+            }
+            transaction.commit().await?;
+        }
+
+        let stored = sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT e.routing_signature
+               FROM furumusic__track_embedding e
+               JOIN furumusic__track t ON t.id = e.track_id
+               JOIN furumusic__release r ON r.id = t.release_id
+               JOIN furumusic__media_file m ON m.id = t.audio_file_id
+              WHERE e.profile_id = $1 AND e.source_sha256 = m.sha256_hash
+                AND t.is_hidden = FALSE AND r.is_hidden = FALSE
+              ORDER BY e.track_id",
+        )
+        .bind(profile_id)
+        .fetch_all(&pool)
+        .await?;
+        stored
+            .into_iter()
+            .map(|signature| {
+                <[u8; 32]>::try_from(signature)
+                    .map_err(|_| anyhow::anyhow!("invalid similarity routing signature length"))
+            })
+            .collect()
+    }
+
     pub fn start(self: &Arc<Self>) {
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let manager = Arc::clone(self);
@@ -846,14 +930,16 @@ async fn store_embedding(
         vector.iter().all(|value| value.is_finite()),
         "embedding contains a non-finite value"
     );
+    let routing_signature = music_dht::similarity_lsh::routing_signature(vector)?;
     sqlx::query(
         "INSERT INTO furumusic__track_embedding
-            (track_id, profile_id, dimensions, vector, source_sha256,
-             source_content_id, computed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (track_id, profile_id, dimensions, vector, routing_signature,
+             source_sha256, source_content_id, computed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (track_id, profile_id) DO UPDATE SET
             dimensions = EXCLUDED.dimensions,
             vector = EXCLUDED.vector,
+            routing_signature = EXCLUDED.routing_signature,
             source_sha256 = EXCLUDED.source_sha256,
             source_content_id = EXCLUDED.source_content_id,
             computed_at = EXCLUDED.computed_at",
@@ -862,6 +948,7 @@ async fn store_embedding(
     .bind(profile_id)
     .bind(vector.len() as i32)
     .bind(embedding_to_bytes(vector))
+    .bind(routing_signature.as_slice())
     .bind(&track.source_sha256)
     .bind(&track.source_content_id)
     .bind(now_iso())
