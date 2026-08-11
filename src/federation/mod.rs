@@ -213,6 +213,50 @@ impl TransportStats {
     }
 }
 
+async fn enrich_transport_users(pool: &PgPool, transport: &mut Value) {
+    let Some(samples) = transport.get_mut("last").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let peer_ids: Vec<String> = samples
+        .iter()
+        .filter_map(|sample| sample.get("peer_id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    if peer_ids.is_empty() {
+        return;
+    }
+    let Ok(rows) = sqlx::query(
+        "SELECT DISTINCT ON (d.endpoint_id)
+                d.endpoint_id,
+                COALESCE(NULLIF(u.display_name, ''), u.username::text) AS user_name
+         FROM furumusic__fed_device d
+         JOIN furumusic__user u ON u.id = d.user_id
+         WHERE d.endpoint_id = ANY($1) AND d.revoked_at_ms IS NULL
+         ORDER BY d.endpoint_id, d.last_seen_ms DESC NULLS LAST",
+    )
+    .bind(&peer_ids)
+    .fetch_all(pool)
+    .await
+    else {
+        return;
+    };
+    let users: HashMap<String, String> = rows
+        .into_iter()
+        .map(|row| (row.get("endpoint_id"), row.get("user_name")))
+        .collect();
+    for sample in samples {
+        let Some(peer_id) = sample.get("peer_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(user_name) = users.get(peer_id) else {
+            continue;
+        };
+        if let Some(object) = sample.as_object_mut() {
+            object.insert("user_name".to_owned(), Value::String(user_name.clone()));
+        }
+    }
+}
+
 pub fn record_stream_transport(
     stats: &Arc<TransportStats>,
     protocol: &'static str,
@@ -849,6 +893,10 @@ impl Federation {
                     .iter()
                     .map(|p| p.to_string())
                     .collect();
+                let mut transport = self.transport_stats.snapshot();
+                if let Ok(pool) = self.pool().await {
+                    enrich_transport_users(&pool, &mut transport).await;
+                }
                 json!({
                     "running": true,
                     "network": running.network_name,
@@ -857,7 +905,7 @@ impl Federation {
                     "known_contacts": service.known_peers().len(),
                     "similarity_routing_peers": running.similarity_dht.known_peers(),
                     "published_items": published,
-                    "transport": self.transport_stats.snapshot(),
+                    "transport": transport,
                 })
             }
             None => json!({ "running": false }),
@@ -895,7 +943,7 @@ impl Federation {
         &self,
         query: crate::similarity::QueryVector,
         limit: usize,
-    ) -> Result<Vec<similarity::RemoteSimilarityTrack>> {
+    ) -> Result<similarity::SimilaritySearchOutcome> {
         anyhow::ensure!(
             crate::similarity::handle().enabled(),
             "similarity search is disabled"

@@ -14,7 +14,7 @@ use cot::router::method::{delete, get, post};
 use cot::router::{Route, Router};
 use cot::session::Session;
 use cot::{App, Body, Template};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row as _;
 
 use crate::auth;
@@ -4318,9 +4318,25 @@ async fn load_track_items_by_ids(pool: &sqlx::PgPool, ids: &[i64]) -> cot::Resul
 #[derive(Debug, Serialize)]
 struct SimilaritySearchResponse {
     label: String,
-    tracks: Vec<TrackItem>,
+    tracks: Vec<ScoredSimilarityTrack>,
     federation_tracks: Vec<crate::federation::client::TrackDto>,
     federation_error: Option<String>,
+    queried_peers: usize,
+    elapsed_ms: u64,
+    complete: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ScoredSimilarityTrack {
+    #[serde(flatten)]
+    track: TrackItem,
+    similarity_score: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct SimilaritySearchQuery {
+    #[serde(default)]
+    local_only: bool,
 }
 
 async fn similarity_search_handler(
@@ -4329,7 +4345,9 @@ async fn similarity_search_handler(
     db: Database,
     pool: &sqlx::PgPool,
     Path(path): Path<PathId>,
+    options: cot::request::extractors::UrlQuery<SimilaritySearchQuery>,
 ) -> cot::Result<cot::response::Response> {
+    let started = std::time::Instant::now();
     let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
@@ -4385,28 +4403,48 @@ async fn similarity_search_handler(
         .iter()
         .map(|track| track.track_id)
         .collect::<Vec<_>>();
-    let mut tracks = Vec::with_capacity(ids.len() + 1);
-    tracks.push(source_track.clone());
-    tracks.extend(load_track_items_by_ids(pool, &ids).await?);
+    let scores: HashMap<i64, f32> = ranked
+        .iter()
+        .map(|track| (track.track_id, track.score))
+        .collect();
+    let mut local_tracks = Vec::with_capacity(ids.len() + 1);
+    local_tracks.push(source_track.clone());
+    local_tracks.extend(load_track_items_by_ids(pool, &ids).await?);
+    let tracks = local_tracks
+        .into_iter()
+        .map(|track| ScoredSimilarityTrack {
+            similarity_score: if track.id == path.id {
+                1.0
+            } else {
+                scores.get(&track.id).copied().unwrap_or_default()
+            },
+            track,
+        })
+        .collect();
 
     let (config, _) = AppConfig::load_with_db(&db).await;
-    let (federation_tracks, federation_error) = if config.federation_enabled {
-        match crate::federation::handle()
-            .search_similarity(query, 50)
-            .await
-        {
-            Ok(remote) => match crate::federation::handle()
-                .prepare_similarity_tracks(remote)
+    let (federation_tracks, federation_error, queried_peers) =
+        if config.federation_enabled && !options.0.local_only {
+            match crate::federation::handle()
+                .search_similarity(query, 50)
                 .await
             {
-                Ok(tracks) => (tracks, None),
-                Err(error) => (Vec::new(), Some(format!("{error:#}"))),
-            },
-            Err(error) => (Vec::new(), Some(format!("{error:#}"))),
-        }
-    } else {
-        (Vec::new(), None)
-    };
+                Ok(outcome) => match crate::federation::handle()
+                    .prepare_similarity_tracks(outcome.tracks)
+                    .await
+                {
+                    Ok(tracks) => (tracks, None, outcome.queried_peers),
+                    Err(error) => (
+                        Vec::new(),
+                        Some(format!("{error:#}")),
+                        outcome.queried_peers,
+                    ),
+                },
+                Err(error) => (Vec::new(), Some(format!("{error:#}")), 0),
+            }
+        } else {
+            (Vec::new(), None, 0)
+        };
     let artists = source_track
         .artists
         .iter()
@@ -4423,6 +4461,9 @@ async fn similarity_search_handler(
         tracks,
         federation_tracks,
         federation_error,
+        queried_peers,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        complete: !options.0.local_only,
     })
     .into_response()
 }
@@ -9934,7 +9975,8 @@ impl App for PlayerApp {
                     move |auth_ctx: auth::AuthContext,
                           session: Session,
                           db: Database,
-                          path: Path<PathId>| {
+                          path: Path<PathId>,
+                          query: cot::request::extractors::UrlQuery<SimilaritySearchQuery>| {
                         let pool = Arc::clone(&pool);
                         let pool_config = Arc::clone(&pool_config);
                         async move {
@@ -9947,7 +9989,7 @@ impl App for PlayerApp {
                                         .expect("player pool")
                                 })
                                 .await;
-                            similarity_search_handler(auth_ctx, session, db, pg_pool, path).await
+                            similarity_search_handler(auth_ctx, session, db, pg_pool, path, query).await
                         }
                     }
                 }),

@@ -96,9 +96,9 @@ translations! {
     settings_swagger:         "Swagger UI"                    , "Swagger UI";
     settings_swagger_help:    "Serves interactive API docs at /swagger/ (requires restart)" , "Интерактивная документация API на /swagger/ (требуется перезапуск)";
     settings_lastfm_api_key:  "Last.fm API key"               , "API ключ Last.fm";
-    settings_lastfm_api_key_help: "Used for Last.fm popularity and account connection" , "Используется для популярности Last.fm и подключения аккаунта";
+    settings_lastfm_api_key_help: "Identifies this application to Last.fm and enables metadata, popularity data, and user account connection" , "Идентифицирует приложение в Last.fm и включает метаданные, данные о популярности и подключение аккаунтов";
     settings_lastfm_shared_secret: "Last.fm shared secret"    , "Shared secret Last.fm";
-    settings_lastfm_shared_secret_help: "Required for signed Last.fm scrobbling requests" , "Нужен для подписанных запросов скробблинга Last.fm";
+    settings_lastfm_shared_secret_help: "Authenticates signed Last.fm requests, including scrobbling. Keep this value private" , "Подтверждает подписанные запросы Last.fm, включая скробблинг. Не раскрывайте это значение";
 
     // OIDC login errors
     login_oidc_error:         "SSO login failed. Please try again." , "Ошибка входа через SSO. Попробуйте ещё раз.";

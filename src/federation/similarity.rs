@@ -39,6 +39,12 @@ pub struct RemoteSimilarityTrack {
     pub release_title: Option<String>,
     pub track_number: Option<i32>,
     pub disc_number: Option<i32>,
+    pub similarity_score: f32,
+}
+
+pub struct SimilaritySearchOutcome {
+    pub tracks: Vec<RemoteSimilarityTrack>,
+    pub queried_peers: usize,
 }
 
 pub async fn serve_peers(
@@ -151,7 +157,7 @@ pub async fn search(
     query: QueryVector,
     limit: usize,
     transport: Arc<TransportStats>,
-) -> Result<Vec<RemoteSimilarityTrack>> {
+) -> Result<SimilaritySearchOutcome> {
     let own = service.endpoint_id();
     let routed = match tokio::time::timeout(
         ROUTING_TIMEOUT,
@@ -204,6 +210,7 @@ pub async fn search(
 
     let mut hits = Vec::new();
     let initial = peers.len().min(INITIAL_QUERY_PEERS);
+    let mut queried_peers = initial;
     let responses = query_peers(
         Arc::clone(&service),
         &peers[..initial],
@@ -222,6 +229,7 @@ pub async fn search(
         }
     }
     if initial < peers.len() && (hits.len() < limit || successful < initial.min(4)) {
+        queried_peers += peers.len() - initial;
         for response in query_peers(
             Arc::clone(&service),
             &peers[initial..],
@@ -282,7 +290,10 @@ pub async fn search(
             break;
         }
     }
-    Ok(tracks)
+    Ok(SimilaritySearchOutcome {
+        tracks,
+        queried_peers,
+    })
 }
 
 type PeerHits = Vec<(
@@ -360,6 +371,7 @@ async fn query_peer(
                     release_title: hit.release_title,
                     track_number: hit.track_number,
                     disc_number: hit.disc_number,
+                    similarity_score: score,
                 },
                 score,
                 signature,

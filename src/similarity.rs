@@ -244,10 +244,61 @@ impl Manager {
                 return;
             }
         };
+        let mut effective = config.clone();
+        let mut rows = None;
+        for attempt in 0..20 {
+            match sqlx::query(
+                "SELECT key, value FROM furumusic__config_entry
+                 WHERE key IN ('similarity_enabled', 'similarity_model',
+                               'similarity_profile', 'similarity_workers',
+                               'agent_storage_dir')",
+            )
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(loaded) => {
+                    rows = Some(loaded);
+                    break;
+                }
+                Err(error) if attempt < 19 => {
+                    tracing::debug!(attempt, %error, "similarity boot: settings table not ready");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "similarity boot: database settings unavailable");
+                }
+            }
+        }
+        for row in rows.unwrap_or_default() {
+            let key: String = row.get(0);
+            let value: String = row.get(1);
+            let env_key = format!("FURU_{}", key.to_ascii_uppercase());
+            if std::env::var(&env_key).is_ok() {
+                continue;
+            }
+            match key.as_str() {
+                "similarity_enabled" => {
+                    if let Ok(parsed) = value.parse() {
+                        effective.similarity_enabled = parsed;
+                    }
+                }
+                "similarity_model" => effective.similarity_model = value,
+                "similarity_profile" => effective.similarity_profile = value,
+                "similarity_workers" => {
+                    if let Ok(parsed) = value.parse() {
+                        effective.similarity_workers = parsed;
+                    }
+                }
+                "agent_storage_dir" => {
+                    effective.agent_storage_dir = crate::media_paths::resolve_config_path(&value);
+                }
+                _ => {}
+            }
+        }
         if let Err(error) = self.restore_stored_status(&pool).await {
             tracing::warn!(%error, "similarity boot: stored status unavailable");
         }
-        self.apply(config);
+        self.apply(&effective);
     }
 
     pub fn apply(self: &Arc<Self>, config: &AppConfig) {

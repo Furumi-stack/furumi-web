@@ -17,6 +17,17 @@
                         <div class="user-role" x-text="$store.user.profile?.role || ''"></div>
                     </div>
                     <div class="user-widget-actions">
+                        <button class="user-logout-btn"
+                                x-show="$store.user.profile?.role === 'admin'"
+                                x-cloak
+                                @click="window.location.href = '/admin/'"
+                                title="{{ t.player_admin_panel }}"
+                                aria-label="{{ t.player_admin_panel }}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 3l7 3v5c0 4.6-2.9 8.1-7 10-4.1-1.9-7-5.4-7-10V6l7-3z"/>
+                                <path d="M9.5 12l1.7 1.7 3.6-4"/>
+                            </svg>
+                        </button>
                         <button class="user-logout-btn" @click="$store.user.openSettings()" title="User settings" aria-label="User settings">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                 <circle cx="12" cy="12" r="3"/>
@@ -80,7 +91,7 @@
                              @click="$store.library.openArtist(artist.id)">
                             <div class="following-avatar">
                                 <template x-if="artist.image_url">
-                                    <img :src="artist.image_url" :alt="artist.name" loading="lazy">
+                                    <img :src="artist.image_url" alt="" aria-hidden="true" loading="lazy">
                                 </template>
                                 <template x-if="!artist.image_url">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
@@ -143,9 +154,6 @@
                     </div>
                 </template>
             </div>
-            <div class="sidebar-bottom">
-                <a href="/admin/">{{ t.player_admin_panel }}</a>
-            </div>
         </div>
 
         <template x-if="$store.mobile.libraryOpen">
@@ -196,7 +204,7 @@
                                              @click="$store.library.openArtist(artist.id); $store.mobile.closeLibrary()">
                                             <div class="following-avatar">
                                                 <template x-if="artist.image_url">
-                                                    <img :src="artist.image_url" :alt="artist.name" loading="lazy">
+                                                    <img :src="artist.image_url" alt="" aria-hidden="true" loading="lazy">
                                                 </template>
                                                 <template x-if="!artist.image_url">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
@@ -360,6 +368,17 @@
                     </div>
                     <div class="mobile-account-actions">
                         <button class="user-logout-btn"
+                                x-show="$store.user.profile?.role === 'admin'"
+                                x-cloak
+                                @click="window.location.href = '/admin/'"
+                                title="{{ t.player_admin_panel }}"
+                                aria-label="{{ t.player_admin_panel }}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 3l7 3v5c0 4.6-2.9 8.1-7 10-4.1-1.9-7-5.4-7-10V6l7-3z"/>
+                                <path d="M9.5 12l1.7 1.7 3.6-4"/>
+                            </svg>
+                        </button>
+                        <button class="user-logout-btn"
                                 @click="$store.user.menuOpen = false; $store.user.openSettings()"
                                 title="User settings"
                                 aria-label="User settings">
@@ -379,12 +398,24 @@
             <!-- Search Results -->
             <template x-if="$store.library.view === 'search'">
                 <div>
-                    <h2 class="search-similarity-title"
-                        x-show="$store.library.similaritySearchLabel"
-                        x-cloak>
-                        <span>{{ t.player_search_similar_to }}</span>
-                        <strong x-text="$store.library.similaritySearchLabel"></strong>
-                    </h2>
+                    <div class="search-similarity-heading"
+                         x-show="$store.library.similaritySearchLabel"
+                         x-cloak>
+                        <h2 class="search-similarity-title">
+                            <span>{{ t.player_search_similar_to }}</span>
+                            <strong x-text="$store.library.similaritySearchLabel"></strong>
+                        </h2>
+                        <div class="search-similarity-progress"
+                             :class="{ loading: $store.library.similaritySearchStats.loading }">
+                            <template x-if="$store.library.similaritySearchStats.loading">
+                                <span class="search-progress-live"><i></i> Searching peers…</span>
+                            </template>
+                            <span x-text="`${$store.library.similaritySearchStats.tracks} tracks · ${$store.library.similaritySearchStats.artists} artists`"></span>
+                            <template x-if="!$store.library.similaritySearchStats.loading">
+                                <span x-text="`${$store.library.similaritySearchStats.peers} peers · ${$store.library.formatSearchDuration($store.library.similaritySearchStats.elapsed_ms)}`"></span>
+                            </template>
+                        </div>
+                    </div>
                     <template x-if="$store.library.searchLoading">
                         <div class="loading-spinner"><div class="spinner"></div></div>
                     </template>
@@ -394,7 +425,7 @@
                         </div>
                     </template>
                     <template x-if="!$store.library.searchLoading && $store.library.searchResults">
-                        <div>
+                        <div :class="{ 'similarity-unified-results': $store.library.similaritySearchLabel }">
                             <template x-if="!$store.library.similaritySearchError && $store.library.searchResults.artists.length === 0 && $store.library.searchResults.releases.length === 0 && $store.library.searchResults.tracks.length === 0">
                                 <div class="empty-state">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -409,11 +440,9 @@
                                         <template x-for="artist in $store.library.searchResults.artists" :key="artist.id">
                                             <div class="search-artist-card" @click="$store.library.openArtist(artist.id)">
                                                 <div class="search-artist-img">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
                                                     <template x-if="artist.image_url">
-                                                        <img :src="artist.image_url" :alt="artist.name" loading="lazy">
-                                                    </template>
-                                                    <template x-if="!artist.image_url">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
+                                                        <img class="artwork-image" :src="artist.image_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
                                                     </template>
                                                 </div>
                                                 <div class="search-artist-name" x-text="artist.name"></div>
@@ -430,11 +459,9 @@
                                         <template x-for="release in $store.library.searchResults.releases" :key="release.id">
                                             <div class="search-release-card" @click="$store.library.openRelease(release.id)" style="position:relative">
                                                 <div class="search-release-cover" style="position:relative">
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
                                                     <template x-if="release.cover_url">
-                                                        <img :src="release.cover_url" :alt="release.title" loading="lazy">
-                                                    </template>
-                                                    <template x-if="!release.cover_url">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
+                                                        <img class="artwork-image" :src="release.cover_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
                                                     </template>
                                                     <button class="card-info-btn" @click.stop="$store.library.openReleaseInfo(release)" :title="$store.library.releaseInfo(release)" aria-label="{{ t.player_release_info }}">
                                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -464,7 +491,8 @@
                                     <template x-for="(track, idx) in $store.library.searchResults.tracks" :key="track.id">
                                         <div class="track-row"
                                              :class="{ playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id }"
-                                             @dblclick="$store.library.playSearchTrack(idx)">
+                                             :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"
+                                             @dblclick="$store.library.similaritySearchLabel ? $store.library.playSimilarityResult(track) : $store.library.playSearchTrack(idx)">
                                             <span class="track-num" x-text="idx + 1"></span>
                                             <div class="track-info">
                                                 <div class="track-title" x-text="track.title"></div>
@@ -509,8 +537,9 @@
                                     </template>
                                 </div>
                             </template>
-                            <div class="search-section federation-search-section">
-                                <h2 class="search-section-title">
+                            <div class="search-section federation-search-section"
+                                 :class="{ 'similarity-federation-merged': $store.library.similaritySearchLabel }">
+                                <h2 class="search-section-title" x-show="!$store.library.similaritySearchLabel">
                                     Federation
                                     <span class="federation-live-badge"
                                           x-show="$store.library.federationSearch.loading"
@@ -520,11 +549,11 @@
                                     <div class="federation-search-status error"
                                          x-text="$store.library.federationSearch.error"></div>
                                 </template>
-                                <template x-if="$store.library.federationSearch.loading && $store.library.federationSearch.tracks.length === 0">
+                                <template x-if="!$store.library.similaritySearchLabel && $store.library.federationSearch.loading && $store.library.federationSearch.tracks.length === 0">
                                     <div class="federation-search-status">Searching peers…</div>
                                 </template>
                                 <div class="search-artists-row"
-                                     x-show="$store.library.federationSearch.artists.length > 0"
+                                     x-show="!$store.library.similaritySearchLabel && $store.library.federationSearch.artists.length > 0"
                                      x-cloak>
                                     <template x-for="artist in $store.library.federationSearch.artists"
                                               :key="artist.key.normalized_name">
@@ -532,10 +561,12 @@
                                              @click="$store.library.openFederatedArtist(artist)">
                                             <div class="search-artist-img">
                                                 <img x-show="$store.library.federationArtistImage(artist)"
+                                                     class="artwork-image"
                                                      :src="$store.library.federationArtistImage(artist)"
-                                                     :alt="artist.name"
+                                                     alt="" aria-hidden="true"
                                                      loading="lazy"
-                                                     @error="$event.currentTarget.style.display = 'none'">
+                                                     @load="$event.currentTarget.classList.add('artwork-loaded')"
+                                                     @error="$event.currentTarget.classList.remove('artwork-loaded'); $store.library.federationArtistImageFailed(artist)">
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                                     <circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/>
                                                 </svg>
@@ -547,18 +578,21 @@
                                     </template>
                                 </div>
                                 <div class="search-releases-row"
-                                     x-show="$store.library.federationSearch.releases.length > 0"
+                                     x-show="!$store.library.similaritySearchLabel && $store.library.federationSearch.releases.length > 0"
                                      x-cloak>
                                     <template x-for="release in $store.library.federationSearch.releases"
                                               :key="JSON.stringify(release.key)">
-                                        <div class="search-release-card federation-entity-card">
+                                        <div class="search-release-card federation-entity-card"
+                                             @click="$store.library.openFederatedRelease($store.library.hydrateFederationSearchRelease(release))">
                                             <div class="search-release-cover">
-                                                <img x-show="release.cover_url"
-                                                     :src="release.cover_url"
-                                                     :alt="release.title"
-                                                     loading="lazy">
-                                                <svg x-show="!release.cover_url"
-                                                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                                <img x-show="$store.library.federationReleaseCover(release)"
+                                                     class="artwork-image"
+                                                     :src="$store.library.federationReleaseCover(release)"
+                                                     alt="" aria-hidden="true"
+                                                     loading="lazy"
+                                                     @load="$event.currentTarget.classList.add('artwork-loaded')"
+                                                     @error="$event.currentTarget.classList.remove('artwork-loaded'); $store.library.federationReleaseCoverFailed(release, $event.currentTarget.getAttribute('src'))">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                                     <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/>
                                                 </svg>
                                             </div>
@@ -571,7 +605,8 @@
                                 <template x-for="(track, idx) in $store.library.federationSearch.tracks"
                                           :key="track.key.content_id">
                                     <div class="track-row federation-track-row"
-                                         @dblclick="$store.library.playFederatedTrack(track)">
+                                         :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"
+                                         @dblclick="$store.library.similaritySearchLabel ? $store.library.playSimilarityResult($store.library.federationQueueTrack(track)) : $store.library.playFederatedTrack(track)">
                                         <span class="track-num federation-track-status">
                                             <template x-if="!$store.library.federationDownload(track.key.content_id) && !$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -645,6 +680,12 @@
                                               x-text="formatTime(track.metadata.duration_seconds)"></span>
                                     </div>
                                 </template>
+                                <div class="similarity-search-inline-progress"
+                                     x-show="$store.library.similaritySearchLabel && $store.library.similaritySearchStats.loading"
+                                     x-cloak>
+                                    <span class="similarity-search-inline-spinner" aria-hidden="true"></span>
+                                    <span>Searching federation for more similar tracks…</span>
+                                </div>
                             </div>
                         </div>
                     </template>
@@ -666,7 +707,7 @@
                                 <div class="card" @click="$store.library.openArtist(artist.id)">
                                     <div class="card-img">
                                         <template x-if="artist.image_url">
-                                            <img :src="artist.image_url" :alt="artist.name" loading="lazy">
+                                            <img :src="artist.image_url" alt="" aria-hidden="true" loading="lazy">
                                         </template>
                                         <template x-if="!artist.image_url">
                                             <span class="placeholder-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg></span>
@@ -722,7 +763,7 @@
                         <div class="artist-img">
                             <template x-if="$store.library.currentArtist.image_url">
                                 <img :src="$store.library.currentArtist.image_url"
-                                     :alt="$store.library.currentArtist.name"
+                                     alt="" aria-hidden="true"
                                      @error="$store.library.currentArtist.image_url = null">
                             </template>
                             <template x-if="!$store.library.currentArtist.image_url">
@@ -805,7 +846,7 @@
                                                 :title="track.release_title"
                                                 aria-label="{{ t.player_release }}">
                                             <template x-if="track.cover_url">
-                                                <img :src="track.cover_url" :alt="track.release_title" loading="lazy">
+                                                <img :src="track.cover_url" alt="" aria-hidden="true" loading="lazy">
                                             </template>
                                             <template x-if="!track.cover_url">
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
@@ -868,7 +909,7 @@
                                     <div class="card" @click="$store.library.openRelease(release.id)">
                                         <div class="card-img">
                                             <template x-if="release.cover_url">
-                                                <img :src="release.cover_url" :alt="release.title"
+                                                <img :src="release.cover_url" alt="" aria-hidden="true"
                                                      loading="lazy" @error="release.cover_url = null">
                                             </template>
                                             <template x-if="!release.cover_url">
@@ -904,7 +945,7 @@
                                          @click="$store.library.openFederatedRelease(release)">
                                         <div class="card-img">
                                             <template x-if="release.cover_url">
-                                                <img :src="release.cover_url" :alt="release.title"
+                                                <img :src="release.cover_url" alt="" aria-hidden="true"
                                                      loading="lazy" @error="release.cover_url = null">
                                             </template>
                                             <template x-if="!release.cover_url">
@@ -1034,7 +1075,7 @@
                                                 :title="track.release_title"
                                                 aria-label="{{ t.player_release }}">
                                             <template x-if="track.cover_url">
-                                                <img :src="track.cover_url" :alt="track.release_title" loading="lazy">
+                                                <img :src="track.cover_url" alt="" aria-hidden="true" loading="lazy">
                                             </template>
                                             <template x-if="!track.cover_url">
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
@@ -1108,7 +1149,7 @@
                     <div class="release-header">
                         <div class="release-cover">
                             <template x-if="$store.library.currentRelease.cover_url">
-                                <img :src="$store.library.currentRelease.cover_url" :alt="$store.library.currentRelease.title">
+                                <img :src="$store.library.currentRelease.cover_url" alt="" aria-hidden="true">
                             </template>
                             <template x-if="!$store.library.currentRelease.cover_url">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
@@ -1486,11 +1527,9 @@
                             <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
                         </div>
                         <div class="queue-track-cover">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                             <template x-if="item.track.cover_url">
-                                <img :src="item.track.cover_url" :alt="item.track.title" loading="lazy">
-                            </template>
-                            <template x-if="!item.track.cover_url">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                                <img class="artwork-image" :src="item.track.cover_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
                             </template>
                             <span class="queue-federation-status federation-track-status"
                                   x-show="item.track.federation_pending"
@@ -1570,7 +1609,7 @@
                     <div class="player-cover"
                          @click.stop="$store.mobile.openPlayerFullscreen()">
                         <template x-if="$store.player.currentTrack.cover_url">
-                            <img :src="$store.player.currentTrack.cover_url" :alt="$store.player.currentTrack.title">
+                            <img :src="$store.player.currentTrack.cover_url" alt="" aria-hidden="true">
                         </template>
                         <template x-if="!$store.player.currentTrack.cover_url">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
@@ -1868,11 +1907,9 @@
                         type="button"
                         @click="item.index >= 0 ? $store.queue.playFromIndex(item.index) : $store.player.play(item.track)">
                     <div class="mobile-expanded-queue-cover">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                         <template x-if="item.track.cover_url">
-                            <img :src="item.track.cover_url" :alt="item.track.title" loading="lazy">
-                        </template>
-                        <template x-if="!item.track.cover_url">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                            <img class="artwork-image" :src="item.track.cover_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
                         </template>
                     </div>
                     <div class="mobile-expanded-queue-info">

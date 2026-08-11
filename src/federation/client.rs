@@ -85,6 +85,8 @@ pub struct TrackDto {
     pub key: TrackKeyDto,
     pub metadata: TrackMetadataDto,
     pub availability: TrackAvailabilityDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +153,7 @@ impl Federation {
                     local: None,
                     federation: vec![FederationSourceDto { owner, item_id }],
                 },
+                similarity_score: Some(track.similarity_score),
             };
             persist_track_ref(&pool, &dto).await?;
             prepared.push(dto);
@@ -491,6 +494,7 @@ fn track_from_item(
             local,
             federation: vec![FederationSourceDto { owner, item_id }],
         },
+        similarity_score: None,
     }
 }
 
