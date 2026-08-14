@@ -19,6 +19,8 @@ use crate::scheduler::SchedulerHandle;
 
 const YOUTUBE_LIST_LIMIT: i64 = 100;
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(180);
+const HTTP_403_RETRY_DELAY: Duration = Duration::from_secs(30);
+const HTTP_403_MAX_RETRIES: usize = 3;
 const MAX_ERROR_LEN: usize = 4_000;
 const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "ogg", "opus", "aac", "m4a", "wav", "ape", "wv", "wma", "tta", "aiff", "aif",
@@ -199,6 +201,20 @@ struct PreparedFolder {
     audio_file_count: i32,
     all_files_known: bool,
 }
+
+#[derive(Debug)]
+struct YtDlpDownloadFailure {
+    message: String,
+    http_forbidden: bool,
+}
+
+impl std::fmt::Display for YtDlpDownloadFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for YtDlpDownloadFailure {}
 
 pub struct YouTubeService {
     running_jobs: Mutex<HashSet<String>>,
@@ -702,7 +718,41 @@ impl YouTubeService {
 
         let stage = staging_item_root(inbox_root, &job.id, &item.id);
         tokio::fs::create_dir_all(&stage).await?;
-        run_ytdlp_download(pool, &item.id, &item.source_url, &stage, proxy_url, cancel).await?;
+        let mut forbidden_retries = 0;
+        loop {
+            match run_ytdlp_download(pool, &item.id, &item.source_url, &stage, proxy_url, cancel)
+                .await
+            {
+                Ok(()) => break,
+                Err(error)
+                    if !cancel.is_cancelled()
+                        && forbidden_retries < HTTP_403_MAX_RETRIES
+                        && is_http_403_download_failure(&error) =>
+                {
+                    forbidden_retries += 1;
+                    tracing::warn!(
+                        job_id = %job.id,
+                        item_id = %item.id,
+                        source_id = %item.source_id,
+                        delay_seconds = HTTP_403_RETRY_DELAY.as_secs(),
+                        "yt-dlp received HTTP 403; restarting the download after a delay"
+                    );
+                    set_item_status(
+                        pool,
+                        &item.id,
+                        "downloading",
+                        Some("HTTP 403 received; retrying automatically in 30 seconds"),
+                    )
+                    .await?;
+                    tokio::select! {
+                        _ = tokio::time::sleep(HTTP_403_RETRY_DELAY) => {}
+                        _ = cancel.cancelled() => bail!("YouTube import cancelled"),
+                    }
+                    set_item_status(pool, &item.id, "downloading", None).await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
 
         if cancel.is_cancelled() {
             bail!("YouTube import cancelled");
@@ -803,11 +853,13 @@ async fn resolve_source(url: &str, proxy_url: Option<&str>) -> anyhow::Result<Re
                 continue;
             }
             let title = json_string(entry, "title").unwrap_or_else(|| source_id.clone());
+            let playlist_index = json_positive_i32(entry, "playlist_index")
+                .unwrap_or_else(|| i32::try_from(index + 1).unwrap_or(i32::MAX));
             items.push(ResolvedItem {
                 source_url: format!("https://www.youtube.com/watch?v={source_id}"),
                 source_id,
                 title,
-                playlist_index: i32::try_from(index + 1).unwrap_or(i32::MAX),
+                playlist_index,
             });
         }
         if items.is_empty() {
@@ -935,14 +987,37 @@ async fn run_ytdlp_download(
     let stdout_lines = stdout_task.await??;
     let stderr_lines = stderr_task.await??;
     if !exit.success() {
-        let details = if stderr_lines.is_empty() {
-            stdout_lines.join("\n")
-        } else {
-            stderr_lines.join("\n")
-        };
-        bail!("yt-dlp failed: {}", useful_error(&details));
+        let details = stdout_lines
+            .into_iter()
+            .chain(stderr_lines)
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(YtDlpDownloadFailure {
+            message: format!("yt-dlp failed: {}", useful_error(&details)),
+            http_forbidden: output_reports_http_403(&details),
+        }
+        .into());
     }
     Ok(())
+}
+
+fn is_http_403_download_failure(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<YtDlpDownloadFailure>()
+        .is_some_and(|failure| failure.http_forbidden)
+}
+
+fn output_reports_http_403(output: &str) -> bool {
+    let normalized = output.to_ascii_lowercase();
+    [
+        "http error 403",
+        "http status 403",
+        "status code 403",
+        "403: forbidden",
+        "403 forbidden",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 #[cfg(unix)]
@@ -1113,7 +1188,8 @@ async fn prepare_downloaded_folder(
             .and_then(|v| v.to_str())
             .unwrap_or("opus");
         let destination = stage.join(format!(
-            "{} [{}].{}",
+            "{:03} - {} [{}].{}",
+            item.playlist_index.max(1),
             sanitize_component(&item.title),
             item.source_id,
             extension
@@ -1129,6 +1205,8 @@ async fn prepare_downloaded_folder(
     if audio_files.is_empty() {
         bail!("yt-dlp produced no supported audio files");
     }
+
+    preserve_track_numbers(&mut audio_files, chapter_count, item.playlist_index, cancel).await?;
 
     for audio in &audio_files {
         let data = tokio::select! {
@@ -1185,6 +1263,113 @@ async fn prepare_downloaded_folder(
         audio_file_count: i32::try_from(audio_files.len()).unwrap_or(i32::MAX),
         all_files_known: false,
     })
+}
+
+async fn preserve_track_numbers(
+    audio_files: &mut [PathBuf],
+    chapter_count: i32,
+    playlist_index: i32,
+    cancel: &CancellationToken,
+) -> anyhow::Result<()> {
+    for (position, audio) in audio_files.iter_mut().enumerate() {
+        if cancel.is_cancelled() {
+            bail!("YouTube import cancelled");
+        }
+        let track_number = if chapter_count > 0 {
+            track_number_from_file_name(audio)
+                .unwrap_or_else(|| i32::try_from(position + 1).unwrap_or(i32::MAX))
+        } else {
+            playlist_index.max(1)
+        };
+
+        if track_number_from_file_name(audio) != Some(track_number) {
+            let numbered =
+                audio.with_file_name(format!("{track_number:03} - {}", file_name(audio)));
+            tokio::fs::rename(&*audio, &numbered).await?;
+            *audio = numbered;
+        }
+        embed_track_number(audio, track_number, cancel).await?;
+    }
+    Ok(())
+}
+
+fn track_number_from_file_name(path: &Path) -> Option<i32> {
+    let stem = path.file_stem()?.to_str()?.trim_start();
+    let digit_count = stem.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 {
+        return None;
+    }
+    let separator = stem[digit_count..].trim_start();
+    if !separator.starts_with('-') && !separator.starts_with('.') {
+        return None;
+    }
+    stem[..digit_count]
+        .parse::<i32>()
+        .ok()
+        .filter(|number| *number > 0)
+}
+
+async fn embed_track_number(
+    audio: &Path,
+    track_number: i32,
+    cancel: &CancellationToken,
+) -> anyhow::Result<()> {
+    let extension = audio
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("audio");
+    let temporary =
+        audio.with_file_name(format!(".furumusic-track-{}.{}", Uuid::new_v4(), extension));
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(audio)
+        .arg("-map")
+        .arg("0")
+        .arg("-c")
+        .arg("copy")
+        .arg("-metadata")
+        .arg(format!("track={track_number}"))
+        .arg(&temporary)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    configure_process_group(&mut command);
+
+    let output = tokio::select! {
+        output = command.output() => output?,
+        _ = cancel.cancelled() => {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            bail!("YouTube import cancelled");
+        }
+    };
+    if !output.status.success() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        bail!(
+            "ffmpeg could not preserve track number {}: {}",
+            track_number,
+            useful_error(&String::from_utf8_lossy(&output.stderr))
+        );
+    }
+
+    let backup = audio.with_file_name(format!(
+        ".furumusic-track-backup-{}.{}",
+        Uuid::new_v4(),
+        extension
+    ));
+    tokio::fs::rename(audio, &backup).await?;
+    if let Err(error) = tokio::fs::rename(&temporary, audio).await {
+        let _ = tokio::fs::rename(&backup, audio).await;
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(error.into());
+    }
+    tokio::fs::remove_file(backup).await?;
+    Ok(())
 }
 
 async fn read_info_json(stage: &Path) -> anyhow::Result<Option<serde_json::Value>> {
@@ -1704,6 +1889,14 @@ fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn json_positive_i32(value: &serde_json::Value, key: &str) -> Option<i32> {
+    let value = value.get(key)?;
+    let parsed = value
+        .as_i64()
+        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())?;
+    i32::try_from(parsed).ok().filter(|value| *value > 0)
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -1788,6 +1981,45 @@ mod tests {
             "Album_ Live__Test"
         );
         assert_eq!(sanitize_component("..."), "YouTube audio");
+    }
+
+    #[test]
+    fn recognizes_http_403_download_failures() {
+        assert!(output_reports_http_403(
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        ));
+        assert!(output_reports_http_403(
+            "server returned status code 403 while downloading a fragment"
+        ));
+        assert!(!output_reports_http_403(
+            "ERROR: unable to download video data: HTTP Error 404: Not Found"
+        ));
+
+        let error = anyhow::Error::new(YtDlpDownloadFailure {
+            message: "yt-dlp failed".to_string(),
+            http_forbidden: true,
+        });
+        assert!(is_http_403_download_failure(&error));
+    }
+
+    #[test]
+    fn preserves_playlist_and_chapter_numbers_from_source_metadata() {
+        let entry = serde_json::json!({"playlist_index": 7});
+        let string_entry = serde_json::json!({"playlist_index": "12"});
+        assert_eq!(json_positive_i32(&entry, "playlist_index"), Some(7));
+        assert_eq!(json_positive_i32(&string_entry, "playlist_index"), Some(12));
+        assert_eq!(
+            track_number_from_file_name(Path::new("007 - Playlist track.opus")),
+            Some(7)
+        );
+        assert_eq!(
+            track_number_from_file_name(Path::new("003 - Chapter title.m4a")),
+            Some(3)
+        );
+        assert_eq!(
+            track_number_from_file_name(Path::new("1984 remix.webm")),
+            None
+        );
     }
 
     #[test]
