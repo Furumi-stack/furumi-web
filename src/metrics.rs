@@ -841,6 +841,7 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/admin/v2/api/library/item/image",
     "/admin/v2/api/library/item/upload-image",
     "/admin/v2/api/library/bulk",
+    "/admin/v2/api/library/releases/merge",
     "/admin/debug",
     "/admin/settings",
     "/admin/settings/probe",

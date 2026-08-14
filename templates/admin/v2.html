@@ -1519,6 +1519,159 @@ tbody tr:hover {
     font-size: 11px;
 }
 
+.merge-modal {
+    width: min(1120px, calc(100vw - 56px));
+}
+
+.merge-release-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.merge-release-card {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-height: 68px;
+    padding: 9px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.merge-release-card:hover,
+.merge-release-card.active {
+    border-color: rgba(29, 185, 84, 0.78);
+    background: rgba(29, 185, 84, 0.08);
+}
+
+.merge-release-cover {
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    object-fit: cover;
+}
+
+.merge-release-cover.empty {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    font-size: 10px;
+}
+
+.merge-release-title,
+.merge-release-meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.merge-release-title {
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.merge-release-meta {
+    margin-top: 4px;
+    color: var(--text-subdued);
+    font-size: 10px;
+}
+
+.merge-cover-grid {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.merge-cover-option {
+    width: 82px;
+    padding: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-subdued);
+    cursor: pointer;
+}
+
+.merge-cover-option.active {
+    border-color: rgba(29, 185, 84, 0.78);
+    color: var(--text-primary);
+}
+
+.merge-cover-option img,
+.merge-cover-empty {
+    display: grid;
+    place-items: center;
+    width: 68px;
+    height: 68px;
+    margin-bottom: 5px;
+    border-radius: 5px;
+    background: var(--bg-elevated);
+    object-fit: cover;
+}
+
+.merge-track-list {
+    min-width: 760px;
+}
+
+.merge-track-head,
+.merge-track-row {
+    display: grid;
+    grid-template-columns: 52px 70px 74px minmax(180px, 1.5fr) minmax(130px, 1fr) minmax(130px, 1fr) 62px;
+    gap: 8px;
+    align-items: center;
+    padding: 8px;
+}
+
+.merge-track-head {
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-subdued);
+    font-size: 10px;
+    font-weight: 850;
+    text-transform: uppercase;
+}
+
+.merge-track-row {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.merge-track-row:last-child {
+    border-bottom: 0;
+}
+
+.merge-track-row input {
+    width: 100%;
+    height: 30px;
+    min-height: 30px;
+    padding: 0 7px;
+}
+
+.merge-order-actions {
+    display: flex;
+    gap: 3px;
+}
+
+.merge-footer {
+    position: sticky;
+    bottom: -14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin: 14px -14px -14px;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
 .image-actions {
     display: flex;
     align-items: center;
@@ -2166,7 +2319,7 @@ tbody tr:hover {
                                 <i data-lucide="plus"></i>
                                 New release
                             </button>
-                            <button class="btn warn" @click="mockAction('Merge wizard will open from this action slot')">
+                            <button class="btn warn" x-show="libraryKind === 'releases'" @click="openReleaseMerge()" :disabled="!canOpenReleaseMerge()">
                                 <i data-lucide="git-merge"></i>
                                 Merge
                             </button>
@@ -3069,6 +3222,175 @@ tbody tr:hover {
         </section>
     </div>
 
+    <div class="modal-backdrop" x-show="mergeOpen" x-transition @click.self="closeReleaseMerge()">
+        <section class="modal merge-modal">
+            <div class="modal-head">
+                <div class="panel-title">
+                    <strong>Merge releases</strong>
+                    <span x-text="mergeSubtitle()"></span>
+                </div>
+                <button class="icon-btn" type="button" @click="closeReleaseMerge()" :disabled="mergeSaving">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="empty" x-show="mergeLoading">Loading selected releases...</div>
+                <div x-show="!mergeLoading">
+                    <div class="field">
+                        <label>Release to keep</label>
+                        <div class="merge-release-grid">
+                            <template x-for="release in mergeDetails" :key="release.item.id">
+                                <button class="merge-release-card" type="button" :class="{active: Number(mergeDraft.target_release_id) === Number(release.item.id)}" @click="chooseMergeTarget(release.item.id)">
+                                    <template x-if="release.current_image_url">
+                                        <img class="merge-release-cover" :src="release.current_image_url" alt="" />
+                                    </template>
+                                    <span class="merge-release-cover empty" x-show="!release.current_image_url">No cover</span>
+                                    <span>
+                                        <span class="merge-release-title" x-text="release.title"></span>
+                                        <span class="merge-release-meta" x-text="mergeReleaseMeta(release)"></span>
+                                    </span>
+                                </button>
+                            </template>
+                        </div>
+                        <p class="muted">This release keeps its ID. All tracks and genre tags are moved here, then the other release records are removed.</p>
+                    </div>
+
+                    <div class="editor-grid">
+                        <div class="field">
+                            <label>Final title</label>
+                            <input x-model="mergeDraft.title" maxlength="255" />
+                        </div>
+                        <div class="field">
+                            <label>Release type</label>
+                            <select x-model="mergeDraft.release_type">
+                                <option value="album">Album</option>
+                                <option value="single">Single</option>
+                                <option value="ep">EP</option>
+                                <option value="compilation">Compilation</option>
+                                <option value="mixtape">Mixtape</option>
+                                <option value="soundtrack">Soundtrack</option>
+                                <option value="live">Live</option>
+                                <option value="remix">Remix</option>
+                                <option value="demo">Demo</option>
+                                <option value="unknown">Unknown</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Year</label>
+                            <input type="number" min="0" max="3000" x-model="mergeDraft.year" />
+                        </div>
+                        <div class="field">
+                            <label>Visibility</label>
+                            <select x-model="mergeDraft.hidden">
+                                <option value="false">Visible in player</option>
+                                <option value="true">Hidden from player</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label>Release artists</label>
+                        <div class="artist-tags">
+                            <template x-for="artist in selectedMergeArtists()" :key="artist.id">
+                                <span class="tag relation">
+                                    <span x-text="artist.name"></span>
+                                    <button type="button" @click="removeMergeArtist(artist.id)">x</button>
+                                </span>
+                            </template>
+                            <span class="muted" x-show="selectedMergeArtists().length === 0">No artists attached</span>
+                        </div>
+                        <div class="artist-picker">
+                            <input class="search" placeholder="Search artist" x-model="mergeArtistSearch" @keydown.enter.prevent="addMergeArtist()" @keydown.escape="mergeArtistSearch = ''" />
+                            <div class="artist-results" x-show="mergeArtistSearchOpen()" x-transition>
+                                <template x-for="artist in filteredMergeArtists()" :key="artist.id">
+                                    <button class="artist-result" type="button" @click="addMergeArtist(artist)" x-text="artist.name"></button>
+                                </template>
+                                <div class="artist-result muted" x-show="filteredMergeArtists().length === 0">No matching artists</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label>Final cover</label>
+                        <div class="merge-cover-grid">
+                            <button class="merge-cover-option" type="button" :class="{active: !mergeDraft.cover_file_id}" @click="mergeDraft.cover_file_id = null">
+                                <span class="merge-cover-empty">No cover</span>
+                                <span>None</span>
+                            </button>
+                            <template x-for="release in mergeCoverOptions()" :key="release.current_image_file_id">
+                                <button class="merge-cover-option" type="button" :class="{active: Number(mergeDraft.cover_file_id) === Number(release.current_image_file_id)}" @click="mergeDraft.cover_file_id = Number(release.current_image_file_id)">
+                                    <img :src="release.current_image_url" alt="" />
+                                    <span x-text="release.title"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <div class="action-strip" style="padding:0 0 8px; border:0">
+                            <label style="margin:0">Tracks</label>
+                            <div class="toolbar">
+                                <button class="btn" type="button" @click="sortMergeTracks()">
+                                    <i data-lucide="arrow-down-0-1"></i>
+                                    Sort by number
+                                </button>
+                                <button class="btn" type="button" @click="renumberMergeTracks()">
+                                    <i data-lucide="list-ordered"></i>
+                                    Renumber 1..N
+                                </button>
+                            </div>
+                        </div>
+                        <div style="overflow:auto" class="release-track-list" x-show="mergeDraft.tracks.length">
+                            <div class="merge-track-list">
+                                <div class="merge-track-head">
+                                    <span>Order</span>
+                                    <span>Disc</span>
+                                    <span>Track #</span>
+                                    <span>Title</span>
+                                    <span>Artist</span>
+                                    <span>From release</span>
+                                    <span>Move</span>
+                                </div>
+                                <template x-for="(track, index) in mergeDraft.tracks" :key="track.id">
+                                    <div class="merge-track-row">
+                                        <span class="release-track-meta" x-text="index + 1"></span>
+                                        <input type="number" min="1" max="999" x-model="track.disc_number" />
+                                        <input type="number" min="1" max="9999" x-model="track.track_number" />
+                                        <div>
+                                            <div class="release-track-title" x-text="track.title"></div>
+                                            <div class="release-track-meta" x-text="trackDuration(track.duration_seconds)"></div>
+                                        </div>
+                                        <div class="release-track-meta" x-text="track.artists || 'Unknown artist'"></div>
+                                        <div class="release-track-meta" x-text="track.release_title || 'Unknown release'"></div>
+                                        <div class="merge-order-actions">
+                                            <button class="icon-btn" type="button" @click="moveMergeTrack(index, -1)" :disabled="index === 0" title="Move up">
+                                                <i data-lucide="chevron-up"></i>
+                                            </button>
+                                            <button class="icon-btn" type="button" @click="moveMergeTrack(index, 1)" :disabled="index === mergeDraft.tracks.length - 1" title="Move down">
+                                                <i data-lucide="chevron-down"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="merge-footer">
+                        <span class="selection-summary" x-text="mergeConfirmationText()"></span>
+                        <div class="toolbar">
+                            <button class="btn" type="button" @click="closeReleaseMerge()" :disabled="mergeSaving">Cancel</button>
+                            <button class="btn warn" type="button" @click="saveReleaseMerge()" :disabled="!canSaveReleaseMerge()">
+                                <i :data-lucide="mergeSaving ? 'loader-circle' : 'git-merge'"></i>
+                                <span x-text="mergeSaving ? 'Merging...' : 'Merge releases'"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
     <div class="modal-backdrop" x-show="editorOpen && activeLibraryItem" x-transition @click.self="editorOpen = false">
         <section class="modal">
             <div class="modal-head">
@@ -3390,6 +3712,12 @@ function adminV2() {
         releaseTrackSearchToken: 0,
         editorDetail: null,
         editorDraft: { title: '', hidden: 'false', release_type: 'album', year: '', release_id: null, track_number: '', disc_number: '', artist_ids: [], release_tracks: [] },
+        mergeOpen: false,
+        mergeLoading: false,
+        mergeSaving: false,
+        mergeDetails: [],
+        mergeArtistSearch: '',
+        mergeDraft: { release_ids: [], target_release_id: null, title: '', release_type: 'album', year: '', hidden: 'false', cover_file_id: null, artist_ids: [], tracks: [] },
         settings: { values: {}, sources: {}, lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
         settingsDraft: {
             auth_password_enabled: false,
@@ -4759,6 +5087,252 @@ function adminV2() {
 
         removeLibraryImage() {
             this.setLibraryImage(null);
+        },
+
+        canOpenReleaseMerge() {
+            return this.libraryKind === 'releases'
+                && this.librarySelectionScope === 'ids'
+                && this.currentLibrarySelectionKeys().length >= 2;
+        },
+
+        async openReleaseMerge() {
+            if (!this.canOpenReleaseMerge()) {
+                this.showToast(this.librarySelectionScope === 'filter'
+                    ? 'Select individual releases to merge'
+                    : 'Select at least two releases');
+                return;
+            }
+            const releaseIds = this.currentLibrarySelectionKeys()
+                .map(key => Number(key.split(':')[1]))
+                .filter(Boolean);
+            this.mergeOpen = true;
+            this.mergeLoading = true;
+            this.mergeSaving = false;
+            this.mergeDetails = [];
+            this.mergeArtistSearch = '';
+            try {
+                const details = await Promise.all(releaseIds.map(async id => {
+                    const params = new URLSearchParams({ kind: 'releases', id: String(id) });
+                    return this.request(`${this.apiBase}/library/item/detail?${params.toString()}`);
+                }));
+                if (!this.mergeOpen) return;
+                this.mergeDetails = details;
+                const target = details.slice().sort((left, right) => {
+                    const leftAlbum = left.release_type === 'album' ? 1 : 0;
+                    const rightAlbum = right.release_type === 'album' ? 1 : 0;
+                    return (right.release_tracks || []).length - (left.release_tracks || []).length
+                        || rightAlbum - leftAlbum
+                        || Number(left.item.id) - Number(right.item.id);
+                })[0];
+                const artistIds = [];
+                const seenArtists = new Set();
+                const tracks = [];
+                for (const detail of details) {
+                    for (const artistId of detail.selected_artist_ids || []) {
+                        const id = Number(artistId);
+                        if (id && !seenArtists.has(id)) {
+                            seenArtists.add(id);
+                            artistIds.push(id);
+                        }
+                    }
+                    for (const row of detail.release_tracks || []) {
+                        tracks.push(this.normalizeReleaseTrack(row));
+                    }
+                }
+                this.mergeDraft = {
+                    release_ids: releaseIds,
+                    target_release_id: Number(target.item.id),
+                    title: target.title || '',
+                    release_type: target.release_type || 'album',
+                    year: target.year || '',
+                    hidden: target.hidden ? 'true' : 'false',
+                    cover_file_id: target.current_image_file_id == null ? null : Number(target.current_image_file_id),
+                    artist_ids: artistIds,
+                    tracks
+                };
+                this.sortMergeTracks();
+            } catch (error) {
+                this.mergeOpen = false;
+                this.showToast(error.message);
+            } finally {
+                this.mergeLoading = false;
+                this.icons();
+            }
+        },
+
+        closeReleaseMerge() {
+            if (this.mergeSaving) return;
+            this.mergeOpen = false;
+            this.mergeDetails = [];
+            this.mergeArtistSearch = '';
+        },
+
+        mergeSubtitle() {
+            if (this.mergeLoading) return 'Preparing merge workspace';
+            return `${this.mergeDetails.length} releases / ${this.mergeDraft.tracks.length} tracks`;
+        },
+
+        mergeReleaseMeta(release) {
+            const parts = [`${(release.release_tracks || []).length} tracks`];
+            if (release.release_type) parts.push(release.release_type);
+            if (release.year) parts.push(release.year);
+            return parts.join(' / ');
+        },
+
+        chooseMergeTarget(id) {
+            const release = this.mergeDetails.find(row => Number(row.item.id) === Number(id));
+            if (!release) return;
+            this.mergeDraft.target_release_id = Number(id);
+            this.mergeDraft.title = release.title || '';
+            this.mergeDraft.release_type = release.release_type || 'album';
+            this.mergeDraft.year = release.year || '';
+            this.mergeDraft.hidden = release.hidden ? 'true' : 'false';
+            this.mergeDraft.cover_file_id = release.current_image_file_id == null
+                ? null
+                : Number(release.current_image_file_id);
+        },
+
+        mergeCoverOptions() {
+            const seen = new Set();
+            return this.mergeDetails.filter(release => {
+                const id = Number(release.current_image_file_id || 0);
+                if (!id || !release.current_image_url || seen.has(id)) return false;
+                seen.add(id);
+                return true;
+            });
+        },
+
+        mergeArtists() {
+            return this.mergeDetails.length && Array.isArray(this.mergeDetails[0].artists)
+                ? this.mergeDetails[0].artists
+                : [];
+        },
+
+        selectedMergeArtists() {
+            const selected = this.mergeDraft.artist_ids || [];
+            const artists = this.mergeArtists();
+            return selected.map(id => artists.find(row => Number(row.id) === Number(id)) || { id, name: `Artist #${id}` });
+        },
+
+        filteredMergeArtists() {
+            const selected = new Set((this.mergeDraft.artist_ids || []).map(Number));
+            const query = String(this.mergeArtistSearch || '').trim().toLowerCase();
+            return this.mergeArtists()
+                .filter(artist => !selected.has(Number(artist.id)))
+                .filter(artist => !query || String(artist.name || '').toLowerCase().includes(query))
+                .sort((left, right) => left.name.localeCompare(right.name))
+                .slice(0, 12);
+        },
+
+        mergeArtistSearchOpen() {
+            return String(this.mergeArtistSearch || '').trim().length > 0;
+        },
+
+        addMergeArtist(artist = null) {
+            artist = artist || this.filteredMergeArtists()[0];
+            if (!artist) return;
+            const id = Number(artist.id);
+            if (!(this.mergeDraft.artist_ids || []).map(Number).includes(id)) {
+                this.mergeDraft.artist_ids = (this.mergeDraft.artist_ids || []).concat([id]);
+            }
+            this.mergeArtistSearch = '';
+        },
+
+        removeMergeArtist(id) {
+            this.mergeDraft.artist_ids = (this.mergeDraft.artist_ids || []).filter(value => Number(value) !== Number(id));
+        },
+
+        sortMergeTracks() {
+            this.mergeDraft.tracks = (this.mergeDraft.tracks || []).slice().sort((left, right) => {
+                const leftDisc = Number(left.disc_number || 1);
+                const rightDisc = Number(right.disc_number || 1);
+                const leftTrack = left.track_number === '' ? Number.MAX_SAFE_INTEGER : Number(left.track_number || Number.MAX_SAFE_INTEGER);
+                const rightTrack = right.track_number === '' ? Number.MAX_SAFE_INTEGER : Number(right.track_number || Number.MAX_SAFE_INTEGER);
+                return leftDisc - rightDisc
+                    || leftTrack - rightTrack
+                    || String(left.release_title || '').localeCompare(String(right.release_title || ''))
+                    || Number(left.id) - Number(right.id);
+            });
+            this.$nextTick(() => this.icons());
+        },
+
+        renumberMergeTracks() {
+            this.mergeDraft.tracks = (this.mergeDraft.tracks || []).map((track, index) => ({
+                ...track,
+                disc_number: '1',
+                track_number: String(index + 1)
+            }));
+        },
+
+        moveMergeTrack(index, direction) {
+            const target = index + direction;
+            const tracks = (this.mergeDraft.tracks || []).slice();
+            if (target < 0 || target >= tracks.length) return;
+            const moving = { ...tracks[index] };
+            const displaced = { ...tracks[target] };
+            const movingPosition = {
+                disc_number: moving.disc_number,
+                track_number: moving.track_number
+            };
+            moving.disc_number = displaced.disc_number;
+            moving.track_number = displaced.track_number;
+            displaced.disc_number = movingPosition.disc_number;
+            displaced.track_number = movingPosition.track_number;
+            tracks[index] = displaced;
+            tracks[target] = moving;
+            this.mergeDraft.tracks = tracks;
+            this.$nextTick(() => this.icons());
+        },
+
+        mergeConfirmationText() {
+            const removed = Math.max(0, this.mergeDetails.length - 1);
+            return `${this.mergeDraft.tracks.length} tracks will remain; ${removed} source release${removed === 1 ? '' : 's'} will be removed`;
+        },
+
+        canSaveReleaseMerge() {
+            return this.mergeOpen
+                && !this.mergeLoading
+                && !this.mergeSaving
+                && this.mergeDetails.length >= 2
+                && Boolean(this.mergeDraft.target_release_id)
+                && Boolean(String(this.mergeDraft.title || '').trim());
+        },
+
+        async saveReleaseMerge() {
+            if (!this.canSaveReleaseMerge()) return;
+            this.mergeSaving = true;
+            try {
+                const result = await this.request(`${this.apiBase}/library/releases/merge`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        release_ids: this.mergeDraft.release_ids.map(Number),
+                        target_release_id: Number(this.mergeDraft.target_release_id),
+                        title: String(this.mergeDraft.title || '').trim(),
+                        release_type: this.mergeDraft.release_type || 'album',
+                        year: this.mergeDraft.year || '',
+                        hidden: this.mergeDraft.hidden === 'true',
+                        cover_file_id: this.mergeDraft.cover_file_id == null ? null : Number(this.mergeDraft.cover_file_id),
+                        artist_ids: (this.mergeDraft.artist_ids || []).map(Number),
+                        tracks: (this.mergeDraft.tracks || []).map(track => ({
+                            id: Number(track.id),
+                            track_number: track.track_number || '',
+                            disc_number: track.disc_number || ''
+                        }))
+                    })
+                });
+                this.mergeSaving = false;
+                this.closeReleaseMerge();
+                this.clearLibrarySelection();
+                await this.loadLibrary(false);
+                await this.refreshCountsOnly();
+                this.showToast(`${result.moved_tracks} tracks merged into “${result.item.title}”`);
+                this.openEditor(result.item);
+            } catch (error) {
+                this.showToast(error.message);
+            } finally {
+                this.mergeSaving = false;
+                this.icons();
+            }
         },
 
         toggleLibrary(item) {

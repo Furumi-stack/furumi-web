@@ -70,6 +70,21 @@ pub(super) struct BulkLibraryRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct MergeReleasesRequest {
+    release_ids: Vec<i64>,
+    target_release_id: i64,
+    title: String,
+    release_type: String,
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
+    year: Option<String>,
+    hidden: bool,
+    cover_file_id: Option<i64>,
+    #[serde(default)]
+    artist_ids: Vec<i64>,
+    tracks: Vec<ReleaseTrackUpdateRequest>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct MetadataBackfillRunRequest {
     #[serde(default = "default_true")]
     audio_bitrate: bool,
@@ -418,6 +433,14 @@ struct MutationResponse {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+struct MergeReleasesResponse {
+    ok: bool,
+    merged_releases: u64,
+    moved_tracks: u64,
+    item: LibraryItemDto,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 struct AdminSettingsDto {
     values: AdminSettingsValues,
     sources: AdminSettingsSources,
@@ -659,6 +682,7 @@ struct LibraryItemDetailDto {
     release_id: Option<i64>,
     track_number: Option<i32>,
     disc_number: Option<i32>,
+    current_image_file_id: Option<i64>,
     current_image_url: Option<String>,
     selected_artist_ids: Vec<i64>,
     artists: Vec<ArtistOptionDto>,
@@ -2075,6 +2099,173 @@ pub async fn bulk_library(
     Json(MutationResponse { ok: true, affected }).into_response()
 }
 
+pub async fn merge_releases(
+    session: Session,
+    db: Database,
+    pool: &PgPool,
+    Json(body): Json<MergeReleasesRequest>,
+) -> cot::Result<cot::response::Response> {
+    if let Err(response) = require_admin_json(&session, &db).await {
+        return Ok(response);
+    }
+
+    let mut release_ids = body.release_ids;
+    release_ids.retain(|id| *id > 0);
+    release_ids.sort_unstable();
+    release_ids.dedup();
+    if release_ids.len() < 2 {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "select at least two releases to merge",
+        ));
+    }
+    if release_ids.len() > 250 {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "at most 250 releases can be merged at once",
+        ));
+    }
+    if !release_ids.contains(&body.target_release_id) {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "destination release must be part of the selection",
+        ));
+    }
+
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "title cannot be empty"));
+    }
+    if title.chars().count() > 255 {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "title cannot exceed 255 characters",
+        ));
+    }
+    let release_type = body.release_type.trim().to_lowercase();
+    if !matches!(
+        release_type.as_str(),
+        "album"
+            | "single"
+            | "ep"
+            | "compilation"
+            | "mixtape"
+            | "live"
+            | "soundtrack"
+            | "remix"
+            | "demo"
+            | "unknown"
+    ) {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid release type"));
+    }
+    let year = match parse_merge_optional_i32(body.year.as_deref(), 0, 3000, "year") {
+        Ok(year) => year,
+        Err(message) => return Ok(json_error(StatusCode::BAD_REQUEST, &message)),
+    };
+
+    let mut tracks = Vec::with_capacity(body.tracks.len());
+    for track in body.tracks {
+        if track.id <= 0 {
+            return Ok(json_error(StatusCode::BAD_REQUEST, "invalid track id"));
+        }
+        let track_number = match parse_merge_optional_i32(
+            track.track_number.as_deref(),
+            1,
+            9999,
+            "track number",
+        ) {
+            Ok(value) => value,
+            Err(message) => return Ok(json_error(StatusCode::BAD_REQUEST, &message)),
+        };
+        let disc_number =
+            match parse_merge_optional_i32(track.disc_number.as_deref(), 1, 999, "disc number") {
+                Ok(value) => value,
+                Err(message) => return Ok(json_error(StatusCode::BAD_REQUEST, &message)),
+            };
+        tracks.push(crate::library_cleanup::ReleaseMergeTrack {
+            id: track.id,
+            track_number,
+            disc_number,
+        });
+    }
+
+    let existing_release_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM furumusic__release WHERE id = ANY($1) ORDER BY id")
+            .bind(&release_ids)
+            .fetch_all(pool)
+            .await
+            .map_err(|error| cot::Error::internal(error.to_string()))?;
+    if existing_release_ids != release_ids {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "one or more selected releases no longer exist",
+        ));
+    }
+    let selected_track_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM furumusic__track WHERE release_id = ANY($1) ORDER BY id",
+    )
+    .bind(&release_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| cot::Error::internal(error.to_string()))?;
+    let mut requested_track_ids = tracks.iter().map(|track| track.id).collect::<Vec<_>>();
+    requested_track_ids.sort_unstable();
+    if requested_track_ids.windows(2).any(|ids| ids[0] == ids[1])
+        || requested_track_ids != selected_track_ids
+    {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "track list does not match the selected releases; reopen the merge wizard",
+        ));
+    }
+
+    let storage_dir = AppConfig::load_with_db(&db).await.0.agent_storage_dir;
+    let result = match crate::library_cleanup::merge_releases(
+        pool,
+        crate::library_cleanup::ReleaseMergeSpec {
+            release_ids,
+            target_release_id: body.target_release_id,
+            title: title.to_owned(),
+            title_sort: normalize_name(title),
+            release_type,
+            year,
+            hidden: body.hidden,
+            cover_file_id: body.cover_file_id,
+            artist_ids: body.artist_ids,
+            tracks,
+        },
+        &storage_dir,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(?error, "release merge failed");
+            return Ok(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "release merge failed; no changes were committed",
+            ));
+        }
+    };
+
+    let Some(item) = fetch_library_item(pool, "releases", body.target_release_id)
+        .await
+        .map_err(|error| cot::Error::internal(error.to_string()))?
+    else {
+        return Ok(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "merged release could not be loaded",
+        ));
+    };
+    Json(MergeReleasesResponse {
+        ok: true,
+        merged_releases: result.merged_releases,
+        moved_tracks: result.moved_tracks,
+        item,
+    })
+    .into_response()
+}
+
 async fn require_admin_json(
     session: &Session,
     db: &Database,
@@ -3144,6 +3335,7 @@ async fn load_library_item_detail(
         release_id: None,
         track_number: None,
         disc_number: None,
+        current_image_file_id: None,
         current_image_url: None,
         selected_artist_ids: Vec::new(),
         artists: Vec::new(),
@@ -3164,6 +3356,7 @@ async fn load_library_item_detail(
                     .flatten();
             detail.current_image_url =
                 image_file_id.map(|id| format!("/api/player/cover/{id}/large"));
+            detail.current_image_file_id = image_file_id;
             detail.available_covers = artist_available_covers(pool, detail.item.id).await?;
         }
         "releases" => {
@@ -3178,6 +3371,7 @@ async fn load_library_item_detail(
                 detail.year = year;
                 detail.current_image_url =
                     cover_file_id.map(|id| format!("/api/player/cover/{id}/large"));
+                detail.current_image_file_id = cover_file_id;
             }
             detail.selected_artist_ids = sqlx::query_as::<_, IdRow>(
                 "SELECT artist_id AS id FROM furumusic__release_artist WHERE release_id = $1 ORDER BY position, artist_id",
@@ -4114,6 +4308,24 @@ fn parse_optional_admin_i32(value: Option<&str>, min: i32, max: i32) -> Option<i
         .map(|parsed| parsed.clamp(min, max))
 }
 
+fn parse_merge_optional_i32(
+    value: Option<&str>,
+    min: i32,
+    max: i32,
+    field: &str,
+) -> Result<Option<i32>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<i32>()
+        .map_err(|_| format!("{field} must be an integer from {min} to {max}"))?;
+    if !(min..=max).contains(&parsed) {
+        return Err(format!("{field} must be from {min} to {max}"));
+    }
+    Ok(Some(parsed))
+}
+
 fn deserialize_optional_stringish<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -4185,5 +4397,24 @@ fn size_display(bytes: i64) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_merge_optional_i32;
+
+    #[test]
+    fn merge_numbers_preserve_empty_values_and_reject_invalid_input() {
+        assert_eq!(
+            parse_merge_optional_i32(None, 1, 9999, "track number").unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_merge_optional_i32(Some(" 38 "), 1, 9999, "track number").unwrap(),
+            Some(38)
+        );
+        assert!(parse_merge_optional_i32(Some("0"), 1, 9999, "track number").is_err());
+        assert!(parse_merge_optional_i32(Some("nope"), 1, 9999, "track number").is_err());
     }
 }

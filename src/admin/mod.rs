@@ -711,6 +711,34 @@ impl App for AdminApp {
                 },
                 "admin_v2_library_bulk",
             ),
+            Route::with_handler_and_name(
+                "/v2/api/library/releases/merge",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    cot::router::method::post(
+                        move |session: Session,
+                              db: Database,
+                              json: Json<v2::MergeReleasesRequest>| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            async move {
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("admin pool")
+                                    })
+                                    .await;
+                                v2::merge_releases(session, db, pg_pool, json).await
+                            }
+                        },
+                    )
+                },
+                "admin_v2_library_releases_merge",
+            ),
             // -- Dashboard ----------------------------------------------------
             Route::with_handler_and_name(
                 "/",
