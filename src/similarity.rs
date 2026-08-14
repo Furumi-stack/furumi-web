@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
@@ -1195,6 +1196,23 @@ fn decode_mono_window(
     start_seconds: f64,
     length_seconds: Option<f64>,
 ) -> Result<Vec<f32>> {
+    match decode_mono_window_native(path, start_seconds, length_seconds) {
+        Ok(samples) => Ok(samples),
+        Err(native_error) => decode_mono_window_ffmpeg(path, start_seconds, length_seconds)
+            .with_context(|| {
+                format!(
+                    "native decoder failed for {} ({native_error:#}); FFmpeg fallback failed",
+                    path.display()
+                )
+            }),
+    }
+}
+
+fn decode_mono_window_native(
+    path: &Path,
+    start_seconds: f64,
+    length_seconds: Option<f64>,
+) -> Result<Vec<f32>> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut decoder =
         Decoder::try_from(file).with_context(|| format!("decoding {}", path.display()))?;
@@ -1227,6 +1245,64 @@ fn decode_mono_window(
         return Ok(mono);
     }
     Ok(resample_sinc(&mono, source_rate, SAMPLE_RATE))
+}
+
+fn decode_mono_window_ffmpeg(
+    path: &Path,
+    start_seconds: f64,
+    length_seconds: Option<f64>,
+) -> Result<Vec<f32>> {
+    let mut command = Command::new("ffmpeg");
+    command.arg("-v").arg("error").arg("-nostdin");
+    if start_seconds > 0.0 {
+        command.arg("-ss").arg(format!("{start_seconds:.6}"));
+    }
+    command.arg("-i").arg(path);
+    if let Some(length_seconds) = length_seconds {
+        command.arg("-t").arg(format!("{length_seconds:.6}"));
+    }
+    let output = command
+        .arg("-map")
+        .arg("0:a:0")
+        .arg("-vn")
+        .arg("-sn")
+        .arg("-dn")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg(SAMPLE_RATE.to_string())
+        .arg("-f")
+        .arg("f32le")
+        .arg("pipe:1")
+        .output()
+        .with_context(|| "starting FFmpeg; install FFmpeg to decode this audio format")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())
+            .unwrap_or("unknown FFmpeg error");
+        anyhow::bail!("FFmpeg exited with {}: {detail}", output.status);
+    }
+    anyhow::ensure!(
+        output
+            .stdout
+            .len()
+            .is_multiple_of(std::mem::size_of::<f32>()),
+        "FFmpeg returned a truncated f32le stream"
+    );
+    let samples: Vec<f32> = output
+        .stdout
+        .chunks_exact(std::mem::size_of::<f32>())
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("four-byte sample")))
+        .collect();
+    anyhow::ensure!(!samples.is_empty(), "FFmpeg decoded track is empty");
+    anyhow::ensure!(
+        samples.iter().all(|sample| sample.is_finite()),
+        "FFmpeg decoded non-finite samples"
+    );
+    Ok(samples)
 }
 
 fn resample_sinc(input: &[f32], source_rate: usize, target_rate: usize) -> Vec<f32> {
@@ -1457,5 +1533,37 @@ mod tests {
         let output = resample_sinc(&vec![0.25; 441], 44_100, 16_000);
         assert_eq!(output.len(), 160);
         assert!(output.iter().all(|value| (*value - 0.25).abs() < 1e-6));
+    }
+
+    #[test]
+    fn decodes_opus_with_ffmpeg_fallback() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+        let path = std::env::temp_dir().join(format!(
+            "furumusic-similarity-{}.opus",
+            uuid::Uuid::new_v4()
+        ));
+        let generated = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=0.25",
+                "-c:a",
+                "libopus",
+                "-y",
+            ])
+            .arg(&path)
+            .status()
+            .expect("start FFmpeg fixture generation");
+        assert!(generated.success(), "generate Opus fixture");
+
+        let decoded = decode_mono_window(&path, 0.0, None).expect("decode Opus with fallback");
+        let _ = std::fs::remove_file(&path);
+        assert!(decoded.len() >= SAMPLE_RATE / 5);
+        assert!(decoded.iter().all(|sample| sample.is_finite()));
     }
 }

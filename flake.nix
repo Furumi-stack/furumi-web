@@ -28,7 +28,10 @@
 
           buildInputs = with pkgs; [
             cacert
+            deno
+            ffmpeg-headless
             openssl
+            yt-dlp
           ] ++ lib.optionals stdenv.isDarwin [ libiconv ];
 
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";

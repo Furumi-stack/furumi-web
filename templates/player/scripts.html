@@ -136,6 +136,42 @@ const T = {
     openTorrentFailed: "{{ t.player_open_torrent_failed }}",
     deleteTorrentFailed: "{{ t.player_delete_torrent_failed }}",
     loadAiQueueFailed: "{{ t.player_load_ai_queue_failed }}",
+    fileUploadLoadFailed: "{{ t.player_file_upload_load_failed }}",
+    removeFileUploadConfirm: "{{ t.player_remove_file_upload_confirm }}",
+    fileUploadHistoryRemoved: "{{ t.player_file_upload_history_removed }}",
+    fileUploadHistoryRemoveFailed: "{{ t.player_file_upload_history_remove_failed }}",
+    noSupportedAudioFiles: "{{ t.player_no_supported_audio_files }}",
+    youtubeQueued: "{{ t.player_youtube_queued }}",
+    youtubeResolving: "{{ t.player_youtube_resolving }}",
+    youtubePostprocessing: "{{ t.player_youtube_postprocessing }}",
+    youtubeAwaitingAi: "{{ t.player_youtube_awaiting_ai }}",
+    youtubeAiProcessing: "{{ t.player_youtube_ai_processing }}",
+    youtubeNeedsReview: "{{ t.player_youtube_needs_review }}",
+    youtubeCompleteWithErrors: "{{ t.player_youtube_complete_with_errors }}",
+    youtubeSkipped: "{{ t.player_youtube_skipped }}",
+    youtubeStarting: "{{ t.player_youtube_starting }}",
+    youtubeStarted: "{{ t.player_youtube_started }}",
+    youtubeLoadFailed: "{{ t.player_youtube_load_failed }}",
+    youtubeStartFailed: "{{ t.player_youtube_start_failed }}",
+    youtubeRetryFailed: "{{ t.player_youtube_retry_failed }}",
+    youtubeDeleteFailed: "{{ t.player_youtube_delete_failed }}",
+    youtubeDeleteConfirm: "{{ t.player_youtube_delete_confirm }}",
+    youtubeParse: "{{ t.player_youtube_parse }}",
+    youtubeParsing: "{{ t.player_youtube_parsing }}",
+    youtubePreviewFailed: "{{ t.player_youtube_preview_failed }}",
+    youtubeSelectAll: "{{ t.player_youtube_select_all }}",
+    youtubeClearSelection: "{{ t.player_youtube_clear_selection }}",
+    youtubeSelectedCount: "{{ t.player_youtube_selected_count }}",
+    youtubeCancelled: "{{ t.player_youtube_cancelled }}",
+    youtubeStopConfirm: "{{ t.player_youtube_stop_confirm }}",
+    youtubeStopping: "{{ t.player_youtube_stopping }}",
+    youtubeStopped: "{{ t.player_youtube_stopped }}",
+    youtubeStopFailed: "{{ t.player_youtube_stop_failed }}",
+    youtubeVideo: "{{ t.player_youtube_video }}",
+    youtubePlaylist: "{{ t.player_youtube_playlist }}",
+    youtubeItems: "{{ t.player_youtube_items }}",
+    youtubeErrors: "{{ t.player_youtube_errors }}",
+    chapters: "{{ t.player_chapters }}",
     deletePlaylistConfirm: "{{ t.player_delete_playlist_confirm }}",
     albums: "{{ t.player_albums }}",
     eps: "{{ t.player_eps }}",
@@ -4568,8 +4604,21 @@ document.addEventListener('alpine:init', () => {
     // -----------------------------------------------------------------------
     Alpine.store('torrents', {
         modal: false,
+        sourceTab: 'youtube',
+        youtubeUrl: '',
+        youtubePreview: null,
+        youtubePreviewSelected: new Set(),
+        youtubePreviewLoading: false,
+        youtubeJobs: [],
+        youtubeLoading: false,
+        youtubeSubmitting: false,
+        youtubeCancellingIds: new Set(),
         file: null,
         localFiles: [],
+        localFilesDragging: false,
+        localFilesUploading: false,
+        localUploadHistory: [],
+        localUploadHistoryLoading: false,
         magnet: '',
         sessions: [],
         loadingSessions: false,
@@ -4590,7 +4639,6 @@ document.addEventListener('alpine:init', () => {
         loadingAgentStatus: false,
         uploadProgress: 0,
         uploadProgressText: '',
-        activeTab: 'import',
         uploadTracks: [],
         uploadReleases: [],
         uploadPending: [],
@@ -4626,9 +4674,12 @@ document.addEventListener('alpine:init', () => {
             this.modal = true;
             this.message = '';
             this.error = false;
-            this.loadSessions();
+            if (this.sourceTab === 'youtube') this.loadYoutubeJobs();
+            else if (this.sourceTab === 'uploads') this.loadUploads();
+            else if (this.sourceTab === 'files') this.loadLocalUploadHistory();
+            else this.loadSessions();
+            if (this.sourceTab !== 'uploads') this.loadUploads({ silent: true });
             this.loadAgentStatus();
-            if (this.activeTab === 'uploads') this.loadUploads();
             this._startRefresh();
         },
 
@@ -4648,16 +4699,324 @@ document.addEventListener('alpine:init', () => {
             return this.workspaceMode === 'new';
         },
 
-        showImportTab() {
-            this.activeTab = 'import';
+        showSourceTab(tab) {
+            this.sourceTab = ['youtube', 'torrents', 'files', 'uploads'].includes(tab) ? tab : 'youtube';
             this._setMessage('');
+            if (this.sourceTab === 'youtube') this.loadYoutubeJobs();
+            else if (this.sourceTab === 'uploads') {
+                this._stopPoll();
+                this.loadUploads();
+            }
+            else if (this.sourceTab === 'files') {
+                this._stopPoll();
+                this.loadLocalUploadHistory();
+            }
+            else this.loadSessions();
         },
 
-        showUploadsTab() {
-            this.activeTab = 'uploads';
-            this._stopPoll();
-            this._setMessage('');
-            this.loadUploads();
+        async loadYoutubeJobs({ silent = false } = {}) {
+            if (!silent) this.youtubeLoading = true;
+            try {
+                const res = await fetch('/api/player/youtube');
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.youtubeLoadFailed);
+                this.youtubeJobs = Array.isArray(data) ? data : [];
+            } catch (err) {
+                if (!silent) this._setMessage(err.message || T.youtubeLoadFailed, true);
+            } finally {
+                if (!silent) this.youtubeLoading = false;
+            }
+        },
+
+        clearYoutubePreview() {
+            this.youtubePreview = null;
+            this.youtubePreviewSelected = new Set();
+        },
+
+        async previewYoutubeUrl() {
+            const url = String(this.youtubeUrl || '').trim();
+            if (!url || this.youtubePreviewLoading || this.youtubeSubmitting) return;
+            this.youtubePreviewLoading = true;
+            this.clearYoutubePreview();
+            this._setMessage(T.youtubeParsing);
+            try {
+                const res = await fetch('/api/player/youtube/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url }),
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.youtubePreviewFailed);
+                const items = Array.isArray(data?.items) ? data.items : [];
+                if (!items.length) throw new Error(T.youtubePreviewFailed);
+                if (String(this.youtubeUrl || '').trim() !== url) return;
+                this.youtubePreview = { ...data, items };
+                this.youtubePreviewSelected = new Set(
+                    items.filter(item => item.selected_by_default).map(item => item.source_id)
+                );
+                this._setMessage('');
+            } catch (err) {
+                this._setMessage(err.message || T.youtubePreviewFailed, true);
+            } finally {
+                this.youtubePreviewLoading = false;
+            }
+        },
+
+        youtubePreviewIsSelected(sourceId) {
+            return this.youtubePreviewSelected.has(sourceId);
+        },
+
+        toggleYoutubePreviewItem(sourceId) {
+            const selected = new Set(this.youtubePreviewSelected);
+            if (selected.has(sourceId)) selected.delete(sourceId);
+            else selected.add(sourceId);
+            this.youtubePreviewSelected = selected;
+        },
+
+        selectAllYoutubePreview() {
+            const items = Array.isArray(this.youtubePreview?.items) ? this.youtubePreview.items : [];
+            this.youtubePreviewSelected = new Set(items.map(item => item.source_id));
+        },
+
+        clearYoutubePreviewSelection() {
+            this.youtubePreviewSelected = new Set();
+        },
+
+        youtubePreviewSelectedCount() {
+            return this.youtubePreviewSelected.size;
+        },
+
+        async startYoutubeDownload() {
+            const preview = this.youtubePreview;
+            const selectedSourceIds = Array.from(this.youtubePreviewSelected);
+            if (!preview || !selectedSourceIds.length || this.youtubeSubmitting) return;
+            this.youtubeSubmitting = true;
+            this._setMessage(T.youtubeStarting);
+            try {
+                const res = await fetch('/api/player/youtube/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: preview.source_url,
+                        selected_source_ids: selectedSourceIds,
+                    }),
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.youtubeStartFailed);
+                this.youtubeJobs = [data, ...this.youtubeJobs.filter(job => job.id !== data.id)];
+                this.youtubeUrl = '';
+                this.clearYoutubePreview();
+                this._setMessage(T.youtubeStarted);
+            } catch (err) {
+                this._setMessage(err.message || T.youtubeStartFailed, true);
+            } finally {
+                this.youtubeSubmitting = false;
+            }
+        },
+
+        async cancelYoutubeJob(id) {
+            if (this.youtubeCancellingIds.has(id) || !confirm(T.youtubeStopConfirm)) return;
+            const cancelling = new Set(this.youtubeCancellingIds);
+            cancelling.add(id);
+            this.youtubeCancellingIds = cancelling;
+            this._setMessage(T.youtubeStopping);
+            try {
+                const res = await fetch(`/api/player/youtube/${encodeURIComponent(id)}/cancel`, {
+                    method: 'POST',
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.youtubeStopFailed);
+                this.youtubeJobs = this.youtubeJobs.map(job => job.id === id ? data : job);
+                this._setMessage(T.youtubeStopped);
+            } catch (err) {
+                this._setMessage(err.message || T.youtubeStopFailed, true);
+            } finally {
+                const remaining = new Set(this.youtubeCancellingIds);
+                remaining.delete(id);
+                this.youtubeCancellingIds = remaining;
+            }
+        },
+
+        async retryYoutubeJob(id) {
+            try {
+                const res = await fetch(`/api/player/youtube/${encodeURIComponent(id)}/retry`, {
+                    method: 'POST',
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.youtubeRetryFailed);
+                this.youtubeJobs = this.youtubeJobs.map(job => job.id === id ? data : job);
+                this._setMessage(T.youtubeStarted);
+            } catch (err) {
+                this._setMessage(err.message || T.youtubeRetryFailed, true);
+            }
+        },
+
+        async removeYoutubeJob(id) {
+            if (!confirm(T.youtubeDeleteConfirm)) return;
+            try {
+                const res = await fetch(`/api/player/youtube/${encodeURIComponent(id)}`, {
+                    method: 'DELETE',
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.youtubeDeleteFailed);
+                this.youtubeJobs = this.youtubeJobs.filter(job => job.id !== id);
+                this._setMessage('');
+            } catch (err) {
+                this._setMessage(err.message || T.youtubeDeleteFailed, true);
+            }
+        },
+
+        openYoutubeReviews() {
+            this.showSourceTab('uploads');
+        },
+
+        youtubeActiveCount() {
+            return this.youtubeJobs.filter(job => !this.youtubeJobTerminal(job.status)).length;
+        },
+
+        youtubeSummary() {
+            const active = this.youtubeActiveCount();
+            return active > 0 ? active + ' ' + T.active : T.clientIdle;
+        },
+
+        youtubeStatusLabel(status) {
+            const labels = {
+                queued: T.youtubeQueued,
+                resolving: T.youtubeResolving,
+                downloading: T.downloading,
+                postprocessing: T.youtubePostprocessing,
+                awaiting_ai: T.youtubeAwaitingAi,
+                ai_processing: T.youtubeAiProcessing,
+                needs_review: T.youtubeNeedsReview,
+                complete: T.completed,
+                complete_with_errors: T.youtubeCompleteWithErrors,
+                failed: T.failed,
+                ai_failed: T.failed,
+                skipped: T.youtubeSkipped,
+                cancelled: T.youtubeCancelled,
+                uploading: T.uploadingFiles,
+            };
+            return labels[String(status || '').toLowerCase()] || status || T.unknown;
+        },
+
+        youtubeStatusClass(status) {
+            const classes = {
+                queued: 'status-preview',
+                resolving: 'status-resolving',
+                downloading: 'status-downloading',
+                postprocessing: 'status-moving',
+                awaiting_ai: 'status-preview',
+                ai_processing: 'status-moving',
+                needs_review: 'status-paused',
+                complete: 'status-completed',
+                complete_with_errors: 'status-failed',
+                failed: 'status-failed',
+                ai_failed: 'status-failed',
+                skipped: 'status-completed',
+                cancelled: 'status-paused',
+                uploading: 'status-downloading',
+            };
+            return classes[String(status || '').toLowerCase()] || 'status-preview';
+        },
+
+        youtubeIsError(status) {
+            return ['failed', 'ai_failed'].includes(String(status || '').toLowerCase());
+        },
+
+        youtubeJobTerminal(status) {
+            return ['complete', 'complete_with_errors', 'failed', 'needs_review', 'cancelled'].includes(String(status || '').toLowerCase());
+        },
+
+        youtubeItemTerminal(status) {
+            return ['complete', 'skipped', 'needs_review', 'failed', 'ai_failed', 'cancelled'].includes(String(status || '').toLowerCase());
+        },
+
+        youtubeJobCancellable(status) {
+            return ['queued', 'resolving', 'downloading', 'postprocessing'].includes(String(status || '').toLowerCase());
+        },
+
+        youtubeJobMeta(job) {
+            const kind = job.source_kind === 'playlist' ? T.youtubePlaylist : T.youtubeVideo;
+            const parts = [kind];
+            if (Number(job.total_items || 0) > 0) parts.push(Number(job.total_items) + ' ' + T.youtubeItems);
+            if (Number(job.failed_items || 0) > 0) parts.push(Number(job.failed_items) + ' ' + T.youtubeErrors);
+            return parts.join(' · ');
+        },
+
+        youtubeItemMeta(item) {
+            const parts = [];
+            if (Number(item.chapter_count || 0) > 0) parts.push(Number(item.chapter_count) + ' ' + T.chapters);
+            if (Number(item.audio_file_count || 0) > 0) parts.push(Number(item.audio_file_count) + ' ' + T.trackWord);
+            if (Number(item.total_bytes || 0) > 0) parts.push(this.bytes(item.total_bytes));
+            return parts.join(' · ');
+        },
+
+        youtubeDownloadMeta(item) {
+            const downloaded = this.bytes(item.downloaded_bytes || 0);
+            const total = Number(item.total_bytes || 0) > 0 ? ' / ' + this.bytes(item.total_bytes) : '';
+            const speed = Number(item.speed_bytes_per_sec || 0) > 0 ? ' · ' + this.bytes(item.speed_bytes_per_sec) + '/s' : '';
+            const eta = Number(item.eta_seconds || 0) > 0 ? ' · ' + T.eta + ' ' + formatTime(item.eta_seconds) : '';
+            return downloaded + total + speed + eta;
+        },
+
+        youtubeItemProgress(item) {
+            const status = String(item?.status || 'queued').toLowerCase();
+            if (status === 'cancelled') {
+                const downloaded = Number(item.progress_percent || 0);
+                return downloaded > 0 ? Math.max(5, Math.min(55, 5 + downloaded * 0.5)) : 0;
+            }
+            if (this.youtubeItemTerminal(status)) return 100;
+            if (status === 'downloading') return 5 + Math.max(0, Math.min(100, Number(item.progress_percent || 0))) * 0.5;
+            if (status === 'postprocessing') return 62;
+            if (status === 'awaiting_ai') return 75;
+            if (status === 'ai_processing') return 88;
+            return 2;
+        },
+
+        youtubeJobProgress(job) {
+            const items = Array.isArray(job?.items) ? job.items : [];
+            if (!items.length) return job?.status === 'failed' ? 100 : 2;
+            return Math.round(items.reduce((sum, item) => sum + this.youtubeItemProgress(item), 0) / items.length);
+        },
+
+        youtubeJobProgressText(job) {
+            const items = Array.isArray(job?.items) ? job.items : [];
+            if (!items.length) return this.youtubeStatusLabel(job?.status);
+            const done = items.filter(item => this.youtubeItemTerminal(item.status) && item.status !== 'cancelled').length;
+            return done + ' ' + T.ofWord + ' ' + items.length;
+        },
+
+        youtubeStage(item) {
+            const status = String(item?.status || 'queued').toLowerCase();
+            if (status === 'cancelled') {
+                if (Number(item?.progress_percent || 0) >= 99) return 2;
+                return Number(item?.progress_percent || 0) > 0 ? 1 : 0;
+            }
+            if (status === 'downloading') return 1;
+            if (status === 'postprocessing') return 2;
+            if (['awaiting_ai', 'ai_processing', 'ai_failed'].includes(status)) return 3;
+            if (status === 'failed') return Number(item?.progress_percent || 0) >= 99 ? 2 : 1;
+            if (this.youtubeItemTerminal(status)) return 4;
+            return 0;
+        },
+
+        youtubeStepClass(item, step) {
+            const status = String(item?.status || '').toLowerCase();
+            const stage = this.youtubeStage(item);
+            if (status === 'cancelled') {
+                if (step < stage) return 'done';
+                if (step === stage) return 'cancelled';
+                return '';
+            }
+            if (this.youtubeIsError(status) && step === stage) return 'failed';
+            if (['complete', 'skipped'].includes(status)) return 'done';
+            if (step < stage) return 'done';
+            if (step === stage) return 'active';
+            return '';
+        },
+
+        youtubeFinalStepLabel(item) {
+            return this.youtubeStatusLabel(item?.status === 'complete' ? 'complete' : item?.status);
         },
 
         addNew() {
@@ -5329,8 +5688,14 @@ document.addEventListener('alpine:init', () => {
             this._stopRefresh();
             this._refreshTimer = setInterval(() => {
                 if (!this.modal) return;
-                if (this.activeTab === 'uploads') {
+                if (this.sourceTab === 'youtube') {
+                    this.loadYoutubeJobs({ silent: true });
+                }
+                else if (this.sourceTab === 'uploads') {
                     this.loadUploads({ silent: true });
+                }
+                else if (this.sourceTab === 'files') {
+                    this.loadLocalUploadHistory({ silent: true });
                 }
                 else this.loadSessions();
                 this.loadAgentStatus();
@@ -5469,7 +5834,36 @@ document.addEventListener('alpine:init', () => {
         },
 
         setLocalFiles(files) {
-            this.localFiles = Array.from(files || []);
+            const supported = new Set(['mp3', 'flac', 'wav', 'm4a', 'ogg', 'opus', 'aac']);
+            const selected = Array.from(files || []).filter(file => {
+                const extension = String(file.name || '').split('.').pop().toLowerCase();
+                return String(file.type || '').startsWith('audio/') || supported.has(extension);
+            });
+            this.localFiles = selected;
+            this.localFilesDragging = false;
+            this.uploadProgress = 0;
+            this.uploadProgressText = '';
+            if (!selected.length && Array.from(files || []).length) {
+                this._setMessage(T.noSupportedAudioFiles, true);
+            } else {
+                this._setMessage('');
+            }
+        },
+
+        clearLocalFiles() {
+            if (this.localFilesUploading) return;
+            this.localFiles = [];
+            this.uploadProgress = 0;
+            this.uploadProgressText = '';
+        },
+
+        leaveLocalFileDrop(event) {
+            if (!event.currentTarget.contains(event.relatedTarget)) this.localFilesDragging = false;
+        },
+
+        dropLocalFiles(event) {
+            this.localFilesDragging = false;
+            this.setLocalFiles(event?.dataTransfer?.files || []);
         },
 
         localUploadBytes() {
@@ -5488,6 +5882,7 @@ document.addEventListener('alpine:init', () => {
                 xhr.open('POST', '/api/player/uploads/local');
                 xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
                 xhr.setRequestHeader('X-Furumusic-Filename', encodeURIComponent(file.name || 'upload.mp3'));
+                xhr.setRequestHeader('X-Furumusic-Upload-Id', crypto.randomUUID());
                 xhr.upload.onprogress = event => {
                     if (!event.lengthComputable || totalBytes <= 0) return;
                     const loaded = loadedBefore + event.loaded;
@@ -5506,38 +5901,75 @@ document.addEventListener('alpine:init', () => {
         },
 
         async uploadLocalFiles() {
-            if (this.loading || this.localFiles.length === 0) return;
-            this.loading = true;
+            if (this.localFilesUploading || this.localFiles.length === 0) return;
+            this.localFilesUploading = true;
             this.uploadProgress = 0;
             this.uploadProgressText = '0.0%';
             this._setMessage(T.uploadingFiles);
             const totalBytes = this.localUploadBytes();
             let loadedBefore = 0;
             try {
-                for (const file of this.localFiles) {
-                    await this.uploadLocalFile(file, loadedBefore, totalBytes);
+                for (const file of [...this.localFiles]) {
+                    const data = await this.uploadLocalFile(file, loadedBefore, totalBytes);
+                    if (data?.upload) {
+                        this.localUploadHistory = [
+                            data.upload,
+                            ...this.localUploadHistory.filter(item => item.id !== data.upload.id),
+                        ];
+                    }
                     loadedBefore += Number(file.size || 0);
+                    this.localFiles = this.localFiles.filter(item => item !== file);
                     this.uploadProgress = totalBytes > 0 ? Math.min(100, loadedBefore / totalBytes * 100) : 100;
                     this.uploadProgressText = this.uploadProgress.toFixed(1) + '%';
                 }
-                this.localFiles = [];
                 this.uploadProgress = 100;
                 this.uploadProgressText = '100.0%';
                 this._setMessage(T.uploadComplete);
                 await this.loadAgentStatus();
+                await this.loadLocalUploadHistory({ silent: true });
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
-                this.loading = false;
+                this.localFilesUploading = false;
             }
+        },
+
+        async loadLocalUploadHistory({ silent = false } = {}) {
+            if (!silent) this.localUploadHistoryLoading = true;
+            try {
+                const res = await fetch('/api/player/uploads/local/history');
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.fileUploadLoadFailed);
+                this.localUploadHistory = Array.isArray(data) ? data : [];
+            } catch (err) {
+                if (!silent) this._setMessage(err.message || T.fileUploadLoadFailed, true);
+            } finally {
+                if (!silent) this.localUploadHistoryLoading = false;
+            }
+        },
+
+        async removeLocalUploadHistory(id) {
+            if (!confirm(T.removeFileUploadConfirm)) return;
+            try {
+                const res = await fetch(`/api/player/uploads/local/history/${encodeURIComponent(id)}`, {
+                    method: 'DELETE',
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || T.fileUploadHistoryRemoveFailed);
+                this.localUploadHistory = this.localUploadHistory.filter(item => item.id !== id);
+                this._setMessage(T.fileUploadHistoryRemoved);
+            } catch (err) {
+                this._setMessage(err.message || T.fileUploadHistoryRemoveFailed, true);
+            }
+        },
+
+        formatUploadDate(value) {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? String(value || '') : date.toLocaleString();
         },
 
         async preview() {
             if (this.loading) return;
-            if (this.localFiles.length > 0) {
-                await this.uploadLocalFiles();
-                return;
-            }
             const magnet = this.magnet.trim();
             if (!this.file && !magnet) {
                 this._setMessage(T.chooseTorrent, true);

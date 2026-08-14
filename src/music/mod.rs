@@ -2569,6 +2569,152 @@ pub mod db_migrations {
             &[Operation::custom(add_similarity_routing_signature).build()];
     }
 
+    // -- M0045: persistent YouTube download jobs ----------------------------
+
+    #[cot::db::migrations::migration_op]
+    async fn create_youtube_downloads(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__youtube_download (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    source_kind VARCHAR(32) NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    total_items INTEGER NOT NULL DEFAULT 0,
+                    completed_items INTEGER NOT NULL DEFAULT 0,
+                    failed_items INTEGER NOT NULL DEFAULT 0,
+                    review_items INTEGER NOT NULL DEFAULT 0,
+                    error TEXT,
+                    created_at VARCHAR(32) NOT NULL,
+                    updated_at VARCHAR(32) NOT NULL,
+                    completed_at VARCHAR(32)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__youtube_download_item (
+                    id VARCHAR(36) PRIMARY KEY,
+                    job_id VARCHAR(36) NOT NULL REFERENCES furumusic__youtube_download(id) ON DELETE CASCADE,
+                    source_id VARCHAR(128) NOT NULL,
+                    source_url TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    playlist_index INTEGER NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    progress_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    downloaded_bytes BIGINT NOT NULL DEFAULT 0,
+                    total_bytes BIGINT,
+                    speed_bytes_per_sec BIGINT,
+                    eta_seconds BIGINT,
+                    chapter_count INTEGER NOT NULL DEFAULT 0,
+                    audio_file_count INTEGER NOT NULL DEFAULT 0,
+                    inbox_path TEXT,
+                    error TEXT,
+                    created_at VARCHAR(32) NOT NULL,
+                    updated_at VARCHAR(32) NOT NULL,
+                    completed_at VARCHAR(32),
+                    UNIQUE(job_id, source_id)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_download_user_updated
+                   ON furumusic__youtube_download (user_id, updated_at DESC)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_download_user_status
+                   ON furumusic__youtube_download (user_id, status)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_download_item_job_status
+                   ON furumusic__youtube_download_item (job_id, status, playlist_index)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_download_item_source
+                   ON furumusic__youtube_download_item (source_id)",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0045CreateYouTubeDownloads;
+
+    impl migrations::Migration for M0045CreateYouTubeDownloads {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0045_create_youtube_downloads";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0044_add_similarity_routing_signature",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_youtube_downloads).build()];
+    }
+
+    // -- M0046: persistent direct-file upload history -----------------------
+
+    #[cot::db::migrations::migration_op]
+    async fn create_local_upload_history(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__local_upload (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    filename TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL DEFAULT 0,
+                    status VARCHAR(32) NOT NULL,
+                    inbox_path TEXT NOT NULL,
+                    error TEXT,
+                    created_at VARCHAR(32) NOT NULL,
+                    updated_at VARCHAR(32) NOT NULL,
+                    completed_at VARCHAR(32)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_local_upload_user_updated
+                   ON furumusic__local_upload (user_id, updated_at DESC)",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_local_upload_user_status
+                   ON furumusic__local_upload (user_id, status)",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0046CreateLocalUploadHistory;
+
+    impl migrations::Migration for M0046CreateLocalUploadHistory {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0046_create_local_upload_history";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0045_create_youtube_downloads",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_local_upload_history).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2604,5 +2750,7 @@ pub mod db_migrations {
         &M0042RepairLegacyListenQualification,
         &M0043CreateSimilarityEmbeddings,
         &M0044AddSimilarityRoutingSignature,
+        &M0045CreateYouTubeDownloads,
+        &M0046CreateLocalUploadHistory,
     ];
 }

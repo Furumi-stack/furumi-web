@@ -21,8 +21,10 @@ use crate::auth;
 use crate::config::AppConfig;
 use crate::i18n::Translations;
 use crate::lastfm::{LastfmClient, LastfmCredentials, LastfmTrackPayload};
+use crate::local_uploads::LocalUploadDto;
 use crate::scheduler::SchedulerHandle;
 use crate::torrents::{TorrentPreviewRequest, TorrentService, TorrentStartRequest};
+use crate::youtube::{YouTubePreviewRequest, YouTubeService, YouTubeStartRequest};
 
 mod dto;
 mod helpers;
@@ -50,8 +52,7 @@ fn json_error(status: StatusCode, message: &str) -> cot::response::Response {
 #[derive(serde::Serialize)]
 struct LocalUploadResponse {
     ok: bool,
-    filename: String,
-    size: u64,
+    upload: LocalUploadDto,
 }
 
 const PLAYER_DEVICE_TTL_MS: i64 = 30_000;
@@ -4830,6 +4831,7 @@ async fn local_upload_handler(
     session: Session,
     db: Database,
     config: AppConfig,
+    pool: &sqlx::PgPool,
     scheduler_handle: Arc<tokio::sync::OnceCell<Arc<SchedulerHandle>>>,
     request: cot::request::Request,
 ) -> cot::Result<cot::http::Response<Body>> {
@@ -4862,6 +4864,14 @@ async fn local_upload_handler(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "upload.mp3".to_string());
     let filename = sanitize_upload_filename(&original_name);
+    let upload_id_header = HeaderName::from_static("x-furumusic-upload-id");
+    let upload_id = request
+        .headers()
+        .get(upload_id_header)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| uuid::Uuid::parse_str(value.trim()).ok())
+        .unwrap_or_else(uuid::Uuid::new_v4)
+        .to_string();
 
     let bytes = request
         .into_body()
@@ -4878,14 +4888,53 @@ async fn local_upload_handler(
     let upload_dir = inbox_root
         .join("user_uploads")
         .join(user.id.to_string())
-        .join(format!("local-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&upload_dir)
-        .await
-        .map_err(|err| cot::Error::internal(err.to_string()))?;
+        .join(format!("local-{upload_id}"));
     let destination = upload_dir.join(&filename);
-    tokio::fs::write(&destination, &bytes)
-        .await
-        .map_err(|err| cot::Error::internal(err.to_string()))?;
+    let Some(inbox_path) =
+        crate::media_paths::path_for_root(&inbox_root.to_string_lossy(), &destination)
+    else {
+        return Ok(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "upload destination escaped agent_inbox_dir",
+        ));
+    };
+    if let Err(err) = crate::local_uploads::create(
+        pool,
+        &upload_id,
+        user.id,
+        &filename,
+        bytes.len() as u64,
+        &inbox_path,
+    )
+    .await
+    {
+        return Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()));
+    }
+
+    let temporary = upload_dir.join(format!(".{upload_id}.uploading"));
+    let write_result = async {
+        tokio::fs::create_dir_all(&upload_dir).await?;
+        tokio::fs::write(&temporary, &bytes).await?;
+        tokio::fs::rename(&temporary, &destination).await?;
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+    if let Err(err) = write_result {
+        let message = format!("could not save uploaded file: {err}");
+        let _ = tokio::fs::remove_dir_all(&upload_dir).await;
+        let _ = crate::local_uploads::mark_failed(pool, &upload_id, user.id, &message).await;
+        return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &message));
+    }
+
+    let upload = match crate::local_uploads::mark_queued(pool, &upload_id, user.id).await {
+        Ok(upload) => upload,
+        Err(err) => {
+            return Ok(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &err.to_string(),
+            ));
+        }
+    };
 
     if let Some(handle) = scheduler_handle.get() {
         let handle = Arc::clone(handle);
@@ -4896,12 +4945,39 @@ async fn local_upload_handler(
         });
     }
 
-    Json(LocalUploadResponse {
-        ok: true,
-        filename,
-        size: bytes.len() as u64,
-    })
-    .into_response()
+    Json(LocalUploadResponse { ok: true, upload }).into_response()
+}
+
+async fn local_upload_history_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    pool: &sqlx::PgPool,
+) -> cot::Result<cot::response::Response> {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    let (config, _) = AppConfig::load_with_db(&db).await;
+    match crate::local_uploads::list(pool, user.id, &config.agent_inbox_dir).await {
+        Ok(items) => Json(items).into_response(),
+        Err(err) => Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string())),
+    }
+}
+
+async fn local_upload_history_remove_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    pool: &sqlx::PgPool,
+    path: Path<PathStringId>,
+) -> cot::Result<cot::response::Response> {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    };
+    match crate::local_uploads::remove(pool, user.id, &path.0.id).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(err) => Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string())),
+    }
 }
 
 fn sanitize_upload_filename(value: &str) -> String {
@@ -8107,6 +8183,8 @@ impl App for PlayerApp {
         let pool: Arc<tokio::sync::OnceCell<sqlx::PgPool>> = Arc::new(tokio::sync::OnceCell::new());
         let torrent_service: Arc<tokio::sync::OnceCell<Arc<TorrentService>>> =
             Arc::new(tokio::sync::OnceCell::new());
+        let youtube_service: Arc<tokio::sync::OnceCell<Arc<YouTubeService>>> =
+            Arc::new(tokio::sync::OnceCell::new());
         let device_hub = Arc::clone(&self.device_hub);
 
         Router::with_urls([
@@ -8345,6 +8423,329 @@ impl App for PlayerApp {
                 },
                 "player_agent_queue",
             ),
+            // -- YouTube downloads --
+            Route::with_handler_and_name(
+                "/youtube/preview",
+                {
+                    let youtube_service = Arc::clone(&youtube_service);
+                    let scheduler_handle = Arc::clone(&self.scheduler_handle);
+                    post(
+                        move |auth_ctx: auth::AuthContext,
+                              session: Session,
+                              db: Database,
+                              json: Json<YouTubePreviewRequest>| {
+                            let youtube_service = Arc::clone(&youtube_service);
+                            let scheduler_handle = Arc::clone(&scheduler_handle);
+                            async move {
+                                if auth::get_request_user(&auth_ctx, &session, &db)
+                                    .await
+                                    .is_none()
+                                {
+                                    return Ok(json_error(
+                                        StatusCode::UNAUTHORIZED,
+                                        "not authenticated",
+                                    ));
+                                }
+                                let service = youtube_service
+                                    .get_or_init(|| async {
+                                        Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
+                                    })
+                                    .await;
+                                match service.preview(json.0).await {
+                                    Ok(preview) => Json(preview).into_response(),
+                                    Err(err) => {
+                                        Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
+                                    }
+                                }
+                            }
+                        },
+                    )
+                },
+                "player_youtube_preview",
+            ),
+            Route::with_handler_and_name(
+                "/youtube",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    let youtube_service = Arc::clone(&youtube_service);
+                    let scheduler_handle = Arc::clone(&self.scheduler_handle);
+                    get(
+                        move |auth_ctx: auth::AuthContext, session: Session, db: Database| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            let youtube_service = Arc::clone(&youtube_service);
+                            let scheduler_handle = Arc::clone(&scheduler_handle);
+                            async move {
+                                let Some(user) =
+                                    auth::get_request_user(&auth_ctx, &session, &db).await
+                                else {
+                                    return Ok(json_error(
+                                        StatusCode::UNAUTHORIZED,
+                                        "not authenticated",
+                                    ));
+                                };
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("player pool")
+                                    })
+                                    .await;
+                                let service = youtube_service
+                                    .get_or_init(|| async {
+                                        Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
+                                    })
+                                    .await;
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                match service
+                                    .list(pg_pool, user.id, &live_config.agent_inbox_dir)
+                                    .await
+                                {
+                                    Ok(items) => Json(items).into_response(),
+                                    Err(err) => {
+                                        Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
+                                    }
+                                }
+                            }
+                        },
+                    )
+                },
+                "player_youtube_list",
+            ),
+            Route::with_handler_and_name(
+                "/youtube/start",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    let youtube_service = Arc::clone(&youtube_service);
+                    let scheduler_handle = Arc::clone(&self.scheduler_handle);
+                    post(
+                        move |auth_ctx: auth::AuthContext,
+                              session: Session,
+                              db: Database,
+                              json: Json<YouTubeStartRequest>| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            let youtube_service = Arc::clone(&youtube_service);
+                            let scheduler_handle = Arc::clone(&scheduler_handle);
+                            async move {
+                                let Some(user) =
+                                    auth::get_request_user(&auth_ctx, &session, &db).await
+                                else {
+                                    return Ok(json_error(
+                                        StatusCode::UNAUTHORIZED,
+                                        "not authenticated",
+                                    ));
+                                };
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("player pool")
+                                    })
+                                    .await;
+                                let service = youtube_service
+                                    .get_or_init(|| async {
+                                        Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
+                                    })
+                                    .await;
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                match service
+                                    .start(
+                                        pg_pool,
+                                        user.id,
+                                        json.0,
+                                        &live_config.agent_inbox_dir,
+                                    )
+                                    .await
+                                {
+                                    Ok(job) => Json(job).into_response(),
+                                    Err(err) => {
+                                        Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
+                                    }
+                                }
+                            }
+                        },
+                    )
+                },
+                "player_youtube_start",
+            ),
+            Route::with_handler_and_name(
+                "/youtube/{id}/retry",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    let youtube_service = Arc::clone(&youtube_service);
+                    let scheduler_handle = Arc::clone(&self.scheduler_handle);
+                    post(
+                        move |auth_ctx: auth::AuthContext,
+                              session: Session,
+                              db: Database,
+                              path: Path<PathStringId>| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            let youtube_service = Arc::clone(&youtube_service);
+                            let scheduler_handle = Arc::clone(&scheduler_handle);
+                            async move {
+                                let Some(user) =
+                                    auth::get_request_user(&auth_ctx, &session, &db).await
+                                else {
+                                    return Ok(json_error(
+                                        StatusCode::UNAUTHORIZED,
+                                        "not authenticated",
+                                    ));
+                                };
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("player pool")
+                                    })
+                                    .await;
+                                let service = youtube_service
+                                    .get_or_init(|| async {
+                                        Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
+                                    })
+                                    .await;
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                match service
+                                    .retry(
+                                        pg_pool,
+                                        user.id,
+                                        &path.0.id,
+                                        &live_config.agent_inbox_dir,
+                                    )
+                                    .await
+                                {
+                                    Ok(job) => Json(job).into_response(),
+                                    Err(err) => {
+                                        Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
+                                    }
+                                }
+                            }
+                        },
+                    )
+                },
+                "player_youtube_retry",
+            ),
+            Route::with_handler_and_name(
+                "/youtube/{id}/cancel",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    let youtube_service = Arc::clone(&youtube_service);
+                    let scheduler_handle = Arc::clone(&self.scheduler_handle);
+                    post(
+                        move |auth_ctx: auth::AuthContext,
+                              session: Session,
+                              db: Database,
+                              path: Path<PathStringId>| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            let youtube_service = Arc::clone(&youtube_service);
+                            let scheduler_handle = Arc::clone(&scheduler_handle);
+                            async move {
+                                let Some(user) =
+                                    auth::get_request_user(&auth_ctx, &session, &db).await
+                                else {
+                                    return Ok(json_error(
+                                        StatusCode::UNAUTHORIZED,
+                                        "not authenticated",
+                                    ));
+                                };
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("player pool")
+                                    })
+                                    .await;
+                                let service = youtube_service
+                                    .get_or_init(|| async {
+                                        Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
+                                    })
+                                    .await;
+                                match service.cancel(pg_pool, user.id, &path.0.id).await {
+                                    Ok(job) => Json(job).into_response(),
+                                    Err(err) => {
+                                        Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
+                                    }
+                                }
+                            }
+                        },
+                    )
+                },
+                "player_youtube_cancel",
+            ),
+            Route::with_handler_and_name(
+                "/youtube/{id}",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    let youtube_service = Arc::clone(&youtube_service);
+                    let scheduler_handle = Arc::clone(&self.scheduler_handle);
+                    delete(
+                        move |auth_ctx: auth::AuthContext,
+                              session: Session,
+                              db: Database,
+                              path: Path<PathStringId>| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            let youtube_service = Arc::clone(&youtube_service);
+                            let scheduler_handle = Arc::clone(&scheduler_handle);
+                            async move {
+                                let Some(user) =
+                                    auth::get_request_user(&auth_ctx, &session, &db).await
+                                else {
+                                    return Ok(json_error(
+                                        StatusCode::UNAUTHORIZED,
+                                        "not authenticated",
+                                    ));
+                                };
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("player pool")
+                                    })
+                                    .await;
+                                let service = youtube_service
+                                    .get_or_init(|| async {
+                                        Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
+                                    })
+                                    .await;
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                match service
+                                    .remove(
+                                        pg_pool,
+                                        user.id,
+                                        &path.0.id,
+                                        &live_config.agent_inbox_dir,
+                                    )
+                                    .await
+                                {
+                                    Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+                                    Err(err) => {
+                                        Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
+                                    }
+                                }
+                            }
+                        },
+                    )
+                },
+                "player_youtube_remove",
+            ),
             // -- Torrent import widget --
             Route::with_handler_and_name(
                 "/torrents",
@@ -8546,20 +8947,34 @@ impl App for PlayerApp {
             Route::with_handler_and_name(
                 "/uploads/local",
                 {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
                     let scheduler_handle = Arc::clone(&self.scheduler_handle);
                     post(
                         move |auth_ctx: auth::AuthContext,
                               session: Session,
                               db: Database,
                               request: cot::request::Request| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
                             let scheduler_handle = Arc::clone(&scheduler_handle);
                             async move {
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("player pool")
+                                    })
+                                    .await;
                                 let (live_config, _) = AppConfig::load_with_db(&db).await;
                                 local_upload_handler(
                                     auth_ctx,
                                     session,
                                     db,
                                     live_config,
+                                    pg_pool,
                                     scheduler_handle,
                                     request,
                                 )
@@ -8569,6 +8984,60 @@ impl App for PlayerApp {
                     )
                 },
                 "player_local_upload",
+            ),
+            Route::with_handler_and_name(
+                "/uploads/local/history",
+                get({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext, session: Session, db: Database| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("player pool")
+                                })
+                                .await;
+                            local_upload_history_handler(auth_ctx, session, db, pg_pool).await
+                        }
+                    }
+                }),
+                "player_local_upload_history",
+            ),
+            Route::with_handler_and_name(
+                "/uploads/local/history/{id}",
+                delete({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          path: Path<PathStringId>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("player pool")
+                                })
+                                .await;
+                            local_upload_history_remove_handler(
+                                auth_ctx, session, db, pg_pool, path,
+                            )
+                            .await
+                        }
+                    }
+                }),
+                "player_local_upload_history_remove",
             ),
             Route::with_handler_and_name(
                 "/uploads/tracks",

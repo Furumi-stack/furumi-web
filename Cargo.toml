@@ -1,6 +1,6 @@
 [package]
 name = "furumusic"
-version = "0.10.2"
+version = "0.10.3"
 edition = "2024"
 description = "Reusable web-app boilerplate: auth, OIDC/SSO, admin panel, user management, i18n, PostgreSQL"
 
@@ -13,7 +13,9 @@ schemars = { version = "0.9", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 openidconnect = "4.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
-tokio = { version = "1", features = ["sync", "fs", "io-util"] }
+tokio = { version = "1", features = ["sync", "fs", "io-util", "process"] }
+tokio-util = "0.7"
+libc = "0.2"
 async-stream = "0.3"
 bytes = "1"
 tower = "0.5"

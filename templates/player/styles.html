@@ -3415,6 +3415,487 @@ button.user-stat:hover {
     font-size: 11px;
 }
 
+.download-source-tabs {
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.download-source-tabs .torrent-tab-btn {
+    min-width: 112px;
+    justify-content: center;
+}
+
+.download-torrent-panel,
+.youtube-manager-panel {
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+.file-upload-panel {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.file-upload-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.file-drop-zone {
+    min-height: 176px;
+    flex: 0 0 auto;
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 0 !important;
+    padding: 24px;
+    border: 2px dashed var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-subdued);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.file-drop-zone:hover,
+.file-drop-zone.dragging {
+    border-color: var(--accent);
+    background: rgba(29,185,84,0.08);
+}
+
+.file-drop-zone.dragging {
+    transform: scale(0.995);
+}
+
+.file-drop-zone strong {
+    color: var(--text-primary);
+    font-size: 15px;
+}
+
+.file-drop-zone span {
+    font-size: 12px;
+}
+
+.file-drop-zone small {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.file-drop-icon {
+    width: 42px;
+    height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 4px;
+    border-radius: 50%;
+    background: rgba(29,185,84,0.14);
+    color: #7ee29e;
+}
+
+.file-drop-icon svg {
+    width: 23px;
+    height: 23px;
+}
+
+.file-upload-selection {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.file-upload-selection > div {
+    display: flex;
+    gap: 7px;
+}
+
+.file-upload-history-head {
+    margin-top: 2px;
+}
+
+.file-upload-history {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.file-upload-history-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 11px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+}
+
+.file-upload-history-main {
+    min-width: 0;
+}
+
+.file-upload-history-title {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-upload-history-meta {
+    margin-top: 3px;
+    color: var(--text-subdued);
+    font-size: 10px;
+}
+
+.download-torrent-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+.youtube-manager-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.youtube-download-form {
+    flex: 0 0 auto;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 9px;
+    background: var(--bg-primary);
+}
+
+.youtube-download-form-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.torrent-modal .youtube-download-form-row input[type="text"] {
+    margin: 0;
+}
+
+.youtube-download-hint {
+    margin: 8px 0 0;
+    color: var(--text-subdued);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.youtube-preview-card {
+    min-height: 0;
+    flex: 0 1 360px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid rgba(29,185,84,0.35);
+    border-radius: 9px;
+    background: var(--bg-primary);
+}
+
+.youtube-preview-head,
+.youtube-preview-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.youtube-preview-head h4 {
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.youtube-preview-head p {
+    margin: 0;
+    color: var(--text-subdued);
+    font-size: 11px;
+}
+
+.youtube-preview-head strong {
+    color: var(--text-secondary);
+}
+
+.youtube-preview-controls,
+.youtube-preview-footer > div {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 0 0 auto;
+}
+
+.youtube-preview-list {
+    min-height: 72px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-secondary);
+}
+
+.youtube-preview-row {
+    display: grid;
+    grid-template-columns: auto 30px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    min-height: 38px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.youtube-preview-row:last-child {
+    border-bottom: 0;
+}
+
+.youtube-preview-row:hover,
+.youtube-preview-row.selected {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.youtube-preview-row input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: #1db954;
+}
+
+.youtube-preview-item-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.youtube-preview-footer {
+    color: var(--text-subdued);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.youtube-download-list-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.youtube-download-list {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.youtube-empty-state {
+    min-height: 180px;
+    border: 1px dashed var(--border-color);
+    border-radius: 9px;
+}
+
+.youtube-job-card {
+    flex: 0 0 auto;
+    padding: 13px;
+    border: 1px solid var(--border-color);
+    border-radius: 9px;
+    background: var(--bg-primary);
+}
+
+.youtube-job-head,
+.youtube-item-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+}
+
+.youtube-job-heading,
+.youtube-item-main {
+    min-width: 0;
+}
+
+.youtube-job-title,
+.youtube-item-title {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.youtube-job-title { font-size: 14px; }
+.youtube-item-title { font-size: 12px; }
+
+.youtube-job-meta,
+.youtube-item-meta {
+    margin-top: 3px;
+    color: var(--text-subdued);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.youtube-job-progress {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    margin-top: 9px;
+    color: var(--text-subdued);
+    font-size: 11px;
+}
+
+.youtube-job-progress .torrent-session-progress,
+.youtube-item-download-progress .torrent-session-progress {
+    margin-top: 0;
+}
+
+.youtube-job-error,
+.youtube-item-error {
+    margin: 8px 0 0;
+    color: #ffb9b9;
+    font-size: 11px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.youtube-item-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-top: 11px;
+}
+
+.youtube-item-row {
+    padding: 10px;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 7px;
+    background: var(--bg-elevated);
+}
+
+.youtube-item-row.failed {
+    border-color: rgba(229,96,96,0.3);
+}
+
+.youtube-item-head {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+}
+
+.youtube-item-index {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 900;
+    text-align: center;
+}
+
+.youtube-item-download-progress {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    margin-top: 8px;
+    color: var(--text-subdued);
+    font-size: 10px;
+}
+
+.youtube-step-list {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 9px;
+}
+
+.youtube-step {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-muted);
+    font-size: 9px;
+    text-transform: uppercase;
+}
+
+.youtube-step i {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.youtube-step b {
+    min-width: 0;
+    overflow: hidden;
+    font: inherit;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.youtube-step.done { color: #9ff0b9; }
+.youtube-step.done i { border-color: var(--accent); background: var(--accent); }
+.youtube-step.active { color: #ffd78a; }
+.youtube-step.active i {
+    border-color: #f0b84d;
+    background: #f0b84d;
+    box-shadow: 0 0 0 3px rgba(240,184,77,0.13);
+}
+.youtube-step.failed { color: #ffb9b9; }
+.youtube-step.failed i { border-color: #e56060; background: #e56060; }
+.youtube-step.cancelled { color: #ffd78a; }
+.youtube-step.cancelled i { border-color: #f0b84d; background: #f0b84d; }
+
+.youtube-job-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 10px;
+}
+
 .torrent-manager-layout {
     display: grid;
     grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
@@ -6014,6 +6495,64 @@ button.user-stat:hover {
     .torrent-tabs {
         overflow-x: auto;
         padding-bottom: 2px;
+    }
+
+    .youtube-manager-panel {
+        overflow-y: auto;
+    }
+
+    .file-upload-panel {
+        overflow-y: auto;
+    }
+
+    .file-upload-history {
+        overflow: visible;
+    }
+
+    .file-upload-history-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .file-upload-history-row .modal-btn-danger {
+        grid-column: 1 / -1;
+        justify-self: start;
+    }
+
+    .file-upload-selection {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .youtube-download-form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .youtube-download-form-row .modal-btn {
+        justify-self: start;
+    }
+
+    .youtube-preview-card {
+        flex-basis: auto;
+        max-height: 330px;
+    }
+
+    .youtube-preview-head,
+    .youtube-preview-footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .youtube-preview-controls {
+        flex-wrap: wrap;
+    }
+
+    .youtube-download-list {
+        overflow: visible;
+    }
+
+    .youtube-step-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        row-gap: 7px;
     }
 
     .upload-manager-panel {

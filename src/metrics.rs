@@ -884,10 +884,18 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/api/player/lastfm/scrobble",
     "/api/player/agent-queue",
     "/api/player/offline/manifest",
+    "/api/player/youtube",
+    "/api/player/youtube/preview",
+    "/api/player/youtube/start",
+    "/api/player/youtube/{id}/retry",
+    "/api/player/youtube/{id}/cancel",
+    "/api/player/youtube/{id}",
+    "/api/player/uploads/local",
+    "/api/player/uploads/local/history",
+    "/api/player/uploads/local/history/{id}",
     "/api/player/torrents",
     "/api/player/torrents/session/{id}",
     "/api/player/torrents/preview",
-    "/api/player/uploads/local",
     "/api/player/uploads/tracks",
     "/api/player/uploads/tracks/{track_id}",
     "/api/player/uploads/bulk-tracks",
@@ -950,6 +958,22 @@ mod tests {
         assert_eq!(
             known_http_route("/share/release/42"),
             Some("/share/release/{id}")
+        );
+        assert_eq!(
+            known_http_route("/api/player/youtube/start"),
+            Some("/api/player/youtube/start")
+        );
+        assert_eq!(
+            known_http_route("/api/player/youtube/job-42/retry"),
+            Some("/api/player/youtube/{id}/retry")
+        );
+        assert_eq!(
+            known_http_route("/api/player/youtube/job-42/cancel"),
+            Some("/api/player/youtube/{id}/cancel")
+        );
+        assert_eq!(
+            known_http_route("/api/player/uploads/local/history/upload-42"),
+            Some("/api/player/uploads/local/history/{id}")
         );
     }
 

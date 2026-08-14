@@ -21,7 +21,7 @@ catalog and media files; the browser is only the player.
 
 - one shared library with separate user accounts;
 - a responsive web player with artists, releases, search, queue, and playlists;
-- direct file uploads and torrent or magnet imports;
+- direct file uploads and imports from YouTube, torrent files, or magnet links;
 - optional AI-assisted recognition and normalization of metadata;
 - password login or OIDC/SSO with group-based access control;
 - optional federation without a central catalog or search service;

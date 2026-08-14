@@ -7,6 +7,7 @@ mod federation;
 mod i18n;
 mod jobs;
 mod lastfm;
+mod local_uploads;
 mod media_paths;
 mod metrics;
 mod music;
@@ -16,6 +17,7 @@ mod scheduler;
 mod similarity;
 mod torrents;
 mod user;
+mod youtube;
 
 use std::sync::Arc;
 
