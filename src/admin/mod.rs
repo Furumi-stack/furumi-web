@@ -1069,19 +1069,34 @@ impl App for AdminApp {
                 ),
                 "admin_releases_edit",
             ),
-            Route::with_handler_and_name(
-                "/releases/{id}/delete",
-                cot::router::method::post(
-                    |session: Session, db: Database, path: Path<PathId>| async move {
-                        let admin = match auth::require_admin_or_redirect(&session, &db).await {
-                            Ok(u) => u,
-                            Err(resp) => return Ok(resp),
-                        };
-                        views::releases_delete(admin, &db, path.0.id).await
-                    },
-                ),
-                "admin_releases_delete",
-            ),
+            {
+                let pool = Arc::clone(&pool);
+                let pool_config = Arc::clone(&pool_config);
+                Route::with_handler_and_name(
+                    "/releases/{id}/delete",
+                    cot::router::method::post(move |session: Session, db: Database, path: Path<PathId>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let admin = match auth::require_admin_or_redirect(&session, &db).await {
+                                Ok(u) => u,
+                                Err(resp) => return Ok(resp),
+                            };
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("admin pool")
+                                })
+                                .await;
+                            views::releases_delete(admin, &db, pg_pool, path.0.id).await
+                        }
+                    }),
+                    "admin_releases_delete",
+                )
+            },
             // -- Media Files --------------------------------------------------
             Route::with_handler_and_name(
                 "/media-files",

@@ -1246,10 +1246,17 @@ async fn prepare_downloaded_folder(
     if tokio::fs::try_exists(&destination).await? {
         let existing = find_audio_files(&destination).await?;
         if existing.is_empty() {
-            bail!("YouTube inbox destination already exists without audio");
+            // A completed inbox import moves audio into the media library but
+            // may leave cover.jpg behind. Treat that directory as an orphan so
+            // deleting a release does not make the same source impossible to
+            // import again.
+            tokio::fs::remove_dir_all(&destination).await?;
+            tokio::fs::rename(stage, &destination).await?;
+            audio_files = find_audio_files(&destination).await?;
+        } else {
+            tokio::fs::remove_dir_all(stage).await?;
+            audio_files = existing;
         }
-        tokio::fs::remove_dir_all(stage).await?;
-        audio_files = existing;
     } else {
         tokio::fs::rename(stage, &destination).await?;
     }
@@ -1645,9 +1652,18 @@ async fn source_already_imported(
                FROM furumusic__youtube_download_item i
                JOIN furumusic__youtube_download j ON j.id = i.job_id
                WHERE j.user_id = $1 AND i.job_id <> $2 AND i.source_id = $3
-                 AND i.status IN (
-                     'queued', 'downloading', 'postprocessing', 'awaiting_ai',
-                     'ai_processing', 'complete', 'needs_review', 'skipped'
+                 AND (
+                     i.status IN (
+                         'queued', 'downloading', 'postprocessing', 'awaiting_ai',
+                         'ai_processing', 'needs_review'
+                     )
+                     OR (
+                         i.status IN ('complete', 'skipped')
+                         AND (SELECT COUNT(*)
+                                FROM furumusic__youtube_import_media imported
+                               WHERE imported.item_id = i.id) >= i.audio_file_count
+                         AND i.audio_file_count > 0
+                     )
                  )
            )"#,
     )
@@ -1669,9 +1685,18 @@ async fn already_imported_source_ids(
            FROM furumusic__youtube_download_item i
            JOIN furumusic__youtube_download j ON j.id = i.job_id
            WHERE j.user_id = $1 AND i.source_id = ANY($2)
-             AND i.status IN (
-                 'queued', 'downloading', 'postprocessing', 'awaiting_ai',
-                 'ai_processing', 'complete', 'needs_review', 'skipped'
+             AND (
+                 i.status IN (
+                     'queued', 'downloading', 'postprocessing', 'awaiting_ai',
+                     'ai_processing', 'needs_review'
+                 )
+                 OR (
+                     i.status IN ('complete', 'skipped')
+                     AND (SELECT COUNT(*)
+                            FROM furumusic__youtube_import_media imported
+                           WHERE imported.item_id = i.id) >= i.audio_file_count
+                     AND i.audio_file_count > 0
+                 )
              )"#,
     )
     .bind(user_id)

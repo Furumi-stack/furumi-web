@@ -1262,9 +1262,11 @@ pub async fn releases_update(
 pub async fn releases_delete(
     _admin: AuthenticatedUser,
     db: &Database,
+    pool: &sqlx::PgPool,
     release_id: i64,
 ) -> cot::Result<cot::http::Response<Body>> {
-    Release::delete_by_id(db, release_id)
+    let (config, _) = AppConfig::load_with_db(db).await;
+    crate::library_cleanup::delete_releases(pool, &[release_id], &config.agent_storage_dir)
         .await
         .map_err(|e| cot::Error::internal(format!("failed to delete release: {e}")))?;
     Ok(auth::redirect("/admin/releases"))

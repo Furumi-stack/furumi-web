@@ -988,23 +988,59 @@ pub async fn finalize_approved(
             })?
     };
 
-    let media_file = MediaFile::create(
-        db,
-        "audio",
-        &storage_path,
-        original_filename,
-        mime_type,
-        file_size,
-        sha256,
-        Some(ext),
-        audio_bitrate,
-        audio_sample_rate,
-        audio_bit_depth,
-        uploaded_by_user_id,
-        Some(uploader_name),
+    let reusable_media_id: Option<i64> = sqlx::query_scalar(
+        r#"SELECT media.id
+             FROM furumusic__media_file media
+            WHERE media.file_type = 'audio'
+              AND media.file_path = $1
+              AND media.sha256_hash = $2
+              AND NOT EXISTS (
+                    SELECT 1 FROM furumusic__track track
+                     WHERE track.audio_file_id = media.id OR track.cover_file_id = media.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1 FROM furumusic__release release
+                     WHERE release.cover_file_id = media.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1 FROM furumusic__artist artist
+                     WHERE artist.image_file_id = media.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1 FROM furumusic__playlist playlist
+                     WHERE playlist.cover_file_id = media.id
+              )
+            ORDER BY media.id
+            LIMIT 1"#,
     )
-    .await
-    .map_err(|e| anyhow::anyhow!("failed to create media file: {e}"))?;
+    .bind(&storage_path)
+    .bind(sha256)
+    .fetch_optional(pool)
+    .await?;
+    let media_file = if let Some(media_file_id) = reusable_media_id {
+        MediaFile::get_by_id(db, media_file_id)
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to load reusable media file: {error}"))?
+            .ok_or_else(|| anyhow::anyhow!("reusable media file disappeared"))?
+    } else {
+        MediaFile::create(
+            db,
+            "audio",
+            &storage_path,
+            original_filename,
+            mime_type,
+            file_size,
+            sha256,
+            Some(ext),
+            audio_bitrate,
+            audio_sample_rate,
+            audio_bit_depth,
+            uploaded_by_user_id,
+            Some(uploader_name),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create media file: {e}"))?
+    };
 
     let track = Track::create(
         db,
@@ -1019,6 +1055,35 @@ pub async fn finalize_approved(
     )
     .await
     .map_err(|e| anyhow::anyhow!("failed to create track: {e}"))?;
+
+    if let Err(error) = sqlx::query(
+        r#"INSERT INTO furumusic__youtube_import_media (item_id, media_file_id)
+           SELECT DISTINCT item.id, $1
+             FROM furumusic__youtube_download_item item
+             JOIN furumusic__pending_review review
+               ON item.inbox_path IS NOT NULL
+              AND (review.input_path = item.inbox_path
+                   OR left(review.input_path, length(item.inbox_path) + 1)
+                      = item.inbox_path || '/')
+            WHERE review.context_json IS NOT NULL
+              AND substring(
+                      review.context_json
+                      from '"sha256"[[:space:]]*:[[:space:]]*"([0-9a-fA-F]{64})"'
+                  ) = $2
+           ON CONFLICT (item_id, media_file_id) DO NOTHING"#,
+    )
+    .bind(media_file.id_val())
+    .bind(sha256)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(
+            track_id = track.id_val(),
+            media_file_id = media_file.id_val(),
+            error = %error,
+            "failed to link imported media to its YouTube download item"
+        );
+    }
 
     TrackArtist::create(db, track.id_val(), artist.id_val(), "main", 0)
         .await

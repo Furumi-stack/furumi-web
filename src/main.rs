@@ -7,6 +7,7 @@ mod federation;
 mod i18n;
 mod jobs;
 mod lastfm;
+mod library_cleanup;
 mod local_uploads;
 mod media_paths;
 mod metrics;

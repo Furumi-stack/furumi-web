@@ -2715,6 +2715,73 @@ pub mod db_migrations {
             &[Operation::custom(create_local_upload_history).build()];
     }
 
+    // -- M0047: durable YouTube item -> imported media links ---------------
+
+    #[cot::db::migrations::migration_op]
+    async fn create_youtube_import_media_links(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__youtube_import_media (
+                    item_id VARCHAR(36) NOT NULL
+                        REFERENCES furumusic__youtube_download_item(id) ON DELETE CASCADE,
+                    media_file_id BIGINT NOT NULL
+                        REFERENCES furumusic__media_file(id) ON DELETE CASCADE,
+                    PRIMARY KEY (item_id, media_file_id)
+                )",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_import_media_file
+                   ON furumusic__youtube_import_media (media_file_id)",
+            )
+            .await?;
+        // Backfill links for existing imports through the inbox review hash.
+        ctx.db
+            .raw(
+                "INSERT INTO furumusic__youtube_import_media (item_id, media_file_id)
+                 SELECT DISTINCT item.id, media.id
+                   FROM furumusic__youtube_download_item item
+                   JOIN furumusic__pending_review review
+                     ON item.inbox_path IS NOT NULL
+                    AND (review.input_path = item.inbox_path
+                         OR left(review.input_path, length(item.inbox_path) + 1)
+                            = item.inbox_path || '/')
+                   JOIN furumusic__media_file media
+                     ON media.sha256_hash::text = substring(
+                            review.context_json
+                            from '\"sha256\"[[:space:]]*:[[:space:]]*\"([0-9a-fA-F]{64})\"'
+                        )
+                   JOIN furumusic__track track ON track.audio_file_id = media.id
+                 WHERE review.context_json IS NOT NULL
+                 ON CONFLICT (item_id, media_file_id) DO NOTHING",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0047CreateYouTubeImportMediaLinks;
+
+    impl migrations::Migration for M0047CreateYouTubeImportMediaLinks {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0047_create_youtube_import_media_links";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] = &[
+            migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0046_create_local_upload_history",
+            ),
+            migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0027_create_processing_stats",
+            ),
+        ];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_youtube_import_media_links).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2752,5 +2819,6 @@ pub mod db_migrations {
         &M0044AddSimilarityRoutingSignature,
         &M0045CreateYouTubeDownloads,
         &M0046CreateLocalUploadHistory,
+        &M0047CreateYouTubeImportMediaLinks,
     ];
 }

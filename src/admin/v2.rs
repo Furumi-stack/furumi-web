@@ -2066,7 +2066,12 @@ pub async fn bulk_library(
         .into_response();
     }
 
-    let affected = apply_library_action(pool, &kind, action, &ids).await?;
+    let storage_dir = if action == "delete" && matches!(kind.as_str(), "releases" | "tracks") {
+        AppConfig::load_with_db(&db).await.0.agent_storage_dir
+    } else {
+        String::new()
+    };
+    let affected = apply_library_action(pool, &kind, action, &ids, &storage_dir).await?;
     Json(MutationResponse { ok: true, affected }).into_response()
 }
 
@@ -3620,10 +3625,11 @@ async fn apply_library_action(
     kind: &str,
     action: &str,
     ids: &[i64],
+    storage_dir: &str,
 ) -> cot::Result<u64> {
     match action {
         "hide" | "show" => set_library_visibility(pool, kind, ids, action == "hide").await,
-        "delete" => delete_library_items(pool, kind, ids).await,
+        "delete" => delete_library_items(pool, kind, ids, storage_dir).await,
         _ => Ok(0),
     }
 }
@@ -3674,10 +3680,15 @@ async fn set_library_visibility(
     Ok(result.rows_affected())
 }
 
-async fn delete_library_items(pool: &PgPool, kind: &str, ids: &[i64]) -> cot::Result<u64> {
+async fn delete_library_items(
+    pool: &PgPool,
+    kind: &str,
+    ids: &[i64],
+    storage_dir: &str,
+) -> cot::Result<u64> {
     match kind {
-        "releases" => delete_releases(pool, ids).await,
-        "tracks" => delete_tracks(pool, ids).await,
+        "releases" => delete_releases(pool, ids, storage_dir).await,
+        "tracks" => delete_tracks(pool, ids, storage_dir).await,
         "playlists" => delete_playlists(pool, ids).await,
         _ => delete_artists(pool, ids).await,
     }
@@ -3707,95 +3718,16 @@ async fn delete_artists(pool: &PgPool, ids: &[i64]) -> cot::Result<u64> {
     Ok(result.rows_affected())
 }
 
-async fn delete_releases(pool: &PgPool, ids: &[i64]) -> cot::Result<u64> {
-    let track_ids =
-        sqlx::query_as::<_, IdRow>("SELECT id FROM furumusic__track WHERE release_id = ANY($1)")
-            .bind(ids)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?
-            .into_iter()
-            .map(|row| row.id)
-            .collect::<Vec<_>>();
-
-    if !track_ids.is_empty() {
-        sqlx::query("DELETE FROM furumusic__playlist_track WHERE track_id = ANY($1)")
-            .bind(&track_ids)
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-        sqlx::query("DELETE FROM furumusic__user_liked_track WHERE track_id = ANY($1)")
-            .bind(&track_ids)
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-        sqlx::query("DELETE FROM furumusic__play_history WHERE track_id = ANY($1)")
-            .bind(&track_ids)
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-        sqlx::query("DELETE FROM furumusic__track_genre WHERE track_id = ANY($1)")
-            .bind(&track_ids)
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-        sqlx::query("DELETE FROM furumusic__track_artist WHERE track_id = ANY($1)")
-            .bind(&track_ids)
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-    }
-
-    sqlx::query("DELETE FROM furumusic__track WHERE release_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
+async fn delete_releases(pool: &PgPool, ids: &[i64], storage_dir: &str) -> cot::Result<u64> {
+    crate::library_cleanup::delete_releases(pool, ids, storage_dir)
         .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    sqlx::query("DELETE FROM furumusic__release_artist WHERE release_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    let result = sqlx::query("DELETE FROM furumusic__release WHERE id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    Ok(result.rows_affected())
+        .map_err(|error| cot::Error::internal(error.to_string()))
 }
 
-async fn delete_tracks(pool: &PgPool, ids: &[i64]) -> cot::Result<u64> {
-    sqlx::query("DELETE FROM furumusic__playlist_track WHERE track_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
+async fn delete_tracks(pool: &PgPool, ids: &[i64], storage_dir: &str) -> cot::Result<u64> {
+    crate::library_cleanup::delete_tracks(pool, ids, storage_dir)
         .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    sqlx::query("DELETE FROM furumusic__user_liked_track WHERE track_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    sqlx::query("DELETE FROM furumusic__play_history WHERE track_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    sqlx::query("DELETE FROM furumusic__track_genre WHERE track_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    sqlx::query("DELETE FROM furumusic__track_artist WHERE track_id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    let result = sqlx::query("DELETE FROM furumusic__track WHERE id = ANY($1)")
-        .bind(ids)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    Ok(result.rows_affected())
+        .map_err(|error| cot::Error::internal(error.to_string()))
 }
 
 async fn delete_playlists(pool: &PgPool, ids: &[i64]) -> cot::Result<u64> {
