@@ -220,9 +220,10 @@ impl YouTubeService {
     pub async fn preview(
         &self,
         request: YouTubePreviewRequest,
+        proxy_url: Option<&str>,
     ) -> anyhow::Result<YouTubePreviewDto> {
         let url = validate_youtube_url(&request.url)?;
-        let resolved = resolve_source(&url).await?;
+        let resolved = resolve_source(&url, proxy_url).await?;
         let requested_video_id = requested_video_id(&url);
         let select_requested_only = resolved.kind == "playlist" && requested_video_id.is_some();
         Ok(YouTubePreviewDto {
@@ -252,6 +253,7 @@ impl YouTubeService {
         user_id: i64,
         request: YouTubeStartRequest,
         inbox_dir: &str,
+        proxy_url: Option<String>,
     ) -> anyhow::Result<YouTubeJobDto> {
         let url = validate_youtube_url(&request.url)?;
         validate_inbox_dir(inbox_dir)?;
@@ -268,7 +270,7 @@ impl YouTubeService {
             bail!("YouTube selection contains an invalid video ID");
         }
 
-        let resolved = resolve_source(&url).await?;
+        let resolved = resolve_source(&url, proxy_url.as_deref()).await?;
         let selected_items: Vec<ResolvedItem> = resolved
             .items
             .into_iter()
@@ -339,7 +341,7 @@ impl YouTubeService {
         }
         transaction.commit().await?;
 
-        self.spawn_job(pool.clone(), id.clone(), inbox_dir.to_string())
+        self.spawn_job(pool.clone(), id.clone(), inbox_dir.to_string(), proxy_url)
             .await;
         load_job_dto(pool, user_id, &id).await
     }
@@ -349,6 +351,7 @@ impl YouTubeService {
         pool: &PgPool,
         user_id: i64,
         inbox_dir: &str,
+        proxy_url: Option<String>,
     ) -> anyhow::Result<Vec<YouTubeJobDto>> {
         validate_inbox_dir(inbox_dir)?;
         sync_ai_statuses(pool, user_id).await?;
@@ -364,7 +367,7 @@ impl YouTubeService {
         .fetch_all(pool)
         .await?;
         for (id, _) in resumable {
-            self.spawn_job(pool.clone(), id, inbox_dir.to_string())
+            self.spawn_job(pool.clone(), id, inbox_dir.to_string(), proxy_url.clone())
                 .await;
         }
 
@@ -393,6 +396,7 @@ impl YouTubeService {
         user_id: i64,
         id: &str,
         inbox_dir: &str,
+        proxy_url: Option<String>,
     ) -> anyhow::Result<YouTubeJobDto> {
         validate_inbox_dir(inbox_dir)?;
         let job = load_job_row(pool, user_id, id).await?;
@@ -423,8 +427,13 @@ impl YouTubeService {
         .execute(pool)
         .await?;
 
-        self.spawn_job(pool.clone(), id.to_string(), inbox_dir.to_string())
-            .await;
+        self.spawn_job(
+            pool.clone(),
+            id.to_string(),
+            inbox_dir.to_string(),
+            proxy_url,
+        )
+        .await;
         load_job_dto(pool, user_id, id).await
     }
 
@@ -507,7 +516,13 @@ impl YouTubeService {
         Ok(())
     }
 
-    async fn spawn_job(self: &Arc<Self>, pool: PgPool, id: String, inbox_dir: String) {
+    async fn spawn_job(
+        self: &Arc<Self>,
+        pool: PgPool,
+        id: String,
+        inbox_dir: String,
+        proxy_url: Option<String>,
+    ) {
         {
             let mut running = self.running_jobs.lock().await;
             if !running.insert(id.clone()) {
@@ -527,7 +542,9 @@ impl YouTubeService {
                 _ = cancel.cancelled() => None,
             };
             let result = if let Some(permit) = permit {
-                let result = service.run_job(&pool, &id, &inbox_dir, &cancel).await;
+                let result = service
+                    .run_job(&pool, &id, &inbox_dir, proxy_url.as_deref(), &cancel)
+                    .await;
                 drop(permit);
                 result
             } else {
@@ -554,6 +571,7 @@ impl YouTubeService {
         pool: &PgPool,
         id: &str,
         inbox_dir: &str,
+        proxy_url: Option<&str>,
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         if cancel.is_cancelled() {
@@ -576,7 +594,7 @@ impl YouTubeService {
                 return Ok(());
             }
             set_parent_status(pool, id, "resolving", None).await?;
-            let resolved = resolve_source(&job.source_url).await?;
+            let resolved = resolve_source(&job.source_url, proxy_url).await?;
             if cancel.is_cancelled() {
                 return Ok(());
             }
@@ -643,7 +661,7 @@ impl YouTubeService {
                 continue;
             }
             if let Err(err) = self
-                .process_item(pool, &job, &item, &inbox_root, cancel)
+                .process_item(pool, &job, &item, &inbox_root, proxy_url, cancel)
                 .await
             {
                 if cancel.is_cancelled() {
@@ -673,6 +691,7 @@ impl YouTubeService {
         job: &YouTubeJobRow,
         item: &YouTubeItemRow,
         inbox_root: &Path,
+        proxy_url: Option<&str>,
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         if cancel.is_cancelled() {
@@ -683,7 +702,7 @@ impl YouTubeService {
 
         let stage = staging_item_root(inbox_root, &job.id, &item.id);
         tokio::fs::create_dir_all(&stage).await?;
-        run_ytdlp_download(pool, &item.id, &item.source_url, &stage, cancel).await?;
+        run_ytdlp_download(pool, &item.id, &item.source_url, &stage, proxy_url, cancel).await?;
 
         if cancel.is_cancelled() {
             bail!("YouTube import cancelled");
@@ -746,8 +765,8 @@ impl YouTubeService {
     }
 }
 
-async fn resolve_source(url: &str) -> anyhow::Result<ResolvedSource> {
-    let mut command = base_ytdlp_command();
+async fn resolve_source(url: &str, proxy_url: Option<&str>) -> anyhow::Result<ResolvedSource> {
+    let mut command = base_ytdlp_command(proxy_url);
     command
         .arg("--flat-playlist")
         .arg("--dump-single-json")
@@ -816,7 +835,7 @@ async fn resolve_source(url: &str) -> anyhow::Result<ResolvedSource> {
     })
 }
 
-fn base_ytdlp_command() -> Command {
+fn base_ytdlp_command(proxy_url: Option<&str>) -> Command {
     let mut command = Command::new("yt-dlp");
     command
         .arg("--no-config")
@@ -825,6 +844,9 @@ fn base_ytdlp_command() -> Command {
         .arg("--js-runtimes")
         .arg("deno")
         .stdin(Stdio::null());
+    if let Some(proxy_url) = proxy_url {
+        command.arg("--proxy").arg(proxy_url);
+    }
     command
 }
 
@@ -833,9 +855,10 @@ async fn run_ytdlp_download(
     item_id: &str,
     url: &str,
     stage: &Path,
+    proxy_url: Option<&str>,
     cancel: &CancellationToken,
 ) -> anyhow::Result<()> {
-    let mut command = base_ytdlp_command();
+    let mut command = base_ytdlp_command(proxy_url);
     command
         .arg("--no-playlist")
         .arg("--continue")
@@ -1765,6 +1788,30 @@ mod tests {
             "Album_ Live__Test"
         );
         assert_eq!(sanitize_component("..."), "YouTube audio");
+    }
+
+    #[test]
+    fn ytdlp_command_receives_selected_proxy() {
+        let command = base_ytdlp_command(Some("socks5://user:pass@127.0.0.1:1080/"));
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.windows(2).any(|pair| {
+            pair == [
+                "--proxy".to_string(),
+                "socks5://user:pass@127.0.0.1:1080/".to_string(),
+            ]
+        }));
+
+        let direct = base_ytdlp_command(None);
+        assert!(
+            direct
+                .as_std()
+                .get_args()
+                .all(|argument| argument != "--proxy")
+        );
     }
 
     #[test]

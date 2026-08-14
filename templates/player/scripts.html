@@ -4604,7 +4604,10 @@ document.addEventListener('alpine:init', () => {
     // -----------------------------------------------------------------------
     Alpine.store('torrents', {
         modal: false,
-        sourceTab: 'youtube',
+        downloadsEnabled: {{ downloads_enabled }},
+        torrentDownloadsEnabled: {{ torrent_downloads_enabled }},
+        youtubeDownloadsEnabled: {{ youtube_downloads_enabled }},
+        sourceTab: {% if youtube_downloads_enabled %}'youtube'{% else if torrent_downloads_enabled %}'torrents'{% else %}'files'{% endif %},
         youtubeUrl: '',
         youtubePreview: null,
         youtubePreviewSelected: new Set(),
@@ -4671,6 +4674,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         open() {
+            if (!this.downloadsEnabled) return;
             this.modal = true;
             this.message = '';
             this.error = false;
@@ -4700,7 +4704,10 @@ document.addEventListener('alpine:init', () => {
         },
 
         showSourceTab(tab) {
-            this.sourceTab = ['youtube', 'torrents', 'files', 'uploads'].includes(tab) ? tab : 'youtube';
+            const tabs = ['files', 'uploads'];
+            if (this.youtubeDownloadsEnabled) tabs.unshift('youtube');
+            if (this.torrentDownloadsEnabled) tabs.unshift('torrents');
+            this.sourceTab = tabs.includes(tab) ? tab : tabs[0];
             this._setMessage('');
             if (this.sourceTab === 'youtube') this.loadYoutubeJobs();
             else if (this.sourceTab === 'uploads') {

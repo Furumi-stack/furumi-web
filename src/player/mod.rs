@@ -49,6 +49,50 @@ fn json_error(status: StatusCode, message: &str) -> cot::response::Response {
         .expect("valid response")
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DownloadMethod {
+    LocalFile,
+    Torrent,
+    YouTube,
+}
+
+fn require_download_method(
+    config: &AppConfig,
+    method: DownloadMethod,
+) -> Result<(), cot::response::Response> {
+    let enabled = config.downloads_enabled
+        && match method {
+            DownloadMethod::LocalFile => true,
+            DownloadMethod::Torrent => config.torrent_downloads_enabled,
+            DownloadMethod::YouTube => config.youtube_downloads_enabled,
+        };
+    if enabled {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            match method {
+                DownloadMethod::LocalFile => "downloads are disabled by the administrator",
+                DownloadMethod::Torrent => "torrent downloads are disabled by the administrator",
+                DownloadMethod::YouTube => "YouTube downloads are disabled by the administrator",
+            },
+        ))
+    }
+}
+
+fn download_proxy_for(
+    config: &AppConfig,
+    method: DownloadMethod,
+) -> Result<Option<String>, cot::response::Response> {
+    require_download_method(config, method)?;
+    let result = match method {
+        DownloadMethod::LocalFile => Ok(None),
+        DownloadMethod::Torrent => config.torrent_proxy_url(),
+        DownloadMethod::YouTube => config.youtube_proxy_url(),
+    };
+    result.map_err(|error| json_error(StatusCode::BAD_REQUEST, &error.to_string()))
+}
+
 #[derive(serde::Serialize)]
 struct LocalUploadResponse {
     ok: bool,
@@ -1375,6 +1419,40 @@ struct LastfmCallbackQuery {
 #[template(path = "player.html")]
 pub struct PlayerPageTemplate {
     pub t: &'static Translations,
+    pub downloads_enabled: bool,
+    pub torrent_downloads_enabled: bool,
+    pub youtube_downloads_enabled: bool,
+}
+
+#[cfg(test)]
+mod page_template_tests {
+    use super::*;
+    use crate::i18n::Lang;
+
+    #[test]
+    fn download_manager_button_follows_the_global_switch() {
+        let disabled = PlayerPageTemplate {
+            t: Translations::for_lang(Lang::En),
+            downloads_enabled: false,
+            torrent_downloads_enabled: false,
+            youtube_downloads_enabled: false,
+        }
+        .render()
+        .unwrap();
+        assert!(!disabled.contains("<button class=\"torrent-import-btn\""));
+        assert!(disabled.contains("downloadsEnabled: false"));
+
+        let enabled = PlayerPageTemplate {
+            t: Translations::for_lang(Lang::En),
+            downloads_enabled: true,
+            torrent_downloads_enabled: true,
+            youtube_downloads_enabled: true,
+        }
+        .render()
+        .unwrap();
+        assert!(enabled.contains("<button class=\"torrent-import-btn\""));
+        assert!(enabled.contains("downloadsEnabled: true"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4838,6 +4916,9 @@ async fn local_upload_handler(
     let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
+    if let Err(response) = require_download_method(&config, DownloadMethod::LocalFile) {
+        return Ok(response);
+    }
 
     let inbox_dir = config.agent_inbox_dir.trim();
     if inbox_dir.is_empty() {
@@ -4958,6 +5039,9 @@ async fn local_upload_history_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
     let (config, _) = AppConfig::load_with_db(&db).await;
+    if let Err(response) = require_download_method(&config, DownloadMethod::LocalFile) {
+        return Ok(response);
+    }
     match crate::local_uploads::list(pool, user.id, &config.agent_inbox_dir).await {
         Ok(items) => Json(items).into_response(),
         Err(err) => Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string())),
@@ -4974,6 +5058,10 @@ async fn local_upload_history_remove_handler(
     let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
+    let (config, _) = AppConfig::load_with_db(&db).await;
+    if let Err(response) = require_download_method(&config, DownloadMethod::LocalFile) {
+        return Ok(response);
+    }
     match crate::local_uploads::remove(pool, user.id, &path.0.id).await {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(err) => Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string())),
@@ -8446,12 +8534,20 @@ impl App for PlayerApp {
                                         "not authenticated",
                                     ));
                                 }
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::YouTube,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 let service = youtube_service
                                     .get_or_init(|| async {
                                         Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
                                     })
                                     .await;
-                                match service.preview(json.0).await {
+                                match service.preview(json.0, proxy_url.as_deref()).await {
                                     Ok(preview) => Json(preview).into_response(),
                                     Err(err) => {
                                         Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
@@ -8500,8 +8596,20 @@ impl App for PlayerApp {
                                     })
                                     .await;
                                 let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::YouTube,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 match service
-                                    .list(pg_pool, user.id, &live_config.agent_inbox_dir)
+                                    .list(
+                                        pg_pool,
+                                        user.id,
+                                        &live_config.agent_inbox_dir,
+                                        proxy_url,
+                                    )
                                     .await
                                 {
                                     Ok(items) => Json(items).into_response(),
@@ -8555,12 +8663,20 @@ impl App for PlayerApp {
                                     })
                                     .await;
                                 let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::YouTube,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 match service
                                     .start(
                                         pg_pool,
                                         user.id,
                                         json.0,
                                         &live_config.agent_inbox_dir,
+                                        proxy_url,
                                     )
                                     .await
                                 {
@@ -8615,12 +8731,20 @@ impl App for PlayerApp {
                                     })
                                     .await;
                                 let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::YouTube,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 match service
                                     .retry(
                                         pg_pool,
                                         user.id,
                                         &path.0.id,
                                         &live_config.agent_inbox_dir,
+                                        proxy_url,
                                     )
                                     .await
                                 {
@@ -8778,12 +8902,20 @@ impl App for PlayerApp {
                                             .expect("player pool")
                                     })
                                     .await;
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::Torrent,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 let service = torrent_service
                                     .get_or_init(|| async {
                                         Arc::new(TorrentService::new(Arc::clone(&scheduler_handle)))
                                     })
                                     .await;
-                                match service.list(pg_pool, user.id).await {
+                                match service.list(pg_pool, user.id, proxy_url).await {
                                     Ok(items) => Json(items).into_response(),
                                     Err(err) => {
                                         Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
@@ -8927,12 +9059,23 @@ impl App for PlayerApp {
                                             .expect("player pool")
                                     })
                                     .await;
+                                let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::Torrent,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 let service = torrent_service
                                     .get_or_init(|| async {
                                         Arc::new(TorrentService::new(Arc::clone(&scheduler_handle)))
                                     })
                                     .await;
-                                match service.preview(pg_pool, user.id, json.0).await {
+                                match service
+                                    .preview(pg_pool, user.id, json.0, proxy_url.as_deref())
+                                    .await
+                                {
                                     Ok(preview) => Json(preview).into_response(),
                                     Err(err) => {
                                         Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
@@ -9284,6 +9427,13 @@ impl App for PlayerApp {
                                     })
                                     .await;
                                 let (live_config, _) = AppConfig::load_with_db(&db).await;
+                                let proxy_url = match download_proxy_for(
+                                    &live_config,
+                                    DownloadMethod::Torrent,
+                                ) {
+                                    Ok(proxy_url) => proxy_url,
+                                    Err(response) => return Ok(response),
+                                };
                                 let service = torrent_service
                                     .get_or_init(|| async {
                                         Arc::new(TorrentService::new(Arc::clone(&scheduler_handle)))
@@ -9296,6 +9446,7 @@ impl App for PlayerApp {
                                         json.0.selected_files,
                                         live_config.agent_inbox_dir,
                                         user.id,
+                                        proxy_url.as_deref(),
                                     )
                                     .await
                                 {

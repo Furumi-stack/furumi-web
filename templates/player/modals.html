@@ -132,12 +132,16 @@
                 </div>
 
                 <div class="torrent-tabs download-source-tabs">
+                    {% if youtube_downloads_enabled %}
                     <button class="torrent-tab-btn"
                             :class="{ active: $store.torrents.sourceTab === 'youtube' }"
                             @click="$store.torrents.showSourceTab('youtube')">{{ t.player_youtube }}</button>
+                    {% endif %}
+                    {% if torrent_downloads_enabled %}
                     <button class="torrent-tab-btn"
                             :class="{ active: $store.torrents.sourceTab === 'torrents' }"
                             @click="$store.torrents.showSourceTab('torrents')">{{ t.player_torrents }}</button>
+                    {% endif %}
                     <button class="torrent-tab-btn"
                             :class="{ active: $store.torrents.sourceTab === 'files' }"
                             @click="$store.torrents.showSourceTab('files')">{{ t.player_files }}</button>

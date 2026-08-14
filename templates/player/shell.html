@@ -325,6 +325,7 @@
                         <span class="search-shortcut">Ctrl+K</span>
                     </template>
                 </div>
+                {% if downloads_enabled %}
                 <button class="torrent-import-btn"
                         @click="$store.torrents.open()"
                         title="{{ t.player_import_torrent }}">
@@ -334,6 +335,7 @@
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
                 </button>
+                {% endif %}
                 <button class="mobile-account-chip"
                         x-show="$store.user.profile"
                         x-cloak

@@ -142,6 +142,12 @@ pub struct ConfigSources {
     pub similarity_model: ConfigSource,
     pub similarity_profile: ConfigSource,
     pub similarity_workers: ConfigSource,
+    pub downloads_enabled: ConfigSource,
+    pub torrent_downloads_enabled: ConfigSource,
+    pub youtube_downloads_enabled: ConfigSource,
+    pub download_proxies: ConfigSource,
+    pub torrent_proxy_id: ConfigSource,
+    pub youtube_proxy_id: ConfigSource,
 }
 
 impl Default for ConfigSources {
@@ -176,6 +182,12 @@ impl Default for ConfigSources {
             similarity_model: ConfigSource::Default,
             similarity_profile: ConfigSource::Default,
             similarity_workers: ConfigSource::Default,
+            downloads_enabled: ConfigSource::Default,
+            torrent_downloads_enabled: ConfigSource::Default,
+            youtube_downloads_enabled: ConfigSource::Default,
+            download_proxies: ConfigSource::Default,
+            torrent_proxy_id: ConfigSource::Default,
+            youtube_proxy_id: ConfigSource::Default,
         }
     }
 }
@@ -237,6 +249,84 @@ macro_rules! impl_env_overrides {
 // ---------------------------------------------------------------------------
 // AppConfig
 // ---------------------------------------------------------------------------
+
+/// Saved SOCKS5 proxy used by user-facing download methods.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadProxy {
+    pub id: String,
+    pub address: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+impl DownloadProxy {
+    /// Validate and normalize a proxy without performing network or DNS I/O.
+    pub fn normalized(mut self) -> anyhow::Result<Self> {
+        self.id = self.id.trim().to_string();
+        self.address = self.address.trim().to_string();
+
+        if self.id.is_empty() || self.id.len() > 64 {
+            anyhow::bail!("proxy id must contain from 1 to 64 characters");
+        }
+        if !self
+            .id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        {
+            anyhow::bail!("proxy id may contain only letters, digits, '-' and '_'");
+        }
+        if self.address.is_empty() || self.address.len() > 512 {
+            anyhow::bail!("proxy address must contain a host and port");
+        }
+        if self
+            .address
+            .chars()
+            .any(|character| matches!(character, '/' | '?' | '#' | '@'))
+        {
+            anyhow::bail!("proxy address must be in host:port format");
+        }
+        if self.username.len() > 256 || self.password.len() > 256 {
+            anyhow::bail!("proxy credentials are too long");
+        }
+
+        let parsed = reqwest::Url::parse(&format!("socks5://{}", self.address))
+            .map_err(|_| anyhow::anyhow!("proxy address must be in host:port format"))?;
+        let host = parsed
+            .host_str()
+            .filter(|host| !host.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("proxy address has no host"))?;
+        let port = parsed
+            .port()
+            .ok_or_else(|| anyhow::anyhow!("proxy address has no port"))?;
+        if port == 0 {
+            anyhow::bail!("proxy port must be between 1 and 65535");
+        }
+        self.address = if host.starts_with('[') && host.ends_with(']') {
+            format!("{host}:{port}")
+        } else if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        Ok(self)
+    }
+
+    /// Build the URL accepted by librqbit and yt-dlp. Credentials are included
+    /// only when both fields are non-empty.
+    pub fn socks_url(&self) -> anyhow::Result<String> {
+        let proxy = self.clone().normalized()?;
+        let mut url = reqwest::Url::parse(&format!("socks5://{}", proxy.address))?;
+        if !proxy.username.is_empty() && !proxy.password.is_empty() {
+            url.set_username(&proxy.username)
+                .map_err(|_| anyhow::anyhow!("invalid proxy username"))?;
+            url.set_password(Some(&proxy.password))
+                .map_err(|_| anyhow::anyhow!("invalid proxy password"))?;
+        }
+        Ok(url.to_string())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -301,6 +391,18 @@ pub struct AppConfig {
     pub similarity_profile: String,
     /// Maximum number of concurrent CPU embedding workers.
     pub similarity_workers: u64,
+    /// Whether the download manager and local-file uploads are available.
+    pub downloads_enabled: bool,
+    /// Whether torrent imports are available when the download manager is enabled.
+    pub torrent_downloads_enabled: bool,
+    /// Whether YouTube imports are available when the download manager is enabled.
+    pub youtube_downloads_enabled: bool,
+    /// JSON-encoded list of [`DownloadProxy`] entries.
+    pub download_proxies: String,
+    /// Saved proxy id used for torrent downloads; empty means a direct connection.
+    pub torrent_proxy_id: String,
+    /// Saved proxy id used for YouTube downloads; empty means a direct connection.
+    pub youtube_proxy_id: String,
 }
 
 impl Default for AppConfig {
@@ -337,6 +439,13 @@ impl Default for AppConfig {
             similarity_workers: std::thread::available_parallelism()
                 .map(|count| (count.get() / 2).clamp(1, 4) as u64)
                 .unwrap_or(1),
+            // Preserve the behavior from before these controls were added.
+            downloads_enabled: true,
+            torrent_downloads_enabled: true,
+            youtube_downloads_enabled: true,
+            download_proxies: "[]".into(),
+            torrent_proxy_id: String::new(),
+            youtube_proxy_id: String::new(),
         }
     }
 }
@@ -372,6 +481,12 @@ impl_env_overrides!(
     similarity_model,
     similarity_profile,
     similarity_workers,
+    downloads_enabled,
+    torrent_downloads_enabled,
+    youtube_downloads_enabled,
+    download_proxies,
+    torrent_proxy_id,
+    youtube_proxy_id,
 );
 
 impl AppConfig {
@@ -506,6 +621,39 @@ impl AppConfig {
         apply_db_field!(similarity_model);
         apply_db_field!(similarity_profile);
         apply_db_field!(similarity_workers);
+        apply_db_field!(downloads_enabled);
+        apply_db_field!(torrent_downloads_enabled);
+        apply_db_field!(youtube_downloads_enabled);
+        apply_db_field!(download_proxies);
+        apply_db_field!(torrent_proxy_id);
+        apply_db_field!(youtube_proxy_id);
+    }
+
+    pub fn parsed_download_proxies(&self) -> anyhow::Result<Vec<DownloadProxy>> {
+        let proxies: Vec<DownloadProxy> = serde_json::from_str(&self.download_proxies)
+            .map_err(|_| anyhow::anyhow!("saved download proxy list is invalid"))?;
+        proxies.into_iter().map(DownloadProxy::normalized).collect()
+    }
+
+    pub fn selected_proxy_url(&self, proxy_id: &str) -> anyhow::Result<Option<String>> {
+        let proxy_id = proxy_id.trim();
+        if proxy_id.is_empty() {
+            return Ok(None);
+        }
+        let proxy = self
+            .parsed_download_proxies()?
+            .into_iter()
+            .find(|proxy| proxy.id == proxy_id)
+            .ok_or_else(|| anyhow::anyhow!("selected download proxy is not configured"))?;
+        proxy.socks_url().map(Some)
+    }
+
+    pub fn torrent_proxy_url(&self) -> anyhow::Result<Option<String>> {
+        self.selected_proxy_url(&self.torrent_proxy_id)
+    }
+
+    pub fn youtube_proxy_url(&self) -> anyhow::Result<Option<String>> {
+        self.selected_proxy_url(&self.youtube_proxy_id)
     }
 }
 
@@ -532,6 +680,53 @@ mod tests {
             crate::similarity::DEFAULT_PROFILE_ID
         );
         assert!((1..=4).contains(&cfg.similarity_workers));
+        assert!(cfg.downloads_enabled);
+        assert!(cfg.torrent_downloads_enabled);
+        assert!(cfg.youtube_downloads_enabled);
+        assert!(cfg.parsed_download_proxies().unwrap().is_empty());
+    }
+
+    #[test]
+    fn download_proxy_url_encodes_complete_credentials() {
+        let proxy = DownloadProxy {
+            id: "proxy-1".into(),
+            address: "proxy.example:1080".into(),
+            username: "user name".into(),
+            password: "p@ss:word".into(),
+        };
+        assert_eq!(
+            proxy.socks_url().unwrap(),
+            "socks5://user%20name:p%40ss%3Aword@proxy.example:1080"
+        );
+    }
+
+    #[test]
+    fn download_proxy_url_omits_partial_credentials() {
+        let proxy = DownloadProxy {
+            id: "proxy-1".into(),
+            address: "127.0.0.1:1080".into(),
+            username: "user".into(),
+            password: String::new(),
+        };
+        assert_eq!(proxy.socks_url().unwrap(), "socks5://127.0.0.1:1080");
+    }
+
+    #[test]
+    fn selected_download_proxy_is_resolved_by_id() {
+        let mut cfg = AppConfig::default();
+        cfg.download_proxies = serde_json::to_string(&[DownloadProxy {
+            id: "youtube".into(),
+            address: "[::1]:9050".into(),
+            username: String::new(),
+            password: String::new(),
+        }])
+        .unwrap();
+        cfg.youtube_proxy_id = "youtube".into();
+        assert_eq!(
+            cfg.youtube_proxy_url().unwrap().as_deref(),
+            Some("socks5://[::1]:9050")
+        );
+        assert_eq!(cfg.torrent_proxy_url().unwrap(), None);
     }
 
     #[test]

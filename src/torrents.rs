@@ -373,7 +373,8 @@ impl TorrentJob {
 
 pub struct TorrentService {
     temp_root: PathBuf,
-    session: OnceCell<Arc<Session>>,
+    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    job_sessions: Mutex<HashMap<String, Arc<Session>>>,
     jobs: Mutex<HashMap<String, TorrentJob>>,
     resolving_jobs: Mutex<HashSet<String>>,
     scheduler_handle: Arc<OnceCell<Arc<SchedulerHandle>>>,
@@ -383,36 +384,47 @@ impl TorrentService {
     pub fn new(scheduler_handle: Arc<OnceCell<Arc<SchedulerHandle>>>) -> Self {
         Self {
             temp_root: std::env::temp_dir().join("furumusic").join("torrents"),
-            session: OnceCell::new(),
+            sessions: Mutex::new(HashMap::new()),
+            job_sessions: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
             resolving_jobs: Mutex::new(HashSet::new()),
             scheduler_handle,
         }
     }
 
-    async fn session(&self) -> anyhow::Result<Arc<Session>> {
-        let temp_root = self.temp_root.clone();
-        self.session
-            .get_or_try_init(|| async move {
-                tokio::fs::create_dir_all(&temp_root).await?;
-                Session::new_with_opts(
-                    temp_root,
-                    SessionOptions {
-                        disable_upload: true,
-                        enable_upnp_port_forwarding: false,
-                        ..Default::default()
-                    },
-                )
-                .await
-            })
-            .await
-            .cloned()
+    async fn session(&self, proxy_url: Option<&str>) -> anyhow::Result<Arc<Session>> {
+        let key = proxy_url.unwrap_or_default().to_string();
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get(&key) {
+            return Ok(Arc::clone(session));
+        }
+
+        tokio::fs::create_dir_all(&self.temp_root).await?;
+        let session = Session::new_with_opts(
+            self.temp_root.clone(),
+            SessionOptions {
+                // SOCKS is intentionally limited to peer TCP and HTTP(S)
+                // tracker traffic. DHT and other UDP discovery stay direct.
+                disable_dht: false,
+                // Sessions are keyed by proxy and can coexist, so they cannot
+                // safely share one persisted DHT socket configuration.
+                disable_dht_persistence: true,
+                disable_upload: true,
+                enable_upnp_port_forwarding: false,
+                socks_proxy_url: proxy_url.map(str::to_owned),
+                ..Default::default()
+            },
+        )
+        .await?;
+        sessions.insert(key, Arc::clone(&session));
+        Ok(session)
     }
 
     pub async fn list(
         self: &Arc<Self>,
         pool: &PgPool,
         user_id: i64,
+        proxy_url: Option<String>,
     ) -> anyhow::Result<Vec<TorrentJobDto>> {
         let rows = sqlx::query_as::<_, TorrentSessionRow>(
             r#"SELECT id, user_id, name, info_hash, source_kind, source_label, torrent_bytes,
@@ -445,6 +457,7 @@ impl TorrentService {
                         row.id.clone(),
                         magnet,
                         row.created_at.clone(),
+                        proxy_url.clone(),
                     )
                     .await;
                 }
@@ -483,8 +496,9 @@ impl TorrentService {
         pool: &PgPool,
         user_id: i64,
         request: TorrentPreviewRequest,
+        proxy_url: Option<&str>,
     ) -> anyhow::Result<TorrentSessionDto> {
-        let session = self.session().await?;
+        let session = self.session(proxy_url).await?;
         let id = Uuid::new_v4().to_string();
         let output_dir = self.temp_root.join(&id).join("download");
         tokio::fs::create_dir_all(&output_dir).await?;
@@ -511,8 +525,15 @@ impl TorrentService {
                 .unwrap_or_else(|| info_hash.clone());
             let now = now_string();
             insert_pending_magnet(pool, &id, user_id, &name, &info_hash, &magnet, &now).await?;
-            self.spawn_resolve_pending_magnet(pool.clone(), user_id, id.clone(), magnet, now)
-                .await;
+            self.spawn_resolve_pending_magnet(
+                pool.clone(),
+                user_id,
+                id.clone(),
+                magnet,
+                now,
+                proxy_url.map(str::to_owned),
+            )
+            .await;
 
             let row = load_row(pool, user_id, &id).await?;
             return Ok(TorrentSessionDto {
@@ -611,6 +632,7 @@ impl TorrentService {
         id: String,
         magnet: String,
         created_at: String,
+        proxy_url: Option<String>,
     ) {
         {
             let mut resolving = self.resolving_jobs.lock().await;
@@ -622,7 +644,14 @@ impl TorrentService {
         let service = Arc::clone(self);
         tokio::spawn(async move {
             let result = service
-                .resolve_pending_magnet(&pool, user_id, &id, &magnet, &created_at)
+                .resolve_pending_magnet(
+                    &pool,
+                    user_id,
+                    &id,
+                    &magnet,
+                    &created_at,
+                    proxy_url.as_deref(),
+                )
                 .await;
             if let Err(err) = result {
                 update_resolving_error(&pool, &id, &err.to_string()).await;
@@ -638,8 +667,9 @@ impl TorrentService {
         id: &str,
         magnet: &str,
         created_at: &str,
+        proxy_url: Option<&str>,
     ) -> anyhow::Result<()> {
-        let session = self.session().await?;
+        let session = self.session(proxy_url).await?;
         let output_dir = self.temp_root.join(id).join("download");
         tokio::fs::create_dir_all(&output_dir).await?;
         let response = tokio::time::timeout(
@@ -743,7 +773,7 @@ impl TorrentService {
             jobs.remove(id).and_then(|job| job.handle)
         };
         if let Some(handle) = removed {
-            self.stop_torrent(&handle).await;
+            self.stop_torrent(id, &handle).await;
         }
 
         let result =
@@ -766,6 +796,7 @@ impl TorrentService {
         selected_files: Vec<usize>,
         inbox_dir: String,
         uploader_user_id: i64,
+        proxy_url: Option<&str>,
     ) -> anyhow::Result<TorrentJobDto> {
         if selected_files.is_empty() {
             bail!("select at least one file");
@@ -810,7 +841,7 @@ impl TorrentService {
         tokio::fs::create_dir_all(&output_dir).await?;
         mark_job_started(pool, id, &selected_files, &self.memory_job_dto(id).await?).await?;
 
-        let session = self.session().await?;
+        let session = self.session(proxy_url).await?;
         let response = match session
             .add_torrent(
                 AddTorrent::from_bytes(torrent_bytes),
@@ -838,6 +869,10 @@ impl TorrentService {
                 return Err(err);
             }
         };
+        self.job_sessions
+            .lock()
+            .await
+            .insert(id.to_string(), Arc::clone(&session));
 
         let dto = {
             let mut jobs = self.jobs.lock().await;
@@ -856,7 +891,7 @@ impl TorrentService {
                 if service.is_paused(&id).await {
                     return;
                 }
-                service.stop_torrent(&handle).await;
+                service.stop_torrent(&id, &handle).await;
                 service.fail_job(&pool, &id, err.to_string()).await;
                 crate::metrics::record_torrent_download(
                     "failed",
@@ -865,7 +900,7 @@ impl TorrentService {
                 );
                 return;
             }
-            service.stop_torrent(&handle).await;
+            service.stop_torrent(&id, &handle).await;
             if let Err(err) = service
                 .finalize_completed(&pool, &id, &inbox_dir, uploader_user_id)
                 .await
@@ -911,7 +946,7 @@ impl TorrentService {
 
         persist_progress(pool, &dto).await?;
         if let Some(handle) = handle {
-            self.stop_torrent(&handle).await;
+            self.stop_torrent(id, &handle).await;
         }
         Ok(dto)
     }
@@ -981,16 +1016,12 @@ impl TorrentService {
         }
     }
 
-    async fn stop_torrent(&self, handle: &Arc<ManagedTorrent>) {
-        match self.session().await {
-            Ok(session) => {
-                if let Err(err) = session.delete(handle.id().into(), false).await {
-                    tracing::warn!("failed to stop completed torrent: {err}");
-                }
-            }
-            Err(err) => {
-                tracing::warn!("failed to access torrent session for shutdown: {err}");
-            }
+    async fn stop_torrent(&self, id: &str, handle: &Arc<ManagedTorrent>) {
+        let session = self.job_sessions.lock().await.remove(id);
+        if let Some(session) = session
+            && let Err(err) = session.delete(handle.id().into(), false).await
+        {
+            tracing::warn!("failed to stop completed torrent: {err}");
         }
     }
 

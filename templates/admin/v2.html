@@ -817,6 +817,7 @@ tbody tr:hover {
         "access access access access oidc oidc oidc oidc oidc oidc oidc oidc"
         "agent agent agent agent agent agent agent agent agentstatus agentstatus agentstatus agentstatus"
         "similarity similarity similarity similarity similarity similarity similarity similarity similaritystatus similaritystatus similaritystatus similaritystatus"
+        "downloads downloads downloads downloads downloads downloads downloads downloads downloads downloads downloads downloads"
         "federation federation federation federation federation federation federation federation federation federation federation federation"
         "lastfm lastfm lastfm lastfm lastfm lastfm lastfm lastfm developer developer developer developer"
         "actions actions actions actions actions actions actions actions actions actions actions actions";
@@ -838,6 +839,7 @@ tbody tr:hover {
 .settings-agent-status { grid-area: agentstatus; }
 .settings-similarity { grid-area: similarity; }
 .settings-similarity-status { grid-area: similaritystatus; }
+.settings-downloads { grid-area: downloads; }
 .settings-federation { grid-area: federation; }
 .settings-lastfm { grid-area: lastfm; }
 .settings-developer { grid-area: developer; }
@@ -916,6 +918,72 @@ tbody tr:hover {
     color: var(--text-primary);
     outline: none;
     resize: vertical;
+}
+
+.download-method-setting {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.018);
+}
+
+.download-method-setting > label,
+.proxy-editor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 9px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 750;
+}
+
+.download-method-controls {
+    display: grid;
+    grid-template-columns: minmax(150px, 0.75fr) minmax(220px, 1.25fr);
+    gap: 10px;
+    align-items: center;
+}
+
+.download-method-controls select,
+.proxy-row input {
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.proxy-editor {
+    grid-column: 1 / -1;
+    min-width: 0;
+    padding-top: 4px;
+}
+
+.proxy-row {
+    display: grid;
+    grid-template-columns: minmax(210px, 1.4fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) auto;
+    gap: 10px;
+    align-items: end;
+    padding: 10px;
+    margin-top: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.018);
+}
+
+.proxy-row label {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    color: var(--text-subdued);
+    font-size: 11px;
+    font-weight: 700;
 }
 
 .setting-field input:focus,
@@ -1065,6 +1133,7 @@ tbody tr:hover {
             "agentstatus"
             "similarity"
             "similaritystatus"
+            "downloads"
             "federation"
             "lastfm"
             "developer"
@@ -1077,6 +1146,8 @@ tbody tr:hover {
     .settings-grid,
     .federation-status-grid { grid-template-columns: 1fr; }
     .setting-field { max-width: none; }
+    .download-method-controls,
+    .proxy-row { grid-template-columns: 1fr; }
 }
 
 .settings-note {
@@ -2442,6 +2513,103 @@ tbody tr:hover {
                                 </div>
                             </div>
                         </section>
+
+                        <section class="panel settings-section settings-section-full settings-downloads">
+                            <div class="panel-head">
+                                <div class="panel-title">
+                                    <strong>Download manager</strong>
+                                    <span>User-visible download methods and their SOCKS5 routes</span>
+                                </div>
+                                <span class="badge" :class="settingsDraft.downloads_enabled ? 'ok' : 'disabled'" x-text="settingsDraft.downloads_enabled ? 'enabled' : 'disabled'"></span>
+                            </div>
+                            <div class="settings-grid">
+                                <div class="setting-toggle settings-wide">
+                                    <label>
+                                        <span>Enable download feature</span>
+                                        <span class="source-pill" :class="sourceClass('downloads_enabled')" x-text="settingSource('downloads_enabled')"></span>
+                                    </label>
+                                    <div class="setting-toggle-row">
+                                        <span x-text="settingsDraft.downloads_enabled ? 'Manager and local file uploads are available' : 'Hidden from the player'"></span>
+                                        <input type="checkbox" x-model="settingsDraft.downloads_enabled" />
+                                    </div>
+                                    <div class="setting-help">Controls the download-manager button and local audio-file uploads for every user.</div>
+                                </div>
+
+                                <div class="download-method-setting">
+                                    <label>
+                                        <span>Allow torrents</span>
+                                        <span class="source-pill" :class="sourceClass('torrent_downloads_enabled')" x-text="settingSource('torrent_downloads_enabled')"></span>
+                                    </label>
+                                    <div class="download-method-controls">
+                                        <div class="setting-toggle-row">
+                                            <span x-text="settingsDraft.torrent_downloads_enabled ? 'Enabled' : 'Disabled'"></span>
+                                            <input type="checkbox" x-model="settingsDraft.torrent_downloads_enabled" :disabled="!settingsDraft.downloads_enabled" />
+                                        </div>
+                                        <select x-model="settingsDraft.torrent_proxy_id" :disabled="!settingsDraft.downloads_enabled || !settingsDraft.torrent_downloads_enabled">
+                                            <option value="">No proxy</option>
+                                            <template x-for="proxy in settingsDraft.download_proxies || []" :key="proxy.id">
+                                                <option :value="proxy.id" x-text="downloadProxyLabel(proxy)"></option>
+                                            </template>
+                                        </select>
+                                    </div>
+                                    <div class="setting-help">The selected SOCKS5 proxy routes peer TCP traffic and HTTP(S) trackers. DHT and UDP discovery remain direct.</div>
+                                </div>
+
+                                <div class="download-method-setting">
+                                    <label>
+                                        <span>Allow YouTube / yt-dlp</span>
+                                        <span class="source-pill" :class="sourceClass('youtube_downloads_enabled')" x-text="settingSource('youtube_downloads_enabled')"></span>
+                                    </label>
+                                    <div class="download-method-controls">
+                                        <div class="setting-toggle-row">
+                                            <span x-text="settingsDraft.youtube_downloads_enabled ? 'Enabled' : 'Disabled'"></span>
+                                            <input type="checkbox" x-model="settingsDraft.youtube_downloads_enabled" :disabled="!settingsDraft.downloads_enabled" />
+                                        </div>
+                                        <select x-model="settingsDraft.youtube_proxy_id" :disabled="!settingsDraft.downloads_enabled || !settingsDraft.youtube_downloads_enabled">
+                                            <option value="">No proxy</option>
+                                            <template x-for="proxy in settingsDraft.download_proxies || []" :key="proxy.id">
+                                                <option :value="proxy.id" x-text="downloadProxyLabel(proxy)"></option>
+                                            </template>
+                                        </select>
+                                    </div>
+                                    <div class="setting-help">The selected proxy is passed to metadata lookup and downloads through yt-dlp's <code>--proxy</code> option.</div>
+                                </div>
+
+                                <div class="proxy-editor">
+                                    <div class="proxy-editor-head">
+                                        <span>
+                                            Saved SOCKS5 proxies
+                                            <span class="source-pill" :class="sourceClass('download_proxies')" x-text="settingSource('download_proxies')"></span>
+                                        </span>
+                                        <button class="btn" type="button" @click="addDownloadProxy()">
+                                            <i data-lucide="plus"></i>
+                                            Add proxy
+                                        </button>
+                                    </div>
+                                    <div class="settings-note" x-show="!(settingsDraft.download_proxies || []).length">No proxies saved. Both methods use a direct connection.</div>
+                                    <template x-for="(proxy, index) in settingsDraft.download_proxies || []" :key="proxy.id">
+                                        <div class="proxy-row">
+                                            <label>
+                                                Address and port
+                                                <input x-model="proxy.address" placeholder="127.0.0.1:1080" autocomplete="off" />
+                                            </label>
+                                            <label>
+                                                Username
+                                                <input x-model="proxy.username" autocomplete="off" />
+                                            </label>
+                                            <label>
+                                                Password
+                                                <input type="password" x-model="proxy.password" autocomplete="new-password" />
+                                            </label>
+                                            <button class="icon-btn danger" type="button" @click="removeDownloadProxy(proxy.id)" title="Remove proxy">
+                                                <i data-lucide="trash-2"></i>
+                                            </button>
+                                        </div>
+                                    </template>
+                                    <div class="setting-help" style="margin-top:9px">Enter only <code>host:port</code> (IPv6 may use <code>[address]:port</code>). Credentials are omitted unless both username and password are filled.</div>
+                                </div>
+                            </div>
+                        </section>
                     </div>
 
                     <div class="settings-column settings-side">
@@ -3250,7 +3418,13 @@ function adminV2() {
             similarity_enabled: false,
             similarity_model: 'discogs-effnet-bsdynamic-1',
             similarity_profile: 'furumi-full-track-v1',
-            similarity_workers: '1'
+            similarity_workers: '1',
+            downloads_enabled: true,
+            torrent_downloads_enabled: true,
+            youtube_downloads_enabled: true,
+            download_proxies: [],
+            torrent_proxy_id: '',
+            youtube_proxy_id: ''
         },
         settingsProbe: { status: 'idle', ok: false },
         settingsProbeLoading: false,
@@ -3531,12 +3705,41 @@ function adminV2() {
         async loadSettings(showErrors = true) {
             try {
                 this.settings = await this.request(`${this.apiBase}/settings`);
-                this.settingsDraft = Object.assign({}, this.settingsDraft, this.settings.values || {});
+                const values = this.settings.values || {};
+                this.settingsDraft = Object.assign({}, this.settingsDraft, values, {
+                    download_proxies: Array.isArray(values.download_proxies)
+                        ? values.download_proxies.map(proxy => ({ ...proxy }))
+                        : []
+                });
             } catch (error) {
                 if (showErrors) this.showToast(error.message);
             } finally {
                 this.icons();
             }
+        },
+
+        addDownloadProxy() {
+            const id = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+                ? globalThis.crypto.randomUUID()
+                : `proxy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            this.settingsDraft.download_proxies = [
+                ...(this.settingsDraft.download_proxies || []),
+                { id, address: '', username: '', password: '' }
+            ];
+            this.$nextTick(() => this.icons());
+        },
+
+        removeDownloadProxy(id) {
+            this.settingsDraft.download_proxies = (this.settingsDraft.download_proxies || [])
+                .filter(proxy => proxy.id !== id);
+            if (this.settingsDraft.torrent_proxy_id === id) this.settingsDraft.torrent_proxy_id = '';
+            if (this.settingsDraft.youtube_proxy_id === id) this.settingsDraft.youtube_proxy_id = '';
+            this.$nextTick(() => this.icons());
+        },
+
+        downloadProxyLabel(proxy) {
+            const address = String(proxy?.address || '').trim();
+            return address || 'New proxy';
         },
 
         async saveSettings() {

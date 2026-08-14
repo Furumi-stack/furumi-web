@@ -90,7 +90,13 @@ async fn index(
             return Ok(auth::redirect("/login"));
         }
     };
-    let template = player::PlayerPageTemplate { t: i18n.t };
+    let (config, _) = AppConfig::load_with_db(&db).await;
+    let template = player::PlayerPageTemplate {
+        t: i18n.t,
+        downloads_enabled: config.downloads_enabled,
+        torrent_downloads_enabled: config.downloads_enabled && config.torrent_downloads_enabled,
+        youtube_downloads_enabled: config.downloads_enabled && config.youtube_downloads_enabled,
+    };
     Html::new(template.render()?).into_response()
 }
 

@@ -16,7 +16,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder};
 use super::BUILD_INFO;
 use crate::agent;
 use crate::auth::{self, AuthenticatedUser, Role};
-use crate::config::{AppConfig, ConfigEntry, ConfigSources};
+use crate::config::{AppConfig, ConfigEntry, ConfigSources, DownloadProxy};
 use crate::i18n::{I18n, Translations};
 use crate::scheduler::{self, JobRegistry, JobRun, ScheduledJob};
 
@@ -462,6 +462,50 @@ struct AdminSettingsValues {
     similarity_profile: String,
     #[serde(default = "default_similarity_workers")]
     similarity_workers: String,
+    #[serde(default = "default_true")]
+    downloads_enabled: bool,
+    #[serde(default = "default_true")]
+    torrent_downloads_enabled: bool,
+    #[serde(default = "default_true")]
+    youtube_downloads_enabled: bool,
+    #[serde(default)]
+    download_proxies: Vec<AdminDownloadProxy>,
+    #[serde(default)]
+    torrent_proxy_id: String,
+    #[serde(default)]
+    youtube_proxy_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+struct AdminDownloadProxy {
+    id: String,
+    address: String,
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
+}
+
+impl From<DownloadProxy> for AdminDownloadProxy {
+    fn from(proxy: DownloadProxy) -> Self {
+        Self {
+            id: proxy.id,
+            address: proxy.address,
+            username: proxy.username,
+            password: proxy.password,
+        }
+    }
+}
+
+impl From<AdminDownloadProxy> for DownloadProxy {
+    fn from(proxy: AdminDownloadProxy) -> Self {
+        Self {
+            id: proxy.id,
+            address: proxy.address,
+            username: proxy.username,
+            password: proxy.password,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -493,6 +537,12 @@ struct AdminSettingsSources {
     similarity_model: &'static str,
     similarity_profile: &'static str,
     similarity_workers: &'static str,
+    downloads_enabled: &'static str,
+    torrent_downloads_enabled: &'static str,
+    youtube_downloads_enabled: &'static str,
+    download_proxies: &'static str,
+    torrent_proxy_id: &'static str,
+    youtube_proxy_id: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -531,6 +581,18 @@ pub(super) struct UpdateSettingsRequest {
     similarity_profile: String,
     #[serde(default = "default_similarity_workers")]
     similarity_workers: String,
+    #[serde(default = "default_true")]
+    downloads_enabled: bool,
+    #[serde(default = "default_true")]
+    torrent_downloads_enabled: bool,
+    #[serde(default = "default_true")]
+    youtube_downloads_enabled: bool,
+    #[serde(default)]
+    download_proxies: Vec<AdminDownloadProxy>,
+    #[serde(default)]
+    torrent_proxy_id: String,
+    #[serde(default)]
+    youtube_proxy_id: String,
 }
 
 fn default_similarity_model() -> String {
@@ -980,15 +1042,15 @@ pub async fn update_settings(
     if let Err(response) = require_admin_json(&session, &db).await {
         return Ok(response);
     }
-    let similarity_model = body.similarity_model.trim();
-    if crate::similarity::model_by_id(similarity_model).is_none() {
+    let similarity_model = body.similarity_model.trim().to_string();
+    if crate::similarity::model_by_id(&similarity_model).is_none() {
         return Ok(json_error(
             StatusCode::BAD_REQUEST,
             "unknown similarity model",
         ));
     }
-    let similarity_profile = body.similarity_profile.trim();
-    if crate::similarity::profile_by_id(similarity_profile).is_none() {
+    let similarity_profile = body.similarity_profile.trim().to_string();
+    if crate::similarity::profile_by_id(&similarity_profile).is_none() {
         return Ok(json_error(
             StatusCode::BAD_REQUEST,
             "unknown similarity preprocessing profile",
@@ -1003,6 +1065,47 @@ pub async fn update_settings(
             ));
         }
     };
+    if body.download_proxies.len() > 32 {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "at most 32 download proxies can be saved",
+        ));
+    }
+    let mut download_proxies = Vec::with_capacity(body.download_proxies.len());
+    let mut proxy_ids = HashSet::new();
+    for (index, proxy) in body.download_proxies.into_iter().enumerate() {
+        let proxy = match DownloadProxy::from(proxy).normalized() {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                return Ok(json_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("proxy {}: {error}", index + 1),
+                ));
+            }
+        };
+        if !proxy_ids.insert(proxy.id.clone()) {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "download proxy ids must be unique",
+            ));
+        }
+        download_proxies.push(proxy);
+    }
+    let torrent_proxy_id = body.torrent_proxy_id.trim().to_string();
+    let youtube_proxy_id = body.youtube_proxy_id.trim().to_string();
+    for (method, proxy_id) in [
+        ("torrent", torrent_proxy_id.as_str()),
+        ("YouTube", youtube_proxy_id.as_str()),
+    ] {
+        if !proxy_id.is_empty() && !proxy_ids.contains(proxy_id) {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("selected {method} proxy is not in the saved proxy list"),
+            ));
+        }
+    }
+    let download_proxies_json = serde_json::to_string(&download_proxies)
+        .map_err(|error| cot::Error::internal(error.to_string()))?;
     let fields = [
         (
             "auth_password_enabled",
@@ -1058,9 +1161,21 @@ pub async fn update_settings(
             body.federation_save_on_listen.to_string(),
         ),
         ("similarity_enabled", body.similarity_enabled.to_string()),
-        ("similarity_model", similarity_model.to_string()),
-        ("similarity_profile", similarity_profile.to_string()),
+        ("similarity_model", similarity_model),
+        ("similarity_profile", similarity_profile),
         ("similarity_workers", similarity_workers.to_string()),
+        ("downloads_enabled", body.downloads_enabled.to_string()),
+        (
+            "torrent_downloads_enabled",
+            body.torrent_downloads_enabled.to_string(),
+        ),
+        (
+            "youtube_downloads_enabled",
+            body.youtube_downloads_enabled.to_string(),
+        ),
+        ("download_proxies", download_proxies_json),
+        ("torrent_proxy_id", torrent_proxy_id),
+        ("youtube_proxy_id", youtube_proxy_id),
     ];
     for (key, value) in fields {
         let mut entry = ConfigEntry::new(key.to_string(), value);
@@ -1235,6 +1350,15 @@ pub async fn settings_probe(
 }
 
 fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
+    let download_proxies = config
+        .parsed_download_proxies()
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "ignoring invalid saved download proxy list");
+            Vec::new()
+        })
+        .into_iter()
+        .map(AdminDownloadProxy::from)
+        .collect();
     AdminSettingsDto {
         lastfm_api_key_configured: !config.lastfm_api_key.trim().is_empty(),
         lastfm_shared_secret_configured: !config.lastfm_shared_secret.trim().is_empty(),
@@ -1268,6 +1392,12 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             similarity_model: config.similarity_model,
             similarity_profile: config.similarity_profile,
             similarity_workers: config.similarity_workers.to_string(),
+            downloads_enabled: config.downloads_enabled,
+            torrent_downloads_enabled: config.torrent_downloads_enabled,
+            youtube_downloads_enabled: config.youtube_downloads_enabled,
+            download_proxies,
+            torrent_proxy_id: config.torrent_proxy_id,
+            youtube_proxy_id: config.youtube_proxy_id,
         },
         sources: AdminSettingsSources {
             auth_password_enabled: sources.auth_password_enabled.code(),
@@ -1297,6 +1427,12 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             similarity_model: sources.similarity_model.code(),
             similarity_profile: sources.similarity_profile.code(),
             similarity_workers: sources.similarity_workers.code(),
+            downloads_enabled: sources.downloads_enabled.code(),
+            torrent_downloads_enabled: sources.torrent_downloads_enabled.code(),
+            youtube_downloads_enabled: sources.youtube_downloads_enabled.code(),
+            download_proxies: sources.download_proxies.code(),
+            torrent_proxy_id: sources.torrent_proxy_id.code(),
+            youtube_proxy_id: sources.youtube_proxy_id.code(),
         },
     }
 }
