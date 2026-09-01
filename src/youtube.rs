@@ -12,7 +12,7 @@ use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -1518,11 +1518,7 @@ async fn prepare_downloaded_folder(
     preserve_track_numbers(&mut audio_files, chapter_count, item.playlist_index, cancel).await?;
 
     for audio in &audio_files {
-        let data = tokio::select! {
-            data = tokio::fs::read(audio) => data?,
-            _ = cancel.cancelled() => bail!("YouTube import cancelled"),
-        };
-        let hash = format!("{:x}", Sha256::digest(&data));
+        let hash = sha256_file(audio, cancel).await?;
         if crate::agent::rag::file_hash_exists(pool, &hash)
             .await
             .unwrap_or(false)
@@ -1581,6 +1577,23 @@ async fn prepare_downloaded_folder(
     })
 }
 
+async fn sha256_file(path: &Path, cancel: &CancellationToken) -> anyhow::Result<String> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = tokio::select! {
+            read = file.read(&mut buffer) => read?,
+            _ = cancel.cancelled() => bail!("YouTube import cancelled"),
+        };
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 async fn preserve_track_numbers(
     audio_files: &mut [PathBuf],
     chapter_count: i32,
@@ -1604,7 +1617,17 @@ async fn preserve_track_numbers(
             tokio::fs::rename(&*audio, &numbered).await?;
             *audio = numbered;
         }
-        embed_track_number(audio, track_number, cancel).await?;
+        match embed_track_number(audio, track_number, cancel).await? {
+            TrackNumberEmbedOutcome::Embedded => {}
+            TrackNumberEmbedOutcome::Skipped(reason) => {
+                tracing::warn!(
+                    path = %audio.display(),
+                    track_number,
+                    %reason,
+                    "continuing YouTube import without embedded track number"
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -1625,17 +1648,12 @@ fn track_number_from_file_name(path: &Path) -> Option<i32> {
         .filter(|number| *number > 0)
 }
 
-async fn embed_track_number(
-    audio: &Path,
-    track_number: i32,
-    cancel: &CancellationToken,
-) -> anyhow::Result<()> {
-    let extension = audio
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("audio");
-    let temporary =
-        audio.with_file_name(format!(".furumusic-track-{}.{}", Uuid::new_v4(), extension));
+enum TrackNumberEmbedOutcome {
+    Embedded,
+    Skipped(String),
+}
+
+fn track_number_ffmpeg_command(audio: &Path, temporary: &Path, track_number: i32) -> Command {
     let mut command = Command::new("ffmpeg");
     command
         .arg("-hide_banner")
@@ -1644,21 +1662,51 @@ async fn embed_track_number(
         .arg("-y")
         .arg("-i")
         .arg(audio)
+        // A downloaded audio container may also contain cover art, subtitles,
+        // attachments, or data streams. Some containers cannot accept those
+        // streams again, so remux only the primary audio stream.
         .arg("-map")
+        .arg("0:a:0")
+        .arg("-map_metadata")
         .arg("0")
-        .arg("-c")
+        .arg("-map_chapters")
+        .arg("-1")
+        .arg("-c:a")
         .arg("copy")
         .arg("-metadata")
         .arg(format!("track={track_number}"))
-        .arg(&temporary)
+        .arg(temporary)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    command
+}
+
+async fn embed_track_number(
+    audio: &Path,
+    track_number: i32,
+    cancel: &CancellationToken,
+) -> anyhow::Result<TrackNumberEmbedOutcome> {
+    let extension = audio
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("audio");
+    let temporary =
+        audio.with_file_name(format!(".furumusic-track-{}.{}", Uuid::new_v4(), extension));
+    let mut command = track_number_ffmpeg_command(audio, &temporary, track_number);
     configure_process_group(&mut command);
 
     let output = tokio::select! {
-        output = command.output() => output?,
+        output = command.output() => match output {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return Ok(TrackNumberEmbedOutcome::Skipped(
+                    format!("could not start ffmpeg metadata remux: {error}")
+                ));
+            }
+        },
         _ = cancel.cancelled() => {
             let _ = tokio::fs::remove_file(&temporary).await;
             bail!("YouTube import cancelled");
@@ -1666,26 +1714,62 @@ async fn embed_track_number(
     };
     if !output.status.success() {
         let _ = tokio::fs::remove_file(&temporary).await;
-        bail!(
-            "ffmpeg could not preserve track number {}: {}",
-            track_number,
-            useful_error(&String::from_utf8_lossy(&output.stderr))
-        );
+        return Ok(TrackNumberEmbedOutcome::Skipped(format!(
+            "ffmpeg metadata remux failed: {}",
+            useful_error_tail(&String::from_utf8_lossy(&output.stderr), 8)
+        )));
     }
 
-    let backup = audio.with_file_name(format!(
-        ".furumusic-track-backup-{}.{}",
-        Uuid::new_v4(),
-        extension
-    ));
-    tokio::fs::rename(audio, &backup).await?;
-    if let Err(error) = tokio::fs::rename(&temporary, audio).await {
-        let _ = tokio::fs::rename(&backup, audio).await;
+    let temporary_size = tokio::fs::metadata(&temporary)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if temporary_size == 0 {
         let _ = tokio::fs::remove_file(&temporary).await;
-        return Err(error.into());
+        return Ok(TrackNumberEmbedOutcome::Skipped(
+            "ffmpeg metadata remux produced an empty file".to_owned(),
+        ));
     }
-    tokio::fs::remove_file(backup).await?;
-    Ok(())
+
+    #[cfg(unix)]
+    {
+        if let Err(error) = tokio::fs::rename(&temporary, audio).await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Ok(TrackNumberEmbedOutcome::Skipped(format!(
+                "could not replace audio with metadata remux: {error}"
+            )));
+        }
+        return Ok(TrackNumberEmbedOutcome::Embedded);
+    }
+
+    #[cfg(not(unix))]
+    let backup = audio.with_file_name(format!(".furumusic-track-backup-{}.bak", Uuid::new_v4()));
+    #[cfg(not(unix))]
+    {
+        if let Err(error) = tokio::fs::rename(audio, &backup).await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Ok(TrackNumberEmbedOutcome::Skipped(format!(
+                "could not prepare audio replacement: {error}"
+            )));
+        }
+        if let Err(error) = tokio::fs::rename(&temporary, audio).await {
+            let restore = tokio::fs::rename(&backup, audio).await;
+            let _ = tokio::fs::remove_file(&temporary).await;
+            if let Err(restore_error) = restore {
+                bail!(
+                    "could not install track metadata ({error}) or restore original audio from {} ({restore_error})",
+                    backup.display()
+                );
+            }
+            return Ok(TrackNumberEmbedOutcome::Skipped(format!(
+                "could not replace audio with metadata remux: {error}"
+            )));
+        }
+        if let Err(error) = tokio::fs::remove_file(&backup).await {
+            tracing::warn!(path = %backup.display(), %error, "could not remove track metadata backup");
+        }
+        Ok(TrackNumberEmbedOutcome::Embedded)
+    }
 }
 
 async fn read_info_json(stage: &Path) -> anyhow::Result<Option<serde_json::Value>> {
@@ -2261,6 +2345,19 @@ fn useful_error(value: &str) -> String {
     trim_error(lines.last().copied().unwrap_or("unknown error"))
 }
 
+fn useful_error_tail(value: &str, line_count: usize) -> String {
+    let lines = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return "unknown error".to_owned();
+    }
+    let start = lines.len().saturating_sub(line_count.max(1));
+    trim_error(&lines[start..].join(" | "))
+}
+
 fn trim_error(value: &str) -> String {
     value.chars().take(MAX_ERROR_LEN).collect()
 }
@@ -2467,6 +2564,40 @@ mod tests {
             pair == ["--cookies".to_string(), path.to_string_lossy().into_owned()]
         }));
         assert!(!args.iter().any(|argument| argument == "--no-cookies"));
+    }
+
+    #[test]
+    fn track_metadata_remux_maps_only_the_primary_audio_stream() {
+        let command =
+            track_number_ffmpeg_command(Path::new("input.webm"), Path::new("temporary.webm"), 7);
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-map".to_owned(), "0:a:0".to_owned()])
+        );
+        assert!(
+            !args
+                .windows(2)
+                .any(|pair| pair == ["-map".to_owned(), "0".to_owned()])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-c:a".to_owned(), "copy".to_owned()])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-metadata".to_owned(), "track=7".to_owned()])
+        );
+    }
+
+    #[test]
+    fn ffmpeg_error_tail_keeps_the_specific_context() {
+        let error = useful_error_tail("first\ncodec mismatch\nError initializing output stream", 2);
+        assert_eq!(error, "codec mismatch | Error initializing output stream");
     }
 
     #[test]
