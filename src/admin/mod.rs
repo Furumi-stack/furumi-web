@@ -82,6 +82,11 @@ struct PathId {
 }
 
 #[derive(Debug, Deserialize)]
+struct PathStringId {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct PathName {
     name: String,
 }
@@ -414,6 +419,43 @@ impl App for AdminApp {
                     v2::settings_probe(session, db).await
                 }),
                 "admin_v2_settings_probe",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/settings/youtube-cookies",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    cot::router::method::post(
+                        move |session: Session,
+                              db: Database,
+                              json: Json<v2::UploadYoutubeCookieFileRequest>| {
+                            let pool = Arc::clone(&pool);
+                            let pool_config = Arc::clone(&pool_config);
+                            async move {
+                                let pg_pool = pool
+                                    .get_or_init(|| async {
+                                        sqlx::postgres::PgPoolOptions::new()
+                                            .max_connections(5)
+                                            .connect(&pool_config.database_url)
+                                            .await
+                                            .expect("admin pool")
+                                    })
+                                    .await;
+                                v2::upload_youtube_cookie_file(session, db, pg_pool, json).await
+                            }
+                        },
+                    )
+                },
+                "admin_v2_youtube_cookie_upload",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/settings/youtube-cookies/{id}",
+                cot::router::method::delete(
+                    move |session: Session, db: Database, path: Path<PathStringId>| async move {
+                        v2::delete_youtube_cookie_file(session, db, &path.0.id).await
+                    },
+                ),
+                "admin_v2_youtube_cookie_delete",
             ),
             Route::with_handler_and_name(
                 "/v2/api/federation",
@@ -1441,6 +1483,9 @@ impl App for AdminApp {
         ));
         all.extend(cot::db::migrations::wrap_migrations(
             crate::auth::db_migrations::MIGRATIONS,
+        ));
+        all.extend(cot::db::migrations::wrap_migrations(
+            crate::youtube::db_migrations::MIGRATIONS,
         ));
         all
     }

@@ -1,10 +1,13 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use cot::db::migrations::{self, Operation, SyncDynMigration};
+use cot::db::{Database, LimitedString, Model};
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,10 +25,215 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(180);
 const HTTP_403_RETRY_DELAY: Duration = Duration::from_secs(30);
 const HTTP_403_MAX_RETRIES: usize = 3;
 const MAX_ERROR_LEN: usize = 4_000;
+pub const MAX_COOKIE_FILE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_COOKIE_FILES: u64 = 32;
 const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "ogg", "opus", "aac", "m4a", "wav", "ape", "wv", "wma", "tta", "aiff", "aif",
 ];
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif"];
+
+#[derive(Debug, Clone)]
+#[cot::db::model(table_name = "youtube_cookie_file")]
+pub struct YoutubeCookieFile {
+    #[model(primary_key)]
+    id: String,
+    filename: String,
+    cookie_count: i64,
+    uploaded_at: LimitedString<32>,
+    contents: String,
+}
+
+#[derive(Debug, Clone)]
+#[cot::db::model(table_name = "youtube_cookie_file")]
+pub struct YoutubeCookieFileMetadata {
+    #[model(primary_key)]
+    id: String,
+    filename: String,
+    cookie_count: i64,
+    uploaded_at: LimitedString<32>,
+}
+
+impl YoutubeCookieFile {
+    pub async fn get_by_id(db: &Database, id: &str) -> cot::db::Result<Option<Self>> {
+        if id.len() > 36 {
+            return Ok(None);
+        }
+        let id = id.to_owned();
+        cot::db::query!(YoutubeCookieFile, $id == id).get(db).await
+    }
+
+    pub async fn delete_by_id(db: &Database, id: &str) -> cot::db::Result<()> {
+        if id.len() > 36 {
+            return Ok(());
+        }
+        let id = id.to_owned();
+        cot::db::query!(YoutubeCookieFile, $id == id)
+            .delete(db)
+            .await?;
+        Ok(())
+    }
+
+    pub fn id_str(&self) -> &str {
+        &self.id
+    }
+
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub fn cookie_count(&self) -> u64 {
+        u64::try_from(self.cookie_count).unwrap_or(0)
+    }
+
+    pub fn uploaded_at(&self) -> &str {
+        &self.uploaded_at
+    }
+
+    fn contents(&self) -> &str {
+        &self.contents
+    }
+}
+
+pub async fn store_cookie_file(
+    pool: &PgPool,
+    filename: &str,
+    cookie_count: usize,
+    contents: &str,
+) -> anyhow::Result<YoutubeCookieFileMetadata> {
+    let id = Uuid::new_v4().to_string();
+    let uploaded_at = now_string();
+    let cookie_count = i64::try_from(cookie_count).unwrap_or(i64::MAX);
+    sqlx::query(
+        r#"INSERT INTO furumusic__youtube_cookie_file
+              (id, filename, cookie_count, uploaded_at, contents)
+           VALUES ($1, $2, $3, $4, $5)"#,
+    )
+    .bind(&id)
+    .bind(filename)
+    .bind(cookie_count)
+    .bind(&uploaded_at)
+    .bind(contents)
+    .execute(pool)
+    .await
+    .context("could not insert YouTube cookie file")?;
+    Ok(YoutubeCookieFileMetadata {
+        id,
+        filename: filename.to_owned(),
+        cookie_count,
+        uploaded_at: LimitedString::new(uploaded_at).expect("timestamp fits cookie metadata"),
+    })
+}
+
+impl YoutubeCookieFileMetadata {
+    pub async fn get_by_id(db: &Database, id: &str) -> cot::db::Result<Option<Self>> {
+        if id.len() > 36 {
+            return Ok(None);
+        }
+        let id = id.to_owned();
+        cot::db::query!(YoutubeCookieFileMetadata, $id == id)
+            .get(db)
+            .await
+    }
+
+    pub fn id_str(&self) -> &str {
+        &self.id
+    }
+
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub fn cookie_count(&self) -> u64 {
+        u64::try_from(self.cookie_count).unwrap_or(0)
+    }
+
+    pub fn uploaded_at(&self) -> &str {
+        &self.uploaded_at
+    }
+}
+
+pub async fn cookie_file_count(db: &Database) -> cot::db::Result<u64> {
+    YoutubeCookieFile::objects().count(db).await
+}
+
+pub async fn cookie_file_exists(db: &Database, id: &str) -> cot::db::Result<bool> {
+    Ok(YoutubeCookieFileMetadata::get_by_id(db, id)
+        .await?
+        .is_some())
+}
+
+pub async fn list_cookie_files(db: &Database) -> cot::db::Result<Vec<YoutubeCookieFileMetadata>> {
+    let mut files = YoutubeCookieFileMetadata::objects().all(db).await?;
+    files.sort_by(|left, right| {
+        right
+            .uploaded_at()
+            .cmp(left.uploaded_at())
+            .then_with(|| left.filename().cmp(right.filename()))
+    });
+    Ok(files)
+}
+
+pub async fn selected_cookie_contents(
+    db: &Database,
+    cookie_file_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let cookie_file_id = cookie_file_id.trim();
+    if cookie_file_id.is_empty() {
+        return Ok(None);
+    }
+    let file = YoutubeCookieFile::get_by_id(db, cookie_file_id)
+        .await?
+        .context("selected YouTube cookie file no longer exists")?;
+    Ok(Some(file.contents().to_owned()))
+}
+
+pub fn parse_cookie_file(data: &[u8]) -> anyhow::Result<(String, usize)> {
+    if data.is_empty() {
+        bail!("cookie file is empty");
+    }
+    if data.len() > MAX_COOKIE_FILE_BYTES {
+        bail!("cookie file is larger than 2 MiB");
+    }
+    let text = std::str::from_utf8(data).context("cookie file must be UTF-8 text")?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut normalized = Vec::new();
+
+    for (index, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim_end_matches('\r');
+        if line.trim().is_empty() || (line.starts_with('#') && !line.starts_with("#HttpOnly_")) {
+            continue;
+        }
+        let fields = line.splitn(7, '\t').collect::<Vec<_>>();
+        if fields.len() != 7 {
+            bail!(
+                "invalid Netscape cookie on line {}: expected 7 tab-separated fields",
+                index + 1
+            );
+        }
+        let domain = fields[0].strip_prefix("#HttpOnly_").unwrap_or(fields[0]);
+        if domain.is_empty()
+            || domain.chars().any(char::is_whitespace)
+            || !matches!(fields[1], "TRUE" | "FALSE")
+            || fields[2].is_empty()
+            || !matches!(fields[3], "TRUE" | "FALSE")
+            || fields[4].parse::<i64>().is_err()
+            || fields[5].is_empty()
+        {
+            bail!("invalid Netscape cookie on line {}", index + 1);
+        }
+        normalized.push(fields.join("\t"));
+    }
+
+    if normalized.is_empty() {
+        bail!("cookie file contains no Netscape-format cookies");
+    }
+    let cookie_count = normalized.len();
+    let contents = format!(
+        "# Netscape HTTP Cookie File\n# Generated by furumusic\n\n{}\n",
+        normalized.join("\n")
+    );
+    Ok((contents, cookie_count))
+}
 
 #[derive(Debug, Deserialize)]
 pub struct YouTubePreviewRequest {
@@ -216,6 +424,52 @@ impl std::fmt::Display for YtDlpDownloadFailure {
 
 impl std::error::Error for YtDlpDownloadFailure {}
 
+struct TemporaryCookieFile {
+    path: PathBuf,
+}
+
+impl TemporaryCookieFile {
+    fn create(contents: &str) -> anyhow::Result<Self> {
+        let path =
+            std::env::temp_dir().join(format!("furumusic-ytdlp-cookies-{}.txt", Uuid::new_v4()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .context("could not create temporary yt-dlp cookie file")?;
+        if let Err(error) = file.write_all(contents.as_bytes()) {
+            let _ = std::fs::remove_file(&path);
+            return Err(error).context("could not write temporary yt-dlp cookie file");
+        }
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryCookieFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.path.display(), %error, "could not remove temporary yt-dlp cookie file");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct YtDlpOptions<'a> {
+    proxy_url: Option<&'a str>,
+    cookie_contents: Option<&'a str>,
+}
+
 pub struct YouTubeService {
     running_jobs: Mutex<HashSet<String>>,
     cancellations: Mutex<HashMap<String, CancellationToken>>,
@@ -237,9 +491,10 @@ impl YouTubeService {
         &self,
         request: YouTubePreviewRequest,
         proxy_url: Option<&str>,
+        cookie_contents: Option<&str>,
     ) -> anyhow::Result<YouTubePreviewDto> {
         let url = validate_youtube_url(&request.url)?;
-        let resolved = resolve_source(&url, proxy_url).await?;
+        let resolved = resolve_source(&url, proxy_url, cookie_contents).await?;
         let requested_video_id = requested_video_id(&url);
         let select_requested_only = resolved.kind == "playlist" && requested_video_id.is_some();
         Ok(YouTubePreviewDto {
@@ -270,6 +525,7 @@ impl YouTubeService {
         request: YouTubeStartRequest,
         inbox_dir: &str,
         proxy_url: Option<String>,
+        cookie_contents: Option<String>,
     ) -> anyhow::Result<YouTubeJobDto> {
         let url = validate_youtube_url(&request.url)?;
         validate_inbox_dir(inbox_dir)?;
@@ -286,7 +542,8 @@ impl YouTubeService {
             bail!("YouTube selection contains an invalid video ID");
         }
 
-        let resolved = resolve_source(&url, proxy_url.as_deref()).await?;
+        let resolved =
+            resolve_source(&url, proxy_url.as_deref(), cookie_contents.as_deref()).await?;
         let selected_items: Vec<ResolvedItem> = resolved
             .items
             .into_iter()
@@ -357,8 +614,14 @@ impl YouTubeService {
         }
         transaction.commit().await?;
 
-        self.spawn_job(pool.clone(), id.clone(), inbox_dir.to_string(), proxy_url)
-            .await;
+        self.spawn_job(
+            pool.clone(),
+            id.clone(),
+            inbox_dir.to_string(),
+            proxy_url,
+            cookie_contents,
+        )
+        .await;
         load_job_dto(pool, user_id, &id).await
     }
 
@@ -368,6 +631,7 @@ impl YouTubeService {
         user_id: i64,
         inbox_dir: &str,
         proxy_url: Option<String>,
+        cookie_contents: Option<String>,
     ) -> anyhow::Result<Vec<YouTubeJobDto>> {
         validate_inbox_dir(inbox_dir)?;
         sync_ai_statuses(pool, user_id).await?;
@@ -383,8 +647,14 @@ impl YouTubeService {
         .fetch_all(pool)
         .await?;
         for (id, _) in resumable {
-            self.spawn_job(pool.clone(), id, inbox_dir.to_string(), proxy_url.clone())
-                .await;
+            self.spawn_job(
+                pool.clone(),
+                id,
+                inbox_dir.to_string(),
+                proxy_url.clone(),
+                cookie_contents.clone(),
+            )
+            .await;
         }
 
         let ids: Vec<String> = sqlx::query_scalar(
@@ -413,6 +683,7 @@ impl YouTubeService {
         id: &str,
         inbox_dir: &str,
         proxy_url: Option<String>,
+        cookie_contents: Option<String>,
     ) -> anyhow::Result<YouTubeJobDto> {
         validate_inbox_dir(inbox_dir)?;
         let job = load_job_row(pool, user_id, id).await?;
@@ -448,6 +719,7 @@ impl YouTubeService {
             id.to_string(),
             inbox_dir.to_string(),
             proxy_url,
+            cookie_contents,
         )
         .await;
         load_job_dto(pool, user_id, id).await
@@ -538,6 +810,7 @@ impl YouTubeService {
         id: String,
         inbox_dir: String,
         proxy_url: Option<String>,
+        cookie_contents: Option<String>,
     ) {
         {
             let mut running = self.running_jobs.lock().await;
@@ -559,7 +832,14 @@ impl YouTubeService {
             };
             let result = if let Some(permit) = permit {
                 let result = service
-                    .run_job(&pool, &id, &inbox_dir, proxy_url.as_deref(), &cancel)
+                    .run_job(
+                        &pool,
+                        &id,
+                        &inbox_dir,
+                        proxy_url.as_deref(),
+                        cookie_contents.as_deref(),
+                        &cancel,
+                    )
                     .await;
                 drop(permit);
                 result
@@ -588,8 +868,13 @@ impl YouTubeService {
         id: &str,
         inbox_dir: &str,
         proxy_url: Option<&str>,
+        cookie_contents: Option<&str>,
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
+        let ytdlp = YtDlpOptions {
+            proxy_url,
+            cookie_contents,
+        };
         if cancel.is_cancelled() {
             return Ok(());
         }
@@ -610,7 +895,8 @@ impl YouTubeService {
                 return Ok(());
             }
             set_parent_status(pool, id, "resolving", None).await?;
-            let resolved = resolve_source(&job.source_url, proxy_url).await?;
+            let resolved =
+                resolve_source(&job.source_url, ytdlp.proxy_url, ytdlp.cookie_contents).await?;
             if cancel.is_cancelled() {
                 return Ok(());
             }
@@ -677,7 +963,7 @@ impl YouTubeService {
                 continue;
             }
             if let Err(err) = self
-                .process_item(pool, &job, &item, &inbox_root, proxy_url, cancel)
+                .process_item(pool, &job, &item, &inbox_root, ytdlp, cancel)
                 .await
             {
                 if cancel.is_cancelled() {
@@ -707,7 +993,7 @@ impl YouTubeService {
         job: &YouTubeJobRow,
         item: &YouTubeItemRow,
         inbox_root: &Path,
-        proxy_url: Option<&str>,
+        ytdlp: YtDlpOptions<'_>,
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         if cancel.is_cancelled() {
@@ -720,8 +1006,16 @@ impl YouTubeService {
         tokio::fs::create_dir_all(&stage).await?;
         let mut forbidden_retries = 0;
         loop {
-            match run_ytdlp_download(pool, &item.id, &item.source_url, &stage, proxy_url, cancel)
-                .await
+            match run_ytdlp_download(
+                pool,
+                &item.id,
+                &item.source_url,
+                &stage,
+                ytdlp.proxy_url,
+                ytdlp.cookie_contents,
+                cancel,
+            )
+            .await
             {
                 Ok(()) => break,
                 Err(error)
@@ -815,8 +1109,15 @@ impl YouTubeService {
     }
 }
 
-async fn resolve_source(url: &str, proxy_url: Option<&str>) -> anyhow::Result<ResolvedSource> {
-    let mut command = base_ytdlp_command(proxy_url);
+async fn resolve_source(
+    url: &str,
+    proxy_url: Option<&str>,
+    cookie_contents: Option<&str>,
+) -> anyhow::Result<ResolvedSource> {
+    let cookie_file = cookie_contents
+        .map(TemporaryCookieFile::create)
+        .transpose()?;
+    let mut command = base_ytdlp_command(proxy_url, cookie_file.as_ref().map(|file| file.path()));
     command
         .arg("--flat-playlist")
         .arg("--dump-single-json")
@@ -887,15 +1188,19 @@ async fn resolve_source(url: &str, proxy_url: Option<&str>) -> anyhow::Result<Re
     })
 }
 
-fn base_ytdlp_command(proxy_url: Option<&str>) -> Command {
+fn base_ytdlp_command(proxy_url: Option<&str>, cookie_file: Option<&Path>) -> Command {
     let mut command = Command::new("yt-dlp");
     command
         .arg("--no-config")
-        .arg("--no-cookies")
         .arg("--no-cookies-from-browser")
         .arg("--js-runtimes")
         .arg("deno")
         .stdin(Stdio::null());
+    if let Some(cookie_file) = cookie_file {
+        command.arg("--cookies").arg(cookie_file);
+    } else {
+        command.arg("--no-cookies");
+    }
     if let Some(proxy_url) = proxy_url {
         command.arg("--proxy").arg(proxy_url);
     }
@@ -908,9 +1213,13 @@ async fn run_ytdlp_download(
     url: &str,
     stage: &Path,
     proxy_url: Option<&str>,
+    cookie_contents: Option<&str>,
     cancel: &CancellationToken,
 ) -> anyhow::Result<()> {
-    let mut command = base_ytdlp_command(proxy_url);
+    let cookie_file = cookie_contents
+        .map(TemporaryCookieFile::create)
+        .transpose()?;
+    let mut command = base_ytdlp_command(proxy_url, cookie_file.as_ref().map(|file| file.path()));
     command
         .arg("--no-playlist")
         .arg("--continue")
@@ -1964,9 +2273,60 @@ fn now_string() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+pub mod db_migrations {
+    use super::*;
+
+    #[cot::db::migrations::migration_op]
+    async fn create_youtube_cookie_files(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "CREATE TABLE IF NOT EXISTS furumusic__youtube_cookie_file (
+                    id VARCHAR(36) PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    cookie_count BIGINT NOT NULL,
+                    uploaded_at VARCHAR(32) NOT NULL,
+                    contents TEXT NOT NULL
+                )",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0048CreateYoutubeCookieFiles;
+
+    impl migrations::Migration for M0048CreateYoutubeCookieFiles {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0048_create_youtube_cookie_files";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0047_create_youtube_import_media_links",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_youtube_cookie_files).build()];
+    }
+
+    pub const MIGRATIONS: &[&SyncDynMigration] = &[&M0048CreateYoutubeCookieFiles];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookie_models_use_exact_migrated_table_name() {
+        assert_eq!(
+            <YoutubeCookieFile as Model>::TABLE_NAME.as_str(),
+            "furumusic__youtube_cookie_file"
+        );
+        assert_eq!(
+            <YoutubeCookieFileMetadata as Model>::TABLE_NAME.as_str(),
+            "furumusic__youtube_cookie_file"
+        );
+    }
 
     #[test]
     fn validates_supported_youtube_hosts() {
@@ -2049,7 +2409,7 @@ mod tests {
 
     #[test]
     fn ytdlp_command_receives_selected_proxy() {
-        let command = base_ytdlp_command(Some("socks5://user:pass@127.0.0.1:1080/"));
+        let command = base_ytdlp_command(Some("socks5://user:pass@127.0.0.1:1080/"), None);
         let args: Vec<String> = command
             .as_std()
             .get_args()
@@ -2062,13 +2422,73 @@ mod tests {
             ]
         }));
 
-        let direct = base_ytdlp_command(None);
+        let direct = base_ytdlp_command(None, None);
         assert!(
             direct
                 .as_std()
                 .get_args()
                 .all(|argument| argument != "--proxy")
         );
+        assert!(
+            direct
+                .as_std()
+                .get_args()
+                .any(|argument| argument == "--no-cookies")
+        );
+    }
+
+    #[test]
+    fn parses_and_normalizes_netscape_cookie_files() {
+        let source = b"# Netscape HTTP Cookie File\r\n\r\n.youtube.com\tTRUE\t/\tTRUE\t1893456000\tSID\tsecret\r\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tvalue\r\n";
+        let (contents, count) = parse_cookie_file(source).unwrap();
+        assert_eq!(count, 2);
+        assert!(contents.starts_with("# Netscape HTTP Cookie File\n"));
+        assert!(contents.contains("#HttpOnly_.youtube.com\tTRUE"));
+        assert!(!contents.contains('\r'));
+    }
+
+    #[test]
+    fn rejects_non_netscape_cookie_files() {
+        assert!(parse_cookie_file(br#"[{"name":"SID","value":"secret"}]"#).is_err());
+        assert!(parse_cookie_file(b"# Netscape HTTP Cookie File\n").is_err());
+        assert!(parse_cookie_file(b"youtube.com TRUE / TRUE 0 SID secret\n").is_err());
+    }
+
+    #[test]
+    fn ytdlp_command_receives_cookie_file_when_selected() {
+        let path = Path::new("/tmp/furumusic-test-cookies.txt");
+        let command = base_ytdlp_command(None, Some(path));
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.windows(2).any(|pair| {
+            pair == ["--cookies".to_string(), path.to_string_lossy().into_owned()]
+        }));
+        assert!(!args.iter().any(|argument| argument == "--no-cookies"));
+    }
+
+    #[test]
+    fn temporary_cookie_file_is_private_and_removed() {
+        let path;
+        {
+            let file = TemporaryCookieFile::create(
+                "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tsecret\n",
+            )
+            .unwrap();
+            path = file.path().to_owned();
+            assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+        assert!(!path.exists());
     }
 
     #[test]

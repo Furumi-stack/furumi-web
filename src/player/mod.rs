@@ -93,6 +93,15 @@ fn download_proxy_for(
     result.map_err(|error| json_error(StatusCode::BAD_REQUEST, &error.to_string()))
 }
 
+async fn youtube_cookie_contents(
+    config: &AppConfig,
+    db: &Database,
+) -> Result<Option<String>, cot::response::Response> {
+    crate::youtube::selected_cookie_contents(db, &config.youtube_cookie_id)
+        .await
+        .map_err(|error| json_error(StatusCode::BAD_REQUEST, &error.to_string()))
+}
+
 #[derive(serde::Serialize)]
 struct LocalUploadResponse {
     ok: bool,
@@ -8542,12 +8551,23 @@ impl App for PlayerApp {
                                     Ok(proxy_url) => proxy_url,
                                     Err(response) => return Ok(response),
                                 };
+                                let cookie_contents = match youtube_cookie_contents(&live_config, &db).await {
+                                    Ok(cookie_contents) => cookie_contents,
+                                    Err(response) => return Ok(response),
+                                };
                                 let service = youtube_service
                                     .get_or_init(|| async {
                                         Arc::new(YouTubeService::new(Arc::clone(&scheduler_handle)))
                                     })
                                     .await;
-                                match service.preview(json.0, proxy_url.as_deref()).await {
+                                match service
+                                    .preview(
+                                        json.0,
+                                        proxy_url.as_deref(),
+                                        cookie_contents.as_deref(),
+                                    )
+                                    .await
+                                {
                                     Ok(preview) => Json(preview).into_response(),
                                     Err(err) => {
                                         Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()))
@@ -8603,12 +8623,17 @@ impl App for PlayerApp {
                                     Ok(proxy_url) => proxy_url,
                                     Err(response) => return Ok(response),
                                 };
+                                let cookie_contents = match youtube_cookie_contents(&live_config, &db).await {
+                                    Ok(cookie_contents) => cookie_contents,
+                                    Err(response) => return Ok(response),
+                                };
                                 match service
                                     .list(
                                         pg_pool,
                                         user.id,
                                         &live_config.agent_inbox_dir,
                                         proxy_url,
+                                        cookie_contents,
                                     )
                                     .await
                                 {
@@ -8670,6 +8695,10 @@ impl App for PlayerApp {
                                     Ok(proxy_url) => proxy_url,
                                     Err(response) => return Ok(response),
                                 };
+                                let cookie_contents = match youtube_cookie_contents(&live_config, &db).await {
+                                    Ok(cookie_contents) => cookie_contents,
+                                    Err(response) => return Ok(response),
+                                };
                                 match service
                                     .start(
                                         pg_pool,
@@ -8677,6 +8706,7 @@ impl App for PlayerApp {
                                         json.0,
                                         &live_config.agent_inbox_dir,
                                         proxy_url,
+                                        cookie_contents,
                                     )
                                     .await
                                 {
@@ -8738,6 +8768,10 @@ impl App for PlayerApp {
                                     Ok(proxy_url) => proxy_url,
                                     Err(response) => return Ok(response),
                                 };
+                                let cookie_contents = match youtube_cookie_contents(&live_config, &db).await {
+                                    Ok(cookie_contents) => cookie_contents,
+                                    Err(response) => return Ok(response),
+                                };
                                 match service
                                     .retry(
                                         pg_pool,
@@ -8745,6 +8779,7 @@ impl App for PlayerApp {
                                         &path.0.id,
                                         &live_config.agent_inbox_dir,
                                         proxy_url,
+                                        cookie_contents,
                                     )
                                     .await
                                 {

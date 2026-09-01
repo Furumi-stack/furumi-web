@@ -832,6 +832,8 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/admin/v2/api/jobs/{name}/run",
     "/admin/v2/api/settings",
     "/admin/v2/api/settings/probe",
+    "/admin/v2/api/settings/youtube-cookies",
+    "/admin/v2/api/settings/youtube-cookies/{id}",
     "/admin/v2/api/jobs/{name}/toggle",
     "/admin/v2/api/jobs/{name}/runs",
     "/admin/v2/api/jobs/{name}/runs/{run_id}",

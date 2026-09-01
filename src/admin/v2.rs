@@ -16,7 +16,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder};
 use super::BUILD_INFO;
 use crate::agent;
 use crate::auth::{self, AuthenticatedUser, Role};
-use crate::config::{AppConfig, ConfigEntry, ConfigSources, DownloadProxy};
+use crate::config::{AppConfig, ConfigEntry, ConfigSource, ConfigSources, DownloadProxy};
 use crate::i18n::{I18n, Translations};
 use crate::scheduler::{self, JobRegistry, JobRun, ScheduledJob};
 
@@ -163,6 +163,12 @@ pub(super) struct UploadLibraryImageRequest {
     data: String,
     filename: String,
     mime_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct UploadYoutubeCookieFileRequest {
+    filename: String,
+    data: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -444,9 +450,40 @@ struct MergeReleasesResponse {
 struct AdminSettingsDto {
     values: AdminSettingsValues,
     sources: AdminSettingsSources,
+    youtube_cookie_files: Vec<AdminYoutubeCookieFileDto>,
     lastfm_api_key_configured: bool,
     lastfm_shared_secret_configured: bool,
     lastfm_scrobbling_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+struct AdminYoutubeCookieFileDto {
+    id: String,
+    filename: String,
+    cookie_count: u64,
+    uploaded_at: String,
+}
+
+impl From<crate::youtube::YoutubeCookieFile> for AdminYoutubeCookieFileDto {
+    fn from(file: crate::youtube::YoutubeCookieFile) -> Self {
+        Self {
+            id: file.id_str().to_owned(),
+            filename: file.filename().to_owned(),
+            cookie_count: file.cookie_count(),
+            uploaded_at: file.uploaded_at().to_owned(),
+        }
+    }
+}
+
+impl From<crate::youtube::YoutubeCookieFileMetadata> for AdminYoutubeCookieFileDto {
+    fn from(file: crate::youtube::YoutubeCookieFileMetadata) -> Self {
+        Self {
+            id: file.id_str().to_owned(),
+            filename: file.filename().to_owned(),
+            cookie_count: file.cookie_count(),
+            uploaded_at: file.uploaded_at().to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -497,6 +534,8 @@ struct AdminSettingsValues {
     torrent_proxy_id: String,
     #[serde(default)]
     youtube_proxy_id: String,
+    #[serde(default)]
+    youtube_cookie_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -566,6 +605,7 @@ struct AdminSettingsSources {
     download_proxies: &'static str,
     torrent_proxy_id: &'static str,
     youtube_proxy_id: &'static str,
+    youtube_cookie_id: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -616,6 +656,8 @@ pub(super) struct UpdateSettingsRequest {
     torrent_proxy_id: String,
     #[serde(default)]
     youtube_proxy_id: String,
+    #[serde(default)]
+    youtube_cookie_id: String,
 }
 
 fn default_similarity_model() -> String {
@@ -1055,7 +1097,10 @@ pub async fn settings(session: Session, db: Database) -> cot::Result<cot::respon
         return Ok(response);
     }
     let (config, sources) = AppConfig::load_with_db(&db).await;
-    Json(settings_dto(config, sources)).into_response()
+    let cookie_files = crate::youtube::list_cookie_files(&db)
+        .await
+        .map_err(|error| cot::Error::internal(error.to_string()))?;
+    Json(settings_dto(config, sources, cookie_files)).into_response()
 }
 
 pub async fn update_settings(
@@ -1117,6 +1162,7 @@ pub async fn update_settings(
     }
     let torrent_proxy_id = body.torrent_proxy_id.trim().to_string();
     let youtube_proxy_id = body.youtube_proxy_id.trim().to_string();
+    let youtube_cookie_id = body.youtube_cookie_id.trim().to_string();
     for (method, proxy_id) in [
         ("torrent", torrent_proxy_id.as_str()),
         ("YouTube", youtube_proxy_id.as_str()),
@@ -1127,6 +1173,16 @@ pub async fn update_settings(
                 &format!("selected {method} proxy is not in the saved proxy list"),
             ));
         }
+    }
+    if !youtube_cookie_id.is_empty()
+        && !crate::youtube::cookie_file_exists(&db, &youtube_cookie_id)
+            .await
+            .map_err(|error| cot::Error::internal(error.to_string()))?
+    {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "selected YouTube cookie file is not in the saved cookie file list",
+        ));
     }
     let download_proxies_json = serde_json::to_string(&download_proxies)
         .map_err(|error| cot::Error::internal(error.to_string()))?;
@@ -1200,6 +1256,7 @@ pub async fn update_settings(
         ("download_proxies", download_proxies_json),
         ("torrent_proxy_id", torrent_proxy_id),
         ("youtube_proxy_id", youtube_proxy_id),
+        ("youtube_cookie_id", youtube_cookie_id),
     ];
     for (key, value) in fields {
         let mut entry = ConfigEntry::new(key.to_string(), value);
@@ -1215,6 +1272,119 @@ pub async fn update_settings(
         crate::similarity::handle().apply(&fresh);
         crate::federation::handle().apply(&fresh).await;
     });
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+pub async fn upload_youtube_cookie_file(
+    session: Session,
+    db: Database,
+    pool: &PgPool,
+    Json(body): Json<UploadYoutubeCookieFileRequest>,
+) -> cot::Result<cot::response::Response> {
+    if let Err(response) = require_admin_json(&session, &db).await {
+        return Ok(response);
+    }
+    let saved_count = match crate::youtube::cookie_file_count(&db).await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, "could not count saved YouTube cookie files");
+            return Ok(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "YouTube cookie storage is unavailable; restart the server to apply database migrations",
+            ));
+        }
+    };
+    if saved_count >= crate::youtube::MAX_COOKIE_FILES {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "at most 32 YouTube cookie files can be saved",
+        ));
+    }
+    let filename = Path::new(body.filename.trim())
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(255)
+        .collect::<String>();
+    if filename.is_empty() {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "cookie filename is empty",
+        ));
+    }
+    use base64::Engine;
+    let max_encoded_len = crate::youtube::MAX_COOKIE_FILE_BYTES.div_ceil(3) * 4;
+    if body.data.trim().len() > max_encoded_len {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "cookie file is larger than 2 MiB",
+        ));
+    }
+    let data = match base64::engine::general_purpose::STANDARD.decode(body.data.trim()) {
+        Ok(data) => data,
+        Err(_) => {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "cookie file payload is invalid",
+            ));
+        }
+    };
+    let (contents, cookie_count) = match crate::youtube::parse_cookie_file(&data) {
+        Ok(parsed) => parsed,
+        Err(error) => return Ok(json_error(StatusCode::BAD_REQUEST, &error.to_string())),
+    };
+    let file =
+        match crate::youtube::store_cookie_file(pool, &filename, cookie_count, &contents).await {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::error!(%error, "could not save YouTube cookie file");
+                return Ok(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not save YouTube cookie file; check the server log for details",
+                ));
+            }
+        };
+    Json(AdminYoutubeCookieFileDto::from(file)).into_response()
+}
+
+pub async fn delete_youtube_cookie_file(
+    session: Session,
+    db: Database,
+    id: &str,
+) -> cot::Result<cot::response::Response> {
+    if let Err(response) = require_admin_json(&session, &db).await {
+        return Ok(response);
+    }
+    let id = id.trim();
+    if !crate::youtube::cookie_file_exists(&db, id)
+        .await
+        .map_err(|error| cot::Error::internal(error.to_string()))?
+    {
+        return Ok(json_error(
+            StatusCode::NOT_FOUND,
+            "YouTube cookie file not found",
+        ));
+    }
+    let (config, sources) = AppConfig::load_with_db(&db).await;
+    if config.youtube_cookie_id == id {
+        if sources.youtube_cookie_id == ConfigSource::Env {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "this cookie file is selected by FURU_YOUTUBE_COOKIE_ID and cannot be deleted",
+            ));
+        }
+        let mut entry = ConfigEntry::new("youtube_cookie_id".to_owned(), String::new());
+        entry
+            .save(&db)
+            .await
+            .map_err(|error| cot::Error::internal(error.to_string()))?;
+    }
+    crate::youtube::YoutubeCookieFile::delete_by_id(&db, id)
+        .await
+        .map_err(|error| cot::Error::internal(error.to_string()))?;
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 
@@ -1373,7 +1543,11 @@ pub async fn settings_probe(
     .into_response()
 }
 
-fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
+fn settings_dto(
+    config: AppConfig,
+    sources: ConfigSources,
+    cookie_files: Vec<crate::youtube::YoutubeCookieFileMetadata>,
+) -> AdminSettingsDto {
     let download_proxies = config
         .parsed_download_proxies()
         .unwrap_or_else(|error| {
@@ -1384,6 +1558,10 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
         .map(AdminDownloadProxy::from)
         .collect();
     AdminSettingsDto {
+        youtube_cookie_files: cookie_files
+            .into_iter()
+            .map(AdminYoutubeCookieFileDto::from)
+            .collect(),
         lastfm_api_key_configured: !config.lastfm_api_key.trim().is_empty(),
         lastfm_shared_secret_configured: !config.lastfm_shared_secret.trim().is_empty(),
         lastfm_scrobbling_configured: !config.lastfm_api_key.trim().is_empty()
@@ -1422,6 +1600,7 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             download_proxies,
             torrent_proxy_id: config.torrent_proxy_id,
             youtube_proxy_id: config.youtube_proxy_id,
+            youtube_cookie_id: config.youtube_cookie_id,
         },
         sources: AdminSettingsSources {
             auth_password_enabled: sources.auth_password_enabled.code(),
@@ -1457,6 +1636,7 @@ fn settings_dto(config: AppConfig, sources: ConfigSources) -> AdminSettingsDto {
             download_proxies: sources.download_proxies.code(),
             torrent_proxy_id: sources.torrent_proxy_id.code(),
             youtube_proxy_id: sources.youtube_proxy_id.code(),
+            youtube_cookie_id: sources.youtube_cookie_id.code(),
         },
     }
 }

@@ -148,6 +148,7 @@ pub struct ConfigSources {
     pub download_proxies: ConfigSource,
     pub torrent_proxy_id: ConfigSource,
     pub youtube_proxy_id: ConfigSource,
+    pub youtube_cookie_id: ConfigSource,
 }
 
 impl Default for ConfigSources {
@@ -188,6 +189,7 @@ impl Default for ConfigSources {
             download_proxies: ConfigSource::Default,
             torrent_proxy_id: ConfigSource::Default,
             youtube_proxy_id: ConfigSource::Default,
+            youtube_cookie_id: ConfigSource::Default,
         }
     }
 }
@@ -403,6 +405,8 @@ pub struct AppConfig {
     pub torrent_proxy_id: String,
     /// Saved proxy id used for YouTube downloads; empty means a direct connection.
     pub youtube_proxy_id: String,
+    /// Saved cookie-file id used by yt-dlp; empty means no cookies.
+    pub youtube_cookie_id: String,
 }
 
 impl Default for AppConfig {
@@ -446,6 +450,7 @@ impl Default for AppConfig {
             download_proxies: "[]".into(),
             torrent_proxy_id: String::new(),
             youtube_proxy_id: String::new(),
+            youtube_cookie_id: String::new(),
         }
     }
 }
@@ -487,6 +492,7 @@ impl_env_overrides!(
     download_proxies,
     torrent_proxy_id,
     youtube_proxy_id,
+    youtube_cookie_id,
 );
 
 impl AppConfig {
@@ -581,11 +587,13 @@ impl AppConfig {
                             sources.$field = ConfigSource::Database;
                         }
                         Err(_) => {
-                            tracing::warn!(
-                                "ignoring invalid DB config value for {}: {:?}",
-                                stringify!($field),
-                                val,
-                            );
+                            if !val.trim().is_empty() {
+                                tracing::warn!(
+                                    "ignoring invalid DB config value for {}: {:?}",
+                                    stringify!($field),
+                                    val,
+                                );
+                            }
                         }
                     }
                 }
@@ -627,6 +635,7 @@ impl AppConfig {
         apply_db_field!(download_proxies);
         apply_db_field!(torrent_proxy_id);
         apply_db_field!(youtube_proxy_id);
+        apply_db_field!(youtube_cookie_id);
     }
 
     pub fn parsed_download_proxies(&self) -> anyhow::Result<Vec<DownloadProxy>> {

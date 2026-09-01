@@ -959,6 +959,89 @@ tbody tr:hover {
     outline: none;
 }
 
+.youtube-cookie-settings {
+    display: grid;
+    gap: 9px;
+    margin-top: 11px;
+    padding-top: 11px;
+    border-top: 1px solid var(--border-color);
+}
+
+.youtube-cookie-picker,
+.youtube-cookie-upload,
+.youtube-cookie-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.youtube-cookie-picker > span {
+    flex: 0 0 auto;
+    color: var(--text-subdued);
+    font-size: 11px;
+    font-weight: 750;
+}
+
+.youtube-cookie-picker select {
+    min-width: 0;
+    flex: 1;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.youtube-cookie-upload {
+    justify-content: space-between;
+}
+
+.youtube-cookie-upload span,
+.youtube-cookie-empty {
+    color: var(--text-subdued);
+    font-size: 11px;
+}
+
+.youtube-cookie-list {
+    display: grid;
+    gap: 6px;
+}
+
+.youtube-cookie-row {
+    justify-content: space-between;
+    min-width: 0;
+    padding: 8px 9px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+}
+
+.youtube-cookie-row.active {
+    border-color: rgba(29, 185, 84, 0.55);
+    background: rgba(29, 185, 84, 0.08);
+}
+
+.youtube-cookie-info {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.youtube-cookie-info strong {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.youtube-cookie-info span {
+    color: var(--text-subdued);
+    font-size: 10px;
+}
+
 .proxy-editor {
     grid-column: 1 / -1;
     min-width: 0;
@@ -1148,6 +1231,8 @@ tbody tr:hover {
     .setting-field { max-width: none; }
     .download-method-controls,
     .proxy-row { grid-template-columns: 1fr; }
+    .youtube-cookie-picker,
+    .youtube-cookie-upload { align-items: stretch; flex-direction: column; }
 }
 
 .settings-note {
@@ -2725,7 +2810,43 @@ tbody tr:hover {
                                             </template>
                                         </select>
                                     </div>
-                                    <div class="setting-help">The selected proxy is passed to metadata lookup and downloads through yt-dlp's <code>--proxy</code> option.</div>
+                                    <div class="youtube-cookie-settings">
+                                        <div class="youtube-cookie-picker">
+                                            <span>
+                                                yt-dlp cookies
+                                                <span class="source-pill" :class="sourceClass('youtube_cookie_id')" x-text="settingSource('youtube_cookie_id')"></span>
+                                            </span>
+                                            <select x-model="settingsDraft.youtube_cookie_id" :disabled="!settingsDraft.downloads_enabled || !settingsDraft.youtube_downloads_enabled">
+                                                <option value="">No cookies</option>
+                                                <template x-for="file in settings.youtube_cookie_files || []" :key="file.id">
+                                                    <option :value="file.id" x-text="youtubeCookieLabel(file)"></option>
+                                                </template>
+                                            </select>
+                                        </div>
+                                        <input type="file" accept=".txt,text/plain" x-ref="youtubeCookieInput" style="display:none" @change="uploadYoutubeCookieFile($event)" />
+                                        <div class="youtube-cookie-upload">
+                                            <span>Netscape <code>cookies.txt</code>; maximum size 2 MiB.</span>
+                                            <button class="btn" type="button" @click="$refs.youtubeCookieInput.click()" :disabled="youtubeCookieUploading">
+                                                <i data-lucide="upload"></i>
+                                                <span x-text="youtubeCookieUploading ? 'Uploading…' : 'Upload cookie file'"></span>
+                                            </button>
+                                        </div>
+                                        <div class="youtube-cookie-empty" x-show="!(settings.youtube_cookie_files || []).length">No cookie files saved. yt-dlp will run without cookies.</div>
+                                        <div class="youtube-cookie-list" x-show="(settings.youtube_cookie_files || []).length">
+                                            <template x-for="file in settings.youtube_cookie_files || []" :key="file.id">
+                                                <div class="youtube-cookie-row" :class="{ active: settingsDraft.youtube_cookie_id === file.id }">
+                                                    <div class="youtube-cookie-info">
+                                                        <strong :title="file.filename" x-text="file.filename"></strong>
+                                                        <span x-text="`${fmt(file.cookie_count)} cookies · uploaded ${shortDate(file.uploaded_at)}`"></span>
+                                                    </div>
+                                                    <button class="icon-btn danger" type="button" @click="deleteYoutubeCookieFile(file)" :disabled="youtubeCookieUploading" title="Delete cookie file">
+                                                        <i data-lucide="trash-2"></i>
+                                                    </button>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <div class="setting-help">The selected proxy and cookie file are passed to both metadata lookup and downloads through yt-dlp.</div>
                                 </div>
 
                                 <div class="proxy-editor">
@@ -3718,7 +3839,7 @@ function adminV2() {
         mergeDetails: [],
         mergeArtistSearch: '',
         mergeDraft: { release_ids: [], target_release_id: null, title: '', release_type: 'album', year: '', hidden: 'false', cover_file_id: null, artist_ids: [], tracks: [] },
-        settings: { values: {}, sources: {}, lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
+        settings: { values: {}, sources: {}, youtube_cookie_files: [], lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
         settingsDraft: {
             auth_password_enabled: false,
             auth_sso_enabled: false,
@@ -3752,7 +3873,8 @@ function adminV2() {
             youtube_downloads_enabled: true,
             download_proxies: [],
             torrent_proxy_id: '',
-            youtube_proxy_id: ''
+            youtube_proxy_id: '',
+            youtube_cookie_id: ''
         },
         settingsProbe: { status: 'idle', ok: false },
         settingsProbeLoading: false,
@@ -3763,6 +3885,7 @@ function adminV2() {
         similarityStatus: { status: { phase: 'disabled' }, models: [], profiles: [] },
         similarityLoading: false,
         settingsSaving: false,
+        youtubeCookieUploading: false,
         routeReady: false,
         poller: null,
 
@@ -4068,6 +4191,64 @@ function adminV2() {
         downloadProxyLabel(proxy) {
             const address = String(proxy?.address || '').trim();
             return address || 'New proxy';
+        },
+
+        youtubeCookieLabel(file) {
+            const filename = String(file?.filename || '').trim() || 'Cookie file';
+            return `${filename} (${this.fmt(file?.cookie_count)} cookies)`;
+        },
+
+        async uploadYoutubeCookieFile(event) {
+            const input = event?.target;
+            const file = input?.files && input.files.length ? input.files[0] : null;
+            if (!file || this.youtubeCookieUploading) return;
+            if (file.size > 2 * 1024 * 1024) {
+                this.showToast('Cookie file is larger than 2 MiB');
+                input.value = '';
+                return;
+            }
+            this.youtubeCookieUploading = true;
+            try {
+                const dataUrl = await this.readFileAsDataUrl(file);
+                const data = String(dataUrl).split(',')[1] || '';
+                const uploaded = await this.request(`${this.apiBase}/settings/youtube-cookies`, {
+                    method: 'POST',
+                    body: JSON.stringify({ filename: file.name, data })
+                });
+                this.settings.youtube_cookie_files = [
+                    uploaded,
+                    ...(this.settings.youtube_cookie_files || []).filter(item => item.id !== uploaded.id)
+                ];
+                this.settingsDraft.youtube_cookie_id = uploaded.id;
+                this.showToast('Cookie file uploaded; save settings to activate it');
+            } catch (error) {
+                this.showToast(error.message);
+            } finally {
+                this.youtubeCookieUploading = false;
+                if (input) input.value = '';
+                this.icons();
+            }
+        },
+
+        async deleteYoutubeCookieFile(file) {
+            if (!file || this.youtubeCookieUploading) return;
+            if (!window.confirm(`Delete cookie file "${file.filename}"? This cannot be undone.`)) return;
+            this.youtubeCookieUploading = true;
+            try {
+                await this.request(`${this.apiBase}/settings/youtube-cookies/${encodeURIComponent(file.id)}`, {
+                    method: 'DELETE'
+                });
+                this.settings.youtube_cookie_files = (this.settings.youtube_cookie_files || [])
+                    .filter(item => item.id !== file.id);
+                if (this.settingsDraft.youtube_cookie_id === file.id) this.settingsDraft.youtube_cookie_id = '';
+                if (this.settings.values?.youtube_cookie_id === file.id) this.settings.values.youtube_cookie_id = '';
+                this.showToast('Cookie file deleted');
+            } catch (error) {
+                this.showToast(error.message);
+            } finally {
+                this.youtubeCookieUploading = false;
+                this.icons();
+            }
         },
 
         async saveSettings() {
