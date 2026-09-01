@@ -1196,6 +1196,17 @@ pub async fn finalize_approved(
         }
     }
 
+    if let Err(error) =
+        crate::youtube::sync_target_playlists_for_imported_media(pool, media_file.id_val()).await
+    {
+        tracing::warn!(
+            track_id = track.id_val(),
+            media_file_id = media_file.id_val(),
+            %error,
+            "could not add an imported YouTube track to its target playlist; it will be retried"
+        );
+    }
+
     tracing::info!(
         track_id = track.id_val(),
         artist = artist_name,

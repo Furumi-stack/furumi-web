@@ -3291,6 +3291,11 @@ button.user-stat:hover {
     overflow: hidden;
 }
 
+.torrent-modal.youtube-mode {
+    width: min(1440px, calc(100vw - 32px));
+    max-width: 1440px;
+}
+
 .torrent-modal-head {
     display: flex;
     align-items: flex-start;
@@ -3613,8 +3618,8 @@ button.user-stat:hover {
 }
 
 .youtube-preview-card {
-    min-height: 0;
-    flex: 0 1 360px;
+    min-height: 370px;
+    flex: 1 1 520px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -3626,6 +3631,7 @@ button.user-stat:hover {
 
 .youtube-preview-head,
 .youtube-preview-footer {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -3657,11 +3663,53 @@ button.user-stat:hover {
 }
 
 .youtube-preview-list {
-    min-height: 72px;
+    min-height: 190px;
+    flex: 1 1 260px;
     overflow-y: auto;
     border: 1px solid var(--border-color);
     border-radius: 7px;
     background: var(--bg-secondary);
+}
+
+.youtube-preview-destination {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 14px;
+    row-gap: 4px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-secondary);
+}
+
+.youtube-preview-destination > label {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0;
+}
+
+.youtube-preview-destination-fields {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.youtube-preview-destination-fields.creating {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.youtube-preview-destination p {
+    grid-column: 1;
+    grid-row: 2;
+    margin: 0;
+    color: var(--text-subdued);
+    font-size: 10px;
+    line-height: 1.4;
 }
 
 .youtube-preview-row {
@@ -3722,6 +3770,7 @@ button.user-stat:hover {
 
 .youtube-download-list {
     min-height: 0;
+    flex: 1 1 180px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -3737,10 +3786,63 @@ button.user-stat:hover {
 
 .youtube-job-card {
     flex: 0 0 auto;
-    padding: 13px;
+    padding: 0;
     border: 1px solid var(--border-color);
     border-radius: 9px;
     background: var(--bg-primary);
+    overflow: hidden;
+}
+
+.youtube-job-card.collapsed {
+    border-color: rgba(255,255,255,0.08);
+}
+
+.youtube-job-summary {
+    width: 100%;
+    min-height: 50px;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 13px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.youtube-job-summary:hover {
+    background: var(--bg-hover);
+}
+
+.youtube-job-chevron {
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid var(--text-subdued);
+    border-bottom: 2px solid var(--text-subdued);
+    transform: rotate(45deg) translate(-2px, -2px);
+    transition: transform 140ms ease;
+}
+
+.youtube-job-card.collapsed .youtube-job-chevron {
+    transform: rotate(-45deg);
+}
+
+.youtube-job-card.collapsed .youtube-job-meta {
+    display: none;
+}
+
+.youtube-job-compact-progress {
+    color: var(--text-subdued);
+    font-size: 11px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.youtube-job-details {
+    padding: 0 13px 13px;
 }
 
 .youtube-job-head,
@@ -3781,7 +3883,7 @@ button.user-stat:hover {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    margin-top: 9px;
+    margin-top: 0;
     color: var(--text-subdued);
     font-size: 11px;
 }
@@ -6462,6 +6564,11 @@ button.user-stat:hover {
         overflow: hidden;
     }
 
+    .torrent-modal.youtube-mode {
+        width: 100vw;
+        max-width: none;
+    }
+
     .torrent-modal-head {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
@@ -6533,7 +6640,8 @@ button.user-stat:hover {
 
     .youtube-preview-card {
         flex-basis: auto;
-        max-height: 330px;
+        min-height: 420px;
+        max-height: none;
     }
 
     .youtube-preview-head,
@@ -6544,6 +6652,32 @@ button.user-stat:hover {
 
     .youtube-preview-controls {
         flex-wrap: wrap;
+    }
+
+    .youtube-preview-destination-fields {
+        grid-column: auto;
+        grid-row: auto;
+        grid-template-columns: 1fr;
+    }
+
+    .youtube-preview-destination {
+        display: block;
+    }
+
+    .youtube-preview-destination > label {
+        margin-bottom: 7px;
+    }
+
+    .youtube-preview-destination p {
+        margin-top: 7px;
+    }
+
+    .youtube-job-summary {
+        grid-template-columns: 16px minmax(0, 1fr) auto;
+    }
+
+    .youtube-job-summary .youtube-job-compact-progress {
+        display: none;
     }
 
     .youtube-download-list {

@@ -244,6 +244,8 @@ pub struct YouTubePreviewRequest {
 pub struct YouTubeStartRequest {
     pub url: String,
     pub selected_source_ids: Vec<String>,
+    #[serde(default)]
+    pub target_playlist_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -289,6 +291,7 @@ pub struct YouTubeJobDto {
     pub source_url: String,
     pub title: String,
     pub source_kind: String,
+    pub target_playlist_id: Option<i64>,
     pub status: String,
     pub total_items: i32,
     pub completed_items: i32,
@@ -308,6 +311,7 @@ struct YouTubeJobRow {
     source_url: String,
     title: String,
     source_kind: String,
+    target_playlist_id: Option<i64>,
     status: String,
     total_items: i32,
     completed_items: i32,
@@ -373,6 +377,7 @@ impl YouTubeJobRow {
             source_url: self.source_url.clone(),
             title: self.title.clone(),
             source_kind: self.source_kind.clone(),
+            target_playlist_id: self.target_playlist_id,
             status: self.status.clone(),
             total_items: self.total_items,
             completed_items: self.completed_items,
@@ -561,19 +566,37 @@ impl YouTubeService {
             .collect();
         let already_imported = already_imported_source_ids(pool, user_id, &source_ids).await?;
         let mut transaction = pool.begin().await?;
+        if let Some(playlist_id) = request.target_playlist_id {
+            if playlist_id <= 0 {
+                bail!("selected playlist is invalid");
+            }
+            let owned_playlist: Option<i64> = sqlx::query_scalar(
+                r#"SELECT id FROM furumusic__playlist
+                   WHERE id = $1 AND owner_id = $2
+                   FOR SHARE"#,
+            )
+            .bind(playlist_id)
+            .bind(user_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if owned_playlist.is_none() {
+                bail!("selected playlist does not exist or is not yours");
+            }
+        }
         sqlx::query(
             r#"INSERT INTO furumusic__youtube_download
-                  (id, user_id, source_url, title, source_kind, status,
+                  (id, user_id, source_url, title, source_kind, target_playlist_id, status,
                    total_items, completed_items, failed_items, review_items,
                    error, created_at, updated_at, completed_at)
-               VALUES ($1, $2, $3, $4, $5, 'queued', $6, 0, 0, 0,
-                       NULL, $7, $7, NULL)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, 0, 0, 0,
+                       NULL, $8, $8, NULL)"#,
         )
         .bind(&id)
         .bind(user_id)
         .bind(&url)
         .bind(&resolved.title)
         .bind(&resolved.kind)
+        .bind(request.target_playlist_id)
         .bind(i32::try_from(selected_items.len()).unwrap_or(i32::MAX))
         .bind(&now)
         .execute(&mut *transaction)
@@ -613,6 +636,17 @@ impl YouTubeService {
             .await?;
         }
         transaction.commit().await?;
+
+        if request.target_playlist_id.is_some()
+            && let Err(error) = sync_target_playlist_tracks_for_user(pool, user_id).await
+        {
+            tracing::warn!(
+                job_id = %id,
+                user_id,
+                %error,
+                "could not immediately add previously imported YouTube tracks to the target playlist; it will be retried"
+            );
+        }
 
         self.spawn_job(
             pool.clone(),
@@ -880,7 +914,8 @@ impl YouTubeService {
         }
         let inbox_root = validate_inbox_dir(inbox_dir)?;
         let job: YouTubeJobRow = sqlx::query_as(
-            r#"SELECT id, user_id, source_url, title, source_kind, status,
+            r#"SELECT id, user_id, source_url, title, source_kind,
+                      target_playlist_id, status,
                       total_items, completed_items, failed_items, review_items,
                       error, created_at, updated_at, completed_at
                FROM furumusic__youtube_download WHERE id = $1"#,
@@ -1963,7 +1998,164 @@ async fn sync_ai_statuses(pool: &PgPool, user_id: i64) -> anyhow::Result<()> {
     for job_id in touched_jobs {
         refresh_parent(pool, &job_id).await?;
     }
+    if let Err(error) = sync_target_playlist_tracks_for_user(pool, user_id).await {
+        tracing::warn!(
+            user_id,
+            %error,
+            "could not synchronize imported YouTube tracks with their target playlists"
+        );
+    }
     Ok(())
+}
+
+/// Reconcile target playlists after an imported media file becomes a track.
+///
+/// This is deliberately idempotent. It also matches by YouTube source id, so a
+/// newly-created job can add tracks that were imported by an older job and were
+/// therefore marked as `skipped` in the new one.
+pub(crate) async fn sync_target_playlists_for_imported_media(
+    pool: &PgPool,
+    media_file_id: i64,
+) -> anyhow::Result<()> {
+    let user_ids: Vec<i64> = sqlx::query_scalar(
+        r#"SELECT DISTINCT job.user_id
+           FROM furumusic__youtube_import_media imported
+           JOIN furumusic__youtube_download_item item ON item.id = imported.item_id
+           JOIN furumusic__youtube_download job ON job.id = item.job_id
+           WHERE imported.media_file_id = $1"#,
+    )
+    .bind(media_file_id)
+    .fetch_all(pool)
+    .await?;
+    for user_id in user_ids {
+        sync_target_playlist_tracks_for_user(pool, user_id).await?;
+    }
+    Ok(())
+}
+
+async fn sync_target_playlist_tracks_for_user(pool: &PgPool, user_id: i64) -> anyhow::Result<()> {
+    let candidates: Vec<(i64, i64, i64, i32, i32)> = sqlx::query_as(
+        r#"SELECT target_job.target_playlist_id AS playlist_id,
+                  target_job.user_id,
+                  track.id AS track_id,
+                  MIN(target_item.playlist_index) AS playlist_index,
+                  COALESCE(track.track_number, 2147483647) AS track_number
+           FROM furumusic__youtube_download target_job
+           JOIN furumusic__youtube_download_item target_item
+             ON target_item.job_id = target_job.id
+           JOIN furumusic__youtube_download source_job
+             ON source_job.user_id = target_job.user_id
+           JOIN furumusic__youtube_download_item source_item
+             ON source_item.job_id = source_job.id
+            AND source_item.source_id = target_item.source_id
+           JOIN furumusic__youtube_import_media imported
+             ON imported.item_id = source_item.id
+           JOIN furumusic__track track
+             ON track.audio_file_id = imported.media_file_id
+           JOIN furumusic__playlist playlist
+             ON playlist.id = target_job.target_playlist_id
+            AND playlist.owner_id = target_job.user_id
+           WHERE target_job.user_id = $1
+             AND target_job.target_playlist_id IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM furumusic__playlist_track existing
+                  WHERE existing.playlist_id = target_job.target_playlist_id
+                    AND existing.track_id = track.id
+             )
+           GROUP BY target_job.target_playlist_id, target_job.user_id,
+                    track.id, track.track_number
+           ORDER BY playlist_id, playlist_index, track_number, track_id"#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    for (playlist_id, owner_id, track_id, _, _) in candidates {
+        append_track_to_target_playlist(pool, owner_id, playlist_id, track_id).await?;
+    }
+    Ok(())
+}
+
+async fn append_track_to_target_playlist(
+    pool: &PgPool,
+    user_id: i64,
+    playlist_id: i64,
+    track_id: i64,
+) -> anyhow::Result<bool> {
+    let mut transaction = pool.begin().await?;
+    let playlist: Option<i64> = sqlx::query_scalar(
+        r#"SELECT id FROM furumusic__playlist
+           WHERE id = $1 AND owner_id = $2
+           FOR UPDATE"#,
+    )
+    .bind(playlist_id)
+    .bind(user_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if playlist.is_none() {
+        transaction.rollback().await?;
+        return Ok(false);
+    }
+
+    let already_present: bool = sqlx::query_scalar(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM furumusic__playlist_track
+               WHERE playlist_id = $1 AND track_id = $2
+           )"#,
+    )
+    .bind(playlist_id)
+    .bind(track_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if already_present {
+        transaction.commit().await?;
+        return Ok(false);
+    }
+
+    let position: i64 = sqlx::query_scalar(
+        r#"SELECT COALESCE(MAX(position), -1)::bigint + 1
+           FROM furumusic__playlist_track WHERE playlist_id = $1"#,
+    )
+    .bind(playlist_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let position = i32::try_from(position).context("target playlist has too many tracks")?;
+    let now = now_string();
+    sqlx::query(
+        r#"INSERT INTO furumusic__playlist_track
+              (playlist_id, track_id, position, added_at, added_by_user_id)
+           VALUES ($1, $2, $3, $4, $5)"#,
+    )
+    .bind(playlist_id)
+    .bind(track_id)
+    .bind(position)
+    .bind(&now)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query("UPDATE furumusic__playlist SET updated_at = $1 WHERE id = $2")
+        .bind(&now)
+        .bind(playlist_id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    if let Err(error) = crate::federation::devices::record_playlist_tracks_added(
+        pool,
+        user_id,
+        playlist_id,
+        &[track_id],
+    )
+    .await
+    {
+        tracing::warn!(
+            playlist_id,
+            track_id,
+            %error,
+            "federation operation for an automatic YouTube playlist addition was not recorded"
+        );
+    }
+    Ok(true)
 }
 
 async fn refresh_parent(pool: &PgPool, job_id: &str) -> anyhow::Result<()> {
@@ -2111,7 +2303,8 @@ async fn load_job_dto(pool: &PgPool, user_id: i64, id: &str) -> anyhow::Result<Y
 
 async fn load_job_row(pool: &PgPool, user_id: i64, id: &str) -> anyhow::Result<YouTubeJobRow> {
     sqlx::query_as(
-        r#"SELECT id, user_id, source_url, title, source_kind, status,
+        r#"SELECT id, user_id, source_url, title, source_kind,
+                  target_playlist_id, status,
                   total_items, completed_items, failed_items, review_items,
                   error, created_at, updated_at, completed_at
            FROM furumusic__youtube_download WHERE id = $1 AND user_id = $2"#,
@@ -2406,7 +2599,64 @@ pub mod db_migrations {
             &[Operation::custom(create_youtube_cookie_files).build()];
     }
 
-    pub const MIGRATIONS: &[&SyncDynMigration] = &[&M0048CreateYoutubeCookieFiles];
+    #[cot::db::migrations::migration_op]
+    async fn add_youtube_target_playlist(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__youtube_download
+                 ADD COLUMN IF NOT EXISTS target_playlist_id BIGINT",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "DO $$
+                 BEGIN
+                     IF NOT EXISTS (
+                         SELECT 1 FROM pg_constraint
+                          WHERE conname = 'fk_youtube_download_target_playlist'
+                            AND conrelid = 'furumusic__youtube_download'::regclass
+                     ) THEN
+                         ALTER TABLE furumusic__youtube_download
+                         ADD CONSTRAINT fk_youtube_download_target_playlist
+                         FOREIGN KEY (target_playlist_id)
+                         REFERENCES furumusic__playlist(id)
+                         ON DELETE SET NULL;
+                     END IF;
+                 END
+                 $$",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "CREATE INDEX IF NOT EXISTS idx_youtube_download_target_playlist
+                 ON furumusic__youtube_download (target_playlist_id)
+                 WHERE target_playlist_id IS NOT NULL",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0049AddYoutubeTargetPlaylist;
+
+    impl migrations::Migration for M0049AddYoutubeTargetPlaylist {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0049_add_youtube_target_playlist";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0048_create_youtube_cookie_files",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(add_youtube_target_playlist).build()];
+    }
+
+    pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0048CreateYoutubeCookieFiles,
+        &M0049AddYoutubeTargetPlaylist,
+    ];
 }
 
 #[cfg(test)]
@@ -2431,6 +2681,24 @@ mod tests {
         assert!(validate_youtube_url("https://www.youtube.com/playlist?list=abc").is_ok());
         assert!(validate_youtube_url("https://music.youtube.com/watch?v=abc").is_ok());
         assert!(validate_youtube_url("https://youtu.be/abc").is_ok());
+    }
+
+    #[test]
+    fn youtube_start_request_accepts_an_optional_target_playlist() {
+        let without_playlist: YouTubeStartRequest = serde_json::from_value(serde_json::json!({
+            "url": "https://youtu.be/abc",
+            "selected_source_ids": ["abc"]
+        }))
+        .unwrap();
+        assert_eq!(without_playlist.target_playlist_id, None);
+
+        let with_playlist: YouTubeStartRequest = serde_json::from_value(serde_json::json!({
+            "url": "https://youtu.be/abc",
+            "selected_source_ids": ["abc"],
+            "target_playlist_id": 42
+        }))
+        .unwrap();
+        assert_eq!(with_playlist.target_playlist_id, Some(42));
     }
 
     #[test]

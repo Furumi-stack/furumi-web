@@ -406,6 +406,13 @@ translations! {
     player_youtube_select_all: "Select all"                    , "Отметить все";
     player_youtube_clear_selection: "Clear selection"           , "Снять все";
     player_youtube_selected_count: "selected"                  , "выбрано";
+    player_youtube_destination: "Add imported tracks to playlist" , "Добавить импортированные треки в плейлист";
+    player_youtube_no_destination: "Do not add to a playlist"   , "Не добавлять в плейлист";
+    player_youtube_create_playlist: "Create a new playlist"     , "Создать новый плейлист";
+    player_youtube_new_playlist_name: "New playlist name"       , "Название нового плейлиста";
+    player_youtube_destination_hint: "Every track created from the selected videos, including chapters and previously imported videos, will be added automatically." , "Все треки из выбранных видео, включая главы и уже импортированные видео, будут добавлены автоматически.";
+    player_youtube_playlist_create_failed: "Could not create playlist" , "Не удалось создать плейлист";
+    player_youtube_added_to: "added to"                         , "добавление в";
     player_youtube_start_import: "Start import"                , "Начать импорт";
     player_start_download:   "Start download"                  , "Начать загрузку";
     player_retry_failed:     "Retry failed"                    , "Повторить ошибки";
@@ -533,6 +540,7 @@ translations! {
     player_download_selected: "Download selected"              , "Скачать выбранное";
     player_pause_download:   "Pause download"                  , "Поставить на паузу";
     player_expand_all:       "Expand all"                      , "Развернуть всё";
+    player_expand:           "Expand"                          , "Развернуть";
     player_collapse:         "Collapse"                        , "Свернуть";
     player_selected:         "selected"                        , "выбрано";
     player_preview:          "Preview"                         , "Предпросмотр";

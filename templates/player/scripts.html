@@ -162,6 +162,8 @@ const T = {
     youtubeSelectAll: "{{ t.player_youtube_select_all }}",
     youtubeClearSelection: "{{ t.player_youtube_clear_selection }}",
     youtubeSelectedCount: "{{ t.player_youtube_selected_count }}",
+    youtubePlaylistCreateFailed: "{{ t.player_youtube_playlist_create_failed }}",
+    youtubeAddedTo: "{{ t.player_youtube_added_to }}",
     youtubeCancelled: "{{ t.player_youtube_cancelled }}",
     youtubeStopConfirm: "{{ t.player_youtube_stop_confirm }}",
     youtubeStopping: "{{ t.player_youtube_stopping }}",
@@ -181,6 +183,8 @@ const T = {
     liveReleases: "{{ t.player_live_releases }}",
     soundtracks: "{{ t.player_soundtracks }}",
     likesPlaylist: "{{ t.player_likes_playlist }}",
+    expand: "{{ t.player_expand }}",
+    collapse: "{{ t.player_collapse }}",
 };
 
 function formatTime(seconds) {
@@ -4611,8 +4615,13 @@ document.addEventListener('alpine:init', () => {
         youtubeUrl: '',
         youtubePreview: null,
         youtubePreviewSelected: new Set(),
+        youtubePlaylistChoice: '',
+        youtubeNewPlaylistTitle: '',
+        youtubePlaylistSyncKey: '',
         youtubePreviewLoading: false,
         youtubeJobs: [],
+        youtubeExpandedJobId: null,
+        youtubeJobsInitialized: false,
         youtubeLoading: false,
         youtubeSubmitting: false,
         youtubeCancellingIds: new Set(),
@@ -4728,6 +4737,31 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json().catch(() => null);
                 if (!res.ok) throw new Error(data?.error || T.youtubeLoadFailed);
                 this.youtubeJobs = Array.isArray(data) ? data : [];
+                if (
+                    this.youtubeExpandedJobId !== null
+                    && !this.youtubeJobs.some(job => job.id === this.youtubeExpandedJobId)
+                ) {
+                    this.youtubeExpandedJobId = null;
+                }
+                if (!this.youtubeJobsInitialized) {
+                    const activeJob = this.youtubeJobs.find(job => !this.youtubeJobTerminal(job.status));
+                    this.youtubeExpandedJobId = this.youtubePreview ? null : (activeJob?.id || null);
+                    this.youtubeJobsInitialized = true;
+                }
+                const playlistSyncKey = this.youtubeJobs
+                    .filter(job => Number(job.target_playlist_id || 0) > 0)
+                    .map(job => [
+                        job.id,
+                        job.status,
+                        Number(job.completed_items || 0),
+                        Number(job.failed_items || 0),
+                        Number(job.review_items || 0),
+                    ].join(':'))
+                    .join('|');
+                if (playlistSyncKey && playlistSyncKey !== this.youtubePlaylistSyncKey) {
+                    this.youtubePlaylistSyncKey = playlistSyncKey;
+                    Alpine.store('playlists')?.reload?.();
+                }
             } catch (err) {
                 if (!silent) this._setMessage(err.message || T.youtubeLoadFailed, true);
             } finally {
@@ -4738,6 +4772,8 @@ document.addEventListener('alpine:init', () => {
         clearYoutubePreview() {
             this.youtubePreview = null;
             this.youtubePreviewSelected = new Set();
+            this.youtubePlaylistChoice = '';
+            this.youtubeNewPlaylistTitle = '';
         },
 
         async previewYoutubeUrl() {
@@ -4761,6 +4797,7 @@ document.addEventListener('alpine:init', () => {
                 this.youtubePreviewSelected = new Set(
                     items.filter(item => item.selected_by_default).map(item => item.source_id)
                 );
+                this.youtubeExpandedJobId = null;
                 this._setMessage('');
             } catch (err) {
                 this._setMessage(err.message || T.youtubePreviewFailed, true);
@@ -4793,24 +4830,90 @@ document.addEventListener('alpine:init', () => {
             return this.youtubePreviewSelected.size;
         },
 
+        youtubeOwnedPlaylists() {
+            return (Alpine.store('playlists')?.list || []).filter(playlist => (
+                playlist.kind === 'user' && playlist.is_own && Number(playlist.id) > 0
+            ));
+        },
+
+        youtubePlaylistChoiceChanged() {
+            if (
+                this.youtubePlaylistChoice === '__new__'
+                && !String(this.youtubeNewPlaylistTitle || '').trim()
+            ) {
+                this.youtubeNewPlaylistTitle = String(this.youtubePreview?.title || '').slice(0, 255);
+            }
+        },
+
+        youtubeDestinationValid() {
+            return this.youtubePlaylistChoice !== '__new__'
+                || String(this.youtubeNewPlaylistTitle || '').trim().length > 0;
+        },
+
+        youtubePlaylistTitle(playlistId) {
+            const wanted = Number(playlistId || 0);
+            return this.youtubeOwnedPlaylists().find(playlist => Number(playlist.id) === wanted)?.title || '';
+        },
+
+        async resolveYoutubeTargetPlaylist() {
+            if (this.youtubePlaylistChoice !== '__new__') {
+                const playlistId = Number(this.youtubePlaylistChoice || 0);
+                return playlistId > 0 ? playlistId : null;
+            }
+
+            const title = String(this.youtubeNewPlaylistTitle || '').trim();
+            if (!title) throw new Error(T.youtubePlaylistCreateFailed);
+            const res = await fetch('/api/player/playlists', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title }),
+            });
+            const playlist = await res.json().catch(() => null);
+            if (!res.ok || Number(playlist?.id || 0) <= 0) {
+                throw new Error(playlist?.error || T.youtubePlaylistCreateFailed);
+            }
+
+            // Switch to the created playlist before starting the job. If the
+            // YouTube request fails, retrying will reuse it instead of creating
+            // another playlist with the same name.
+            this.youtubePlaylistChoice = String(playlist.id);
+            const playlists = Alpine.store('playlists');
+            if (playlists) {
+                playlists.list = [
+                    ...(playlists.list || []).filter(item => Number(item.id) !== Number(playlist.id)),
+                    playlist,
+                ];
+                await playlists.reload();
+            }
+            return Number(playlist.id);
+        },
+
         async startYoutubeDownload() {
             const preview = this.youtubePreview;
             const selectedSourceIds = Array.from(this.youtubePreviewSelected);
-            if (!preview || !selectedSourceIds.length || this.youtubeSubmitting) return;
+            if (
+                !preview
+                || !selectedSourceIds.length
+                || !this.youtubeDestinationValid()
+                || this.youtubeSubmitting
+            ) return;
             this.youtubeSubmitting = true;
             this._setMessage(T.youtubeStarting);
             try {
+                const targetPlaylistId = await this.resolveYoutubeTargetPlaylist();
                 const res = await fetch('/api/player/youtube/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         url: preview.source_url,
                         selected_source_ids: selectedSourceIds,
+                        target_playlist_id: targetPlaylistId,
                     }),
                 });
                 const data = await res.json().catch(() => null);
                 if (!res.ok) throw new Error(data?.error || T.youtubeStartFailed);
                 this.youtubeJobs = [data, ...this.youtubeJobs.filter(job => job.id !== data.id)];
+                this.youtubeExpandedJobId = data.id;
                 this.youtubeUrl = '';
                 this.clearYoutubePreview();
                 this._setMessage(T.youtubeStarted);
@@ -4942,11 +5045,21 @@ document.addEventListener('alpine:init', () => {
             return ['queued', 'resolving', 'downloading', 'postprocessing'].includes(String(status || '').toLowerCase());
         },
 
+        youtubeJobExpanded(jobId) {
+            return this.youtubeExpandedJobId === jobId;
+        },
+
+        toggleYoutubeJob(jobId) {
+            this.youtubeExpandedJobId = this.youtubeExpandedJobId === jobId ? null : jobId;
+        },
+
         youtubeJobMeta(job) {
             const kind = job.source_kind === 'playlist' ? T.youtubePlaylist : T.youtubeVideo;
             const parts = [kind];
             if (Number(job.total_items || 0) > 0) parts.push(Number(job.total_items) + ' ' + T.youtubeItems);
             if (Number(job.failed_items || 0) > 0) parts.push(Number(job.failed_items) + ' ' + T.youtubeErrors);
+            const playlistTitle = this.youtubePlaylistTitle(job.target_playlist_id);
+            if (playlistTitle) parts.push(T.youtubeAddedTo + ' ' + playlistTitle);
             return parts.join(' · ');
         },
 

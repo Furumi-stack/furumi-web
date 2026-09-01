@@ -88,7 +88,8 @@
     <!-- Download Manager Modal -->
     <template x-if="$store.torrents.modal">
         <div class="modal-overlay" @click.self="$store.torrents.close()">
-            <div class="modal-box torrent-modal">
+            <div class="modal-box torrent-modal"
+                 :class="{ 'youtube-mode': $store.torrents.sourceTab === 'youtube' }">
                 <div class="torrent-modal-head">
                     <div>
                         <h3>{{ t.player_torrent_manager }}</h3>
@@ -205,6 +206,29 @@
                                     </label>
                                 </template>
                             </div>
+                            <div class="youtube-preview-destination">
+                                <label for="youtube-target-playlist">{{ t.player_youtube_destination }}</label>
+                                <div class="youtube-preview-destination-fields"
+                                     :class="{ creating: $store.torrents.youtubePlaylistChoice === '__new__' }">
+                                    <select id="youtube-target-playlist"
+                                            x-model="$store.torrents.youtubePlaylistChoice"
+                                            @change="$store.torrents.youtubePlaylistChoiceChanged()">
+                                        <option value="">{{ t.player_youtube_no_destination }}</option>
+                                        <template x-for="playlist in $store.torrents.youtubeOwnedPlaylists()" :key="playlist.id">
+                                            <option :value="String(playlist.id)" x-text="playlist.title"></option>
+                                        </template>
+                                        <option value="__new__">{{ t.player_youtube_create_playlist }}</option>
+                                    </select>
+                                    <template x-if="$store.torrents.youtubePlaylistChoice === '__new__'">
+                                        <input type="text"
+                                               maxlength="255"
+                                               autocomplete="off"
+                                               x-model="$store.torrents.youtubeNewPlaylistTitle"
+                                               placeholder="{{ t.player_youtube_new_playlist_name }}">
+                                    </template>
+                                </div>
+                                <p>{{ t.player_youtube_destination_hint }}</p>
+                            </div>
                             <div class="youtube-preview-footer">
                                 <span x-text="$store.torrents.youtubePreviewSelectedCount() + ' ' + T.youtubeSelectedCount"></span>
                                 <div>
@@ -212,7 +236,7 @@
                                             @click="$store.torrents.clearYoutubePreview()">{{ t.player_cancel }}</button>
                                     <button type="button" class="modal-btn modal-btn-primary"
                                             @click="$store.torrents.startYoutubeDownload()"
-                                            :disabled="$store.torrents.youtubeSubmitting || $store.torrents.youtubePreviewSelectedCount() === 0">
+                                            :disabled="$store.torrents.youtubeSubmitting || $store.torrents.youtubePreviewSelectedCount() === 0 || !$store.torrents.youtubeDestinationValid()">
                                         {{ t.player_youtube_start_import }}
                                     </button>
                                 </div>
@@ -235,16 +259,29 @@
                         </template>
 
                         <template x-for="job in $store.torrents.youtubeJobs" :key="job.id">
-                            <article class="youtube-job-card">
-                                <div class="youtube-job-head">
+                            <article class="youtube-job-card"
+                                     :class="{ collapsed: !$store.torrents.youtubeJobExpanded(job.id) }">
+                                <button type="button"
+                                        class="youtube-job-summary"
+                                        :aria-expanded="$store.torrents.youtubeJobExpanded(job.id)"
+                                        :title="$store.torrents.youtubeJobExpanded(job.id) ? T.collapse : T.expand"
+                                        @click="$store.torrents.toggleYoutubeJob(job.id)">
+                                    <span class="youtube-job-chevron" aria-hidden="true"></span>
                                     <div class="youtube-job-heading">
                                         <div class="youtube-job-title" x-text="job.title"></div>
                                         <div class="youtube-job-meta" x-text="$store.torrents.youtubeJobMeta(job)"></div>
                                     </div>
+                                    <span class="youtube-job-compact-progress"
+                                          x-text="$store.torrents.youtubeJobProgress(job) + '%'">
+                                    </span>
                                     <span class="torrent-status-badge"
                                           :class="$store.torrents.youtubeStatusClass(job.status)"
                                           x-text="$store.torrents.youtubeStatusLabel(job.status)"></span>
-                                </div>
+                                </button>
+
+                                <div class="youtube-job-details"
+                                     x-show="$store.torrents.youtubeJobExpanded(job.id)"
+                                     x-cloak>
 
                                 <div class="youtube-job-progress">
                                     <div class="torrent-session-progress">
@@ -315,6 +352,7 @@
                                     <button class="modal-btn modal-btn-danger"
                                             x-show="$store.torrents.youtubeJobTerminal(job.status)"
                                             @click="$store.torrents.removeYoutubeJob(job.id)">{{ t.player_remove_from_history }}</button>
+                                </div>
                                 </div>
                             </article>
                         </template>
