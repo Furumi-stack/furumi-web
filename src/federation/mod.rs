@@ -24,8 +24,9 @@ mod storage;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use music_dht::capabilities::CAPABILITIES_ALPN;
@@ -47,6 +48,8 @@ pub use similarity::SIMILARITY_ALPN;
 
 /// How often the published library is re-synchronized with the database.
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
+const SUPERVISOR_INTERVAL: Duration = Duration::from_secs(15);
+const RECOVERY_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const TRANSPORT_SAMPLE_LIMIT: usize = 16;
 
 struct Running {
@@ -273,6 +276,7 @@ pub struct Federation {
     data_dir: PathBuf,
     database_url: std::sync::Mutex<String>,
     storage_dir: std::sync::Mutex<String>,
+    desired_network: std::sync::Mutex<Option<String>>,
     save_on_listen: std::sync::atomic::AtomicBool,
     content_cache: std::sync::Mutex<HashMap<i64, (String, String)>>,
     content_pending: std::sync::Mutex<HashSet<i64>>,
@@ -281,6 +285,8 @@ pub struct Federation {
     download_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pool: tokio::sync::OnceCell<PgPool>,
     running: tokio::sync::Mutex<Option<Running>>,
+    supervisor_started: AtomicBool,
+    recovery_count: AtomicU64,
     last_sync: std::sync::Mutex<Option<String>>,
     last_error: std::sync::Mutex<Option<String>>,
     transport_stats: Arc<TransportStats>,
@@ -304,6 +310,7 @@ pub fn handle() -> Arc<Federation> {
             data_dir: PathBuf::from(crate::media_paths::resolve_config_path("federation")),
             database_url: std::sync::Mutex::new(String::new()),
             storage_dir: std::sync::Mutex::new(String::new()),
+            desired_network: std::sync::Mutex::new(None),
             save_on_listen: std::sync::atomic::AtomicBool::new(false),
             content_cache: std::sync::Mutex::new(Default::default()),
             content_pending: std::sync::Mutex::new(Default::default()),
@@ -312,6 +319,8 @@ pub fn handle() -> Arc<Federation> {
             download_locks: std::sync::Mutex::new(Default::default()),
             pool: tokio::sync::OnceCell::new(),
             running: tokio::sync::Mutex::new(None),
+            supervisor_started: AtomicBool::new(false),
+            recovery_count: AtomicU64::new(0),
             last_sync: std::sync::Mutex::new(None),
             last_error: std::sync::Mutex::new(None),
             transport_stats: Arc::new(TransportStats::default()),
@@ -322,6 +331,16 @@ pub fn handle() -> Arc<Federation> {
 impl Federation {
     fn set_error(&self, message: Option<String>) {
         *lock(&self.last_error) = message;
+    }
+
+    fn start_supervisor(self: &Arc<Self>) {
+        if self.supervisor_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let federation = Arc::clone(self);
+        tokio::spawn(async move {
+            federation.supervisor_loop().await;
+        });
     }
 
     async fn pool(&self) -> Result<PgPool> {
@@ -343,6 +362,7 @@ impl Federation {
     /// settings live in the config KV table, so this waits for the database
     /// and resolves the same default → DB → env precedence the config uses.
     pub async fn boot(self: &Arc<Self>, config: &AppConfig) {
+        self.start_supervisor();
         *lock(&self.database_url) = config.database_url.clone();
         if config.database_url.is_empty() {
             return;
@@ -404,11 +424,13 @@ impl Federation {
         );
         let network = config.federation_network_id.trim().to_string();
         if config.federation_enabled && !network.is_empty() {
+            *lock(&self.desired_network) = Some(network.clone());
             if let Err(err) = self.start(network, config.agent_storage_dir.clone()).await {
                 tracing::error!("federation start failed: {err:#}");
                 self.set_error(Some(format!("start failed: {err}")));
             }
         } else {
+            *lock(&self.desired_network) = None;
             self.stop().await;
         }
     }
@@ -416,13 +438,38 @@ impl Federation {
     /// Starts the DHT node. Idempotent per network name; a node on another
     /// network is stopped and re-joined.
     async fn start(self: &Arc<Self>, network_name: String, storage_dir: String) -> Result<()> {
+        self.start_mode(network_name, storage_dir, false)
+            .await
+            .map(|_| ())
+    }
+
+    async fn start_mode(
+        self: &Arc<Self>,
+        network_name: String,
+        storage_dir: String,
+        recovery_only: bool,
+    ) -> Result<bool> {
         let pool = self.pool().await?;
         let mut guard = self.running.lock().await;
+        if recovery_only && lock(&self.desired_network).as_deref() != Some(network_name.as_str()) {
+            return Ok(false);
+        }
         if let Some(running) = guard.as_ref() {
             if running.network_name == network_name {
-                return Ok(());
+                if !recovery_only || !running.service.network_health().restart_recommended {
+                    return Ok(false);
+                }
+                tracing::warn!(
+                    network = %network_name,
+                    health = %running.service.network_health().state,
+                    "restarting degraded federation service"
+                );
+            } else if recovery_only {
+                return Ok(false);
             }
             stop_running(guard.take()).await;
+        } else if recovery_only {
+            tracing::warn!(network = %network_name, "retrying stopped federation service");
         }
 
         let dht_storage = Arc::new(PostgresFederationStorage::new(pool.clone()).await?);
@@ -565,7 +612,40 @@ impl Federation {
         drop(guard);
         // Publish right away instead of waiting for the first timer tick.
         self.spawn_sync_soon().await;
-        Ok(())
+        Ok(true)
+    }
+
+    async fn supervisor_loop(self: Arc<Self>) {
+        let mut interval = tokio::time::interval(SUPERVISOR_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        let mut last_attempt = None;
+        loop {
+            interval.tick().await;
+            if last_attempt.is_some_and(|attempt: Instant| attempt.elapsed() < RECOVERY_COOLDOWN) {
+                continue;
+            }
+            match self.recover_if_needed().await {
+                Ok(false) => {}
+                Ok(true) => {
+                    last_attempt = Some(Instant::now());
+                    self.recovery_count.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(err) => {
+                    last_attempt = Some(Instant::now());
+                    tracing::error!(error = %err, "federation recovery failed");
+                    self.set_error(Some(format!("network recovery failed: {err}")));
+                }
+            }
+        }
+    }
+
+    async fn recover_if_needed(self: &Arc<Self>) -> Result<bool> {
+        let Some(network_name) = lock(&self.desired_network).clone() else {
+            return Ok(false);
+        };
+        let storage_dir = lock(&self.storage_dir).clone();
+        self.start_mode(network_name, storage_dir, true).await
     }
 
     async fn stop(&self) {
@@ -883,6 +963,7 @@ impl Federation {
         let node = match guard.as_ref() {
             Some(running) => {
                 let service = &running.service;
+                let health = service.network_health();
                 let published = service
                     .list_local_items()
                     .await
@@ -903,6 +984,13 @@ impl Federation {
                     "endpoint_id": service.endpoint_id().to_string(),
                     "connected_peers": peers,
                     "known_contacts": service.known_peers().len(),
+                    "network_health": health.state.to_string(),
+                    "rendezvous_failures": health.consecutive_rendezvous_failures,
+                    "peer_dial_failures": health.consecutive_peer_dial_failures,
+                    "rendezvous_restarts": health.rendezvous_restarts,
+                    "last_rendezvous_success_seconds": health.last_rendezvous_success_ago.map(|age| age.as_secs()),
+                    "last_rendezvous_error": health.last_rendezvous_error,
+                    "recovery_count": self.recovery_count.load(Ordering::Relaxed),
                     "similarity_routing_peers": running.similarity_dht.known_peers(),
                     "published_items": published,
                     "transport": transport,
