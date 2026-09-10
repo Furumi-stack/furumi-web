@@ -1081,48 +1081,51 @@ pub async fn sync_loop(
     transport_stats: Arc<TransportStats>,
 ) {
     let mut interval = tokio::time::interval(DEVICE_SYNC_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut polls = tokio::task::JoinSet::new();
+    let mut active = std::collections::HashMap::new();
     loop {
-        interval.tick().await;
-        if let Err(err) = sync_once_all(
-            &pool,
-            Arc::clone(&service),
-            Arc::clone(&hub),
-            Arc::clone(&transport_stats),
-        )
-        .await
-        {
-            tracing::debug!("web fed device sync tick failed: {err:#}");
+        tokio::select! {
+            _ = interval.tick() => {
+                let users: Vec<i64> = match sqlx::query_scalar(
+                    "SELECT DISTINCT user_id FROM furumusic__fed_device WHERE trusted_at_ms IS NOT NULL AND revoked_at_ms IS NULL"
+                ).fetch_all(&pool).await {
+                    Ok(users) => users,
+                    Err(error) => { tracing::warn!("device poll listing failed: {error:#}"); continue; }
+                };
+                for user_id in users {
+                    let devices = match active_remote_devices(&pool, user_id).await {
+                        Ok(devices) => devices,
+                        Err(error) => { let _ = set_last_error(&pool, user_id, Some(&format!("{error:#}"))).await; continue; }
+                    };
+                    for device in devices {
+                        let key = (user_id, device.device_id.clone());
+                        if device.endpoint_ticket.trim().is_empty() || active.values().any(|id| id == &key) { continue; }
+                        let pool = pool.clone();
+                        let service = Arc::clone(&service);
+                        let hub = Arc::clone(&hub);
+                        let stats = Arc::clone(&transport_stats);
+                        let handle = polls.spawn(async move {
+                            tokio::time::timeout(Duration::from_secs(30), sync_device(&pool, service, hub, stats, user_id, &device))
+                                .await.context("device sync exchange timed out")?
+                        });
+                        active.insert(handle.id(), key);
+                    }
+                }
+            }
+            Some(completed) = polls.join_next_with_id(), if !polls.is_empty() => {
+                let (task, result) = match completed {
+                    Ok((task, result)) => (task, result),
+                    Err(error) => (error.id(), Err(anyhow::Error::from(error))),
+                };
+                if let Some((user_id, device_id)) = active.remove(&task)
+                    && let Err(error) = result {
+                        tracing::debug!(device = %device_id, "web fed device sync failed: {error:#}");
+                        let _ = set_last_error(&pool, user_id, Some(&format!("{}: {error:#}", short_id(&device_id)))).await;
+                    }
+            }
         }
     }
-}
-
-pub async fn sync_once_all(
-    pool: &sqlx::PgPool,
-    service: Arc<MusicDhtService>,
-    hub: Arc<PlayerDeviceHub>,
-    transport_stats: Arc<TransportStats>,
-) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT DISTINCT user_id FROM furumusic__fed_device
-         WHERE trusted_at_ms IS NOT NULL AND revoked_at_ms IS NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-    for row in rows {
-        let user_id: i64 = row.get("user_id");
-        if let Err(err) = sync_once(
-            pool,
-            Arc::clone(&service),
-            Arc::clone(&hub),
-            Arc::clone(&transport_stats),
-            user_id,
-        )
-        .await
-        {
-            set_last_error(pool, user_id, Some(&format!("{err:#}"))).await?;
-        }
-    }
-    Ok(())
 }
 
 pub async fn sync_once(
@@ -5040,3 +5043,6 @@ fn base64url_decode(value: &str) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod interop_tests;

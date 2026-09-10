@@ -1,5 +1,23 @@
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 <script>
+// Handle expired sessions centrally, including background player requests.
+let loginRedirectStarted = false;
+function redirectOnUnauthorized(status) {
+    if (status !== 401 || loginRedirectStarted) return;
+    loginRedirectStarted = true;
+    window.location.replace('/login');
+}
+
+const playerFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+    const response = await playerFetch(input, init);
+    const url = new URL(input instanceof Request ? input.url : input, window.location.href);
+    if (url.origin === window.location.origin && url.pathname.startsWith('/api/')) {
+        redirectOnUnauthorized(response.status);
+    }
+    return response;
+};
+
 const T = {
     info: "{{ t.player_info }}",
     noDetails: "{{ t.player_no_details }}",
@@ -6009,6 +6027,7 @@ document.addEventListener('alpine:init', () => {
                     this.uploadProgressText = this.uploadProgress.toFixed(1) + '%';
                 };
                 xhr.onload = () => {
+                    redirectOnUnauthorized(xhr.status);
                     let data = {};
                     try { data = JSON.parse(xhr.responseText || '{}'); } catch {}
                     if (xhr.status >= 200 && xhr.status < 300) resolve(data);

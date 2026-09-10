@@ -26,7 +26,7 @@ use cot::auth::PasswordVerificationResult;
 use cot::cli::CliMetadata;
 use cot::common_types::Password;
 use cot::config::{
-    DatabaseConfig, MiddlewareConfig, ProjectConfig, SameSite, SessionMiddlewareConfig,
+    DatabaseConfig, Expiry, MiddlewareConfig, ProjectConfig, SameSite, SessionMiddlewareConfig,
     SessionStoreConfig, SessionStoreTypeConfig,
 };
 use cot::db::Database;
@@ -522,6 +522,9 @@ impl Project for FuruProject {
                 MiddlewareConfig::builder()
                     .session(
                         SessionMiddlewareConfig::builder()
+                            .expiry(Expiry::OnInactivity(std::time::Duration::from_secs(
+                                365 * 24 * 60 * 60,
+                            )))
                             .secure(false)
                             .same_site(SameSite::Lax)
                             .store(
