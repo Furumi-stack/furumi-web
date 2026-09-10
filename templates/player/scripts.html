@@ -1688,7 +1688,7 @@ document.addEventListener('alpine:init', () => {
                 }
 
                 const player = Alpine.store('player');
-                if (player && Array.isArray(data.commands)) {
+                if (player && (this.isActive() || this.shouldPlayJamLocally()) && Array.isArray(data.commands)) {
                     data.commands.forEach(command => player._executeRemoteCommand(command));
                 }
                 if (player && !this.isActive()) {
@@ -1706,7 +1706,6 @@ document.addEventListener('alpine:init', () => {
         },
 
         _apply(data) {
-            const wasActive = this.isActive();
             const previousJamId = this.currentJamId;
             this.activeDeviceId = data.active_device_id || null;
             this.devices = Array.isArray(data.devices) ? data.devices : [];
@@ -1722,7 +1721,7 @@ document.addEventListener('alpine:init', () => {
             if (previousJamId !== this.currentJamId || !this.canPlayJamLocally()) {
                 this._setJamLocalPlayback(false, { pauseLocal: true });
             }
-            if (wasActive && !this.isActive()) {
+            if (!this.isActive() && !this.shouldPlayJamLocally()) {
                 Alpine.store('player')?._pauseLocal();
             }
             this._maybeShowRemoteHint();

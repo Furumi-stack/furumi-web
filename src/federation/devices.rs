@@ -5,6 +5,9 @@
 //! protocol as the TUI clients on `furumi/sync/1` and maps operations into
 //! user-scoped Postgres state.
 
+use music_dht::playback::{
+    Announcement, Checkpoint, CommandStamp, Config as PlaybackConfig, Engine,
+};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,7 +27,7 @@ use super::{TransportStats, record_stream_transport};
 pub const SYNC_ALPN: &[u8] = b"furumi/sync/2";
 
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PROTOCOL_VERSION: u16 = 2;
+const PROTOCOL_VERSION: u16 = 3;
 const INVITE_TTL_MS: i64 = 10 * 60 * 1000;
 const PAIRING_WAIT_MS: i64 = 5 * 60 * 1000;
 const PAIRING_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -193,29 +196,8 @@ struct PlaybackStateWire {
     repeat: PlaybackRepeat,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct PlaybackSnapshot {
-    device_id: String,
-    device_name: String,
-    active: bool,
-    updated_at_ms: i64,
-    state: PlaybackStateWire,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum PlaybackCommand {
-    SetState {
-        state: PlaybackStateWire,
-        #[serde(default)]
-        seek: bool,
-    },
-    ActiveChanged {
-        active_device_id: String,
-        active_device_name: String,
-        state: PlaybackStateWire,
-    },
-}
+type PlaybackSnapshot = music_dht::playback::Snapshot<PlaybackStateWire>;
+type PlaybackCommand = music_dht::playback::Command<PlaybackStateWire>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SyncOpWire {
@@ -273,6 +255,8 @@ enum SyncOpPayload {
     PlaybackCommand {
         target_device_id: String,
         command: PlaybackCommand,
+        #[serde(default)]
+        authority: Option<CommandStamp>,
     },
     ListenRecorded {
         event: ListenEvent,
@@ -1235,7 +1219,14 @@ async fn try_connect_invite(
                 enforce_single_user_binding(pool, user_id, &profile.device_id).await?;
                 apply_device_profile(pool, user_id, &profile, true).await?;
                 if let Some(playback) = playback {
-                    apply_playback_snapshot(Arc::clone(&hub), pool, user_id, playback).await?;
+                    apply_playback_snapshot(
+                        Arc::clone(&hub),
+                        pool,
+                        user_id,
+                        &profile.device_id,
+                        playback,
+                    )
+                    .await?;
                 }
             }
             apply_device_profiles(pool, user_id, &devices).await?;
@@ -1454,7 +1445,14 @@ async fn handle_pair_request(
     let own_profile = own_profile(pool, user_id, "", &own_ticket).await?;
     apply_device_profile(pool, user_id, &profile, true).await?;
     if let Some(playback) = playback {
-        apply_playback_snapshot(Arc::clone(&hub), pool, user_id, playback).await?;
+        apply_playback_snapshot(
+            Arc::clone(&hub),
+            pool,
+            user_id,
+            &profile.device_id,
+            playback,
+        )
+        .await?;
     }
     apply_snapshot(pool, user_id, incoming_snapshot).await?;
     apply_ops(pool, Arc::clone(&hub), user_id, ops).await?;
@@ -1524,7 +1522,14 @@ async fn handle_hello(
     apply_device_profile(pool, user_id, &profile, false).await?;
     apply_device_profiles(pool, user_id, &devices).await?;
     if let Some(playback) = playback {
-        apply_playback_snapshot(Arc::clone(&hub), pool, user_id, playback).await?;
+        apply_playback_snapshot(
+            Arc::clone(&hub),
+            pool,
+            user_id,
+            &profile.device_id,
+            playback,
+        )
+        .await?;
     }
     apply_snapshot(pool, user_id, incoming_snapshot).await?;
     apply_ops(pool, Arc::clone(&hub), user_id, ops).await?;
@@ -1618,7 +1623,14 @@ async fn sync_device(
         } => {
             apply_device_profiles(pool, user_id, &devices).await?;
             if let Some(playback) = playback {
-                apply_playback_snapshot(Arc::clone(&hub), pool, user_id, playback).await?;
+                apply_playback_snapshot(
+                    Arc::clone(&hub),
+                    pool,
+                    user_id,
+                    &device.device_id,
+                    playback,
+                )
+                .await?;
             }
             apply_snapshot(pool, user_id, snapshot).await?;
             apply_ops(pool, hub, user_id, ops).await?;
@@ -1952,8 +1964,33 @@ async fn own_profile(
     })
 }
 
-async fn record_local_op(pool: &sqlx::PgPool, user_id: i64, payload: SyncOpPayload) -> Result<()> {
+async fn record_local_op(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    mut payload: SyncOpPayload,
+) -> Result<()> {
     let identity = ensure_identity(pool, user_id, "").await?;
+    if let SyncOpPayload::PlaybackCommand {
+        command, authority, ..
+    } = &mut payload
+    {
+        *authority = Some(
+            with_playback_engine(pool, user_id, &identity, |engine| {
+                if let PlaybackCommand::ActiveChanged {
+                    active_device_id, ..
+                } = command
+                {
+                    if engine.owner() != Some(active_device_id.as_str()) {
+                        engine.transfer(active_device_id, playback_clock());
+                    }
+                }
+                engine.stamp()
+            })
+            .await?
+            .context("no playback owner; select an output first")?,
+        );
+    }
+
     let now = now_ms();
     let row = sqlx::query(
         "UPDATE furumusic__fed_device_identity
@@ -2193,12 +2230,8 @@ async fn apply_op(
             )
             .await
         }
-        SyncOpPayload::PlaybackCommand {
-            target_device_id,
-            command,
-        } => {
-            apply_playback_command(pool, hub, user_id, target_device_id, command, &op.op_id)
-                .await?;
+        SyncOpPayload::PlaybackCommand { .. } => {
+            apply_playback_command(pool, hub, user_id, op).await?;
             Ok(false)
         }
         SyncOpPayload::ListenRecorded { event } => {
@@ -2798,12 +2831,41 @@ async fn apply_playback_command(
     pool: &sqlx::PgPool,
     hub: Arc<PlayerDeviceHub>,
     user_id: i64,
-    target_device_id: &str,
-    command: &PlaybackCommand,
-    op_id: &str,
+    op: &SyncOpWire,
 ) -> Result<()> {
+    let SyncOpPayload::PlaybackCommand {
+        target_device_id,
+        command,
+        authority,
+    } = &op.payload
+    else {
+        return Ok(());
+    };
+    let authority = authority.as_ref();
+    let origin = &op.origin_device_id;
+    let op_id = &op.op_id;
     let identity = ensure_identity(pool, user_id, "").await?;
-    if target_device_id != identity.device_id {
+    let Some(authority) = authority else {
+        return Ok(());
+    };
+    let handoff = matches!(command, PlaybackCommand::ActiveChanged { .. });
+    if !handoff && target_device_id != &identity.device_id {
+        return Ok(());
+    }
+    if let PlaybackCommand::ActiveChanged {
+        active_device_id, ..
+    } = command
+    {
+        if active_device_id != &authority.claim.owner {
+            return Ok(());
+        }
+    }
+    let accepted = with_playback_engine(pool, user_id, &identity, |engine| {
+        engine.accept_command(origin, authority, handoff, playback_clock())
+            && (handoff || engine.is_owner())
+    })
+    .await?;
+    if !accepted || target_device_id != &identity.device_id {
         return Ok(());
     }
     let inserted = sqlx::query(
@@ -2822,17 +2884,36 @@ async fn apply_playback_command(
     }
     match command {
         PlaybackCommand::SetState { state, .. } => {
-            enqueue_web_transfer(pool, hub, user_id, state).await?;
+            enqueue_web_transfer(pool, hub, user_id, state, op).await?;
         }
         PlaybackCommand::ActiveChanged {
             active_device_id,
             state,
             ..
         } if active_device_id == &identity.device_id => {
-            enqueue_web_transfer(pool, hub, user_id, state).await?;
+            enqueue_web_transfer(pool, hub, user_id, state, op).await?;
         }
-        PlaybackCommand::ActiveChanged { .. } => {
-            let _ = hub.enqueue_fed_command(user_id, "pause", serde_json::json!({}));
+        PlaybackCommand::ActiveChanged {
+            active_device_id,
+            active_device_name,
+            state,
+        } => {
+            let payload = web_playback_payload(pool, state).await?;
+            if !with_playback_engine(pool, user_id, &identity, |engine| {
+                engine.command_is_current(origin, authority)
+            })
+            .await?
+            {
+                return Ok(());
+            }
+            hub.apply_fed_playback_state_json(
+                user_id,
+                active_device_id,
+                active_device_name,
+                true,
+                payload,
+            )
+            .map_err(|message| anyhow::anyhow!(message))?;
         }
     }
     Ok(())
@@ -2842,14 +2923,36 @@ async fn apply_playback_snapshot(
     hub: Arc<PlayerDeviceHub>,
     pool: &sqlx::PgPool,
     user_id: i64,
+    sender: &str,
     snapshot: PlaybackSnapshot,
 ) -> Result<()> {
+    if snapshot.device_id != sender {
+        return Ok(());
+    }
+    let identity = ensure_identity(pool, user_id, "").await?;
+    let Some(coordination) = &snapshot.coordination else {
+        return Ok(());
+    };
+    let owner = with_playback_engine(pool, user_id, &identity, |engine| {
+        if !engine.observe(&snapshot.device_id, coordination, playback_clock()) {
+            return None;
+        }
+        engine
+            .announcement_is_current(&snapshot.device_id, coordination)
+            .then(|| snapshot.device_id.clone())
+    })
+    .await?;
     let payload = web_playback_payload(pool, &snapshot.state).await?;
+    let active = owner.as_deref() == Some(snapshot.device_id.as_str())
+        && with_playback_engine(pool, user_id, &identity, |engine| {
+            engine.announcement_is_current(&snapshot.device_id, coordination)
+        })
+        .await?;
     hub.apply_fed_playback_state_json(
         user_id,
         &snapshot.device_id,
         &snapshot.device_name,
-        snapshot.active,
+        active,
         payload,
     )
     .map_err(|message| anyhow::anyhow!(message))?;
@@ -2861,8 +2964,24 @@ async fn enqueue_web_transfer(
     hub: Arc<PlayerDeviceHub>,
     user_id: i64,
     state: &PlaybackStateWire,
+    op: &SyncOpWire,
 ) -> Result<()> {
+    let identity = ensure_identity(pool, user_id, "").await?;
     let payload = web_playback_payload(pool, state).await?;
+    let SyncOpPayload::PlaybackCommand {
+        authority: Some(authority),
+        ..
+    } = &op.payload
+    else {
+        return Ok(());
+    };
+    if !with_playback_engine(pool, user_id, &identity, |engine| {
+        engine.command_is_current(&op.origin_device_id, authority)
+    })
+    .await?
+    {
+        return Ok(());
+    }
     if payload
         .get("tracks")
         .and_then(serde_json::Value::as_array)
@@ -2891,6 +3010,7 @@ pub async fn record_web_playback_command(
         pool,
         user_id,
         SyncOpPayload::PlaybackCommand {
+            authority: None,
             target_device_id: target_device_id.to_string(),
             command: PlaybackCommand::SetState {
                 state: wire,
@@ -2915,14 +3035,22 @@ pub async fn record_web_active_transfer(
     ensure_web_playback_target(pool, user_id, target_device_id).await?;
     let wire = playback_state_from_browser_json(pool, state).await?;
     let target_name = web_playback_target_name(pool, user_id, target_device_id).await?;
+    let identity = ensure_identity(pool, user_id, "").await?;
+    with_playback_engine(pool, user_id, &identity, |engine| {
+        engine.transfer(target_device_id, playback_clock())
+    })
+    .await?;
+
     record_local_op(
         pool,
         user_id,
         SyncOpPayload::PlaybackCommand {
+            authority: None,
             target_device_id: target_device_id.to_string(),
-            command: PlaybackCommand::SetState {
+            command: PlaybackCommand::ActiveChanged {
+                active_device_id: target_device_id.to_string(),
+                active_device_name: target_name.clone(),
                 state: wire.clone(),
-                seek: true,
             },
         },
     )
@@ -2940,6 +3068,7 @@ pub async fn record_web_active_transfer(
             pool,
             user_id,
             SyncOpPayload::PlaybackCommand {
+                authority: None,
                 target_device_id: previous_device_id.to_string(),
                 command,
             },
@@ -2958,10 +3087,15 @@ pub async fn record_web_active_takeover(
     ensure_web_playback_target(pool, user_id, previous_device_id).await?;
     let identity = ensure_identity(pool, user_id, "").await?;
     let wire = playback_state_from_browser_json(pool, state).await?;
+    with_playback_engine(pool, user_id, &identity, |engine| {
+        engine.transfer(&identity.device_id, playback_clock())
+    })
+    .await?;
     record_local_op(
         pool,
         user_id,
         SyncOpPayload::PlaybackCommand {
+            authority: None,
             target_device_id: previous_device_id.to_string(),
             command: PlaybackCommand::ActiveChanged {
                 active_device_id: identity.device_id,
@@ -3423,11 +3557,16 @@ async fn local_playback_snapshot(
     user_id: i64,
     identity: &Identity,
 ) -> Option<PlaybackSnapshot> {
-    // Keep publishing an inactive snapshot after a handoff. Omitting the
-    // snapshot left the last `active: true` value alive on trusted peers until
-    // its TTL elapsed, allowing the always-on web peer to reclaim playback.
-    let active = hub.federation_playback_is_local(user_id);
-    let state = hub.playback_state_json_for_commands(user_id)?;
+    let coordination = coordinate_web_output(pool, Arc::clone(&hub), user_id, identity)
+        .await
+        .ok()?;
+    let active = coordination
+        .claim
+        .as_ref()
+        .is_some_and(|claim| claim.owner == identity.device_id);
+    let state = hub
+        .playback_state_json_for_commands(user_id)
+        .unwrap_or_else(|| serde_json::json!({}));
     let wire = playback_state_from_browser_json(pool, state).await.ok()?;
     Some(PlaybackSnapshot {
         device_id: identity.device_id.clone(),
@@ -3435,7 +3574,121 @@ async fn local_playback_snapshot(
         active,
         updated_at_ms: now_ms(),
         state: wire,
+        coordination: Some(coordination),
     })
+}
+
+/// Drive coordination from browser HTTP traffic even before the first peer
+/// connects. This does not require a running federation transport.
+pub async fn refresh_web_output(
+    pool: &sqlx::PgPool,
+    hub: Arc<PlayerDeviceHub>,
+    user_id: i64,
+) -> Result<()> {
+    let identity = ensure_identity(pool, user_id, "").await?;
+    coordinate_web_output(pool, hub, user_id, &identity).await?;
+    Ok(())
+}
+
+async fn coordinate_web_output(
+    pool: &sqlx::PgPool,
+    hub: Arc<PlayerDeviceHub>,
+    user_id: i64,
+    identity: &Identity,
+) -> Result<Announcement> {
+    let (available, playing, report, startup) = hub.federation_output_report(user_id);
+    let coordination = with_playback_engine(pool, user_id, identity, |engine| {
+        engine.set_output(available, playing);
+        if startup {
+            engine.request_startup();
+        }
+        // A server poll cannot refresh the heartbeat of a suspended browser.
+        engine.output_report(report, playback_clock());
+        engine.tick(playback_clock());
+        engine.announcement()
+    })
+    .await?;
+    if let Some(owner) = &coordination.claim {
+        hub.enforce_federation_owner(user_id, &identity.device_id, &owner.owner);
+    }
+    Ok(coordination)
+}
+
+// One serialized coordinator per account. The lock covers checkpoint commit so
+// a later request cannot publish a term before its predecessor is durable.
+struct PlaybackSession {
+    engine: Option<Engine>,
+    group_id: String,
+}
+type PlaybackSessions = std::sync::Mutex<BTreeMap<i64, Arc<tokio::sync::Mutex<PlaybackSession>>>>;
+
+async fn with_playback_engine<R>(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    identity: &Identity,
+    f: impl FnOnce(&mut Engine) -> R,
+) -> Result<R> {
+    static SESSIONS: std::sync::OnceLock<PlaybackSessions> = std::sync::OnceLock::new();
+    let session = {
+        let mut sessions = SESSIONS
+            .get_or_init(Default::default)
+            .lock()
+            .expect("playback sessions");
+        sessions
+            .entry(user_id)
+            .or_insert_with(|| {
+                Arc::new(tokio::sync::Mutex::new(PlaybackSession {
+                    engine: None,
+                    group_id: String::new(),
+                }))
+            })
+            .clone()
+    };
+    let mut session = session.lock().await;
+    if session.engine.is_none() || session.group_id != identity.group_id {
+        session.group_id = identity.group_id.clone();
+        let row = sqlx::query("SELECT playback_coordination_json, playback_config_json FROM furumusic__fed_device_identity WHERE user_id = $1")
+            .bind(user_id).fetch_one(pool).await?;
+        let durable = row
+            .get::<Option<serde_json::Value>, _>("playback_coordination_json")
+            .map(serde_json::from_value::<Checkpoint>)
+            .transpose()?
+            .filter(|checkpoint| checkpoint.scope == identity.group_id)
+            .map(|checkpoint| checkpoint.state)
+            .unwrap_or_default();
+        let config = row
+            .get::<Option<serde_json::Value>, _>("playback_config_json")
+            .map(serde_json::from_value::<PlaybackConfig>)
+            .transpose()?
+            .unwrap_or_else(PlaybackConfig::passive);
+        session.engine = Some(Engine::new(
+            identity.device_id.clone(),
+            config,
+            durable,
+            playback_clock(),
+        ));
+    }
+    let engine = session
+        .engine
+        .as_mut()
+        .expect("initialized playback session");
+    let previous = engine.clone();
+    let result = f(engine);
+    if previous.durable() != engine.durable() {
+        if let Err(error) = sqlx::query("UPDATE furumusic__fed_device_identity SET playback_coordination_json = $2 WHERE user_id = $1")
+            .bind(user_id).bind(serde_json::to_value(&Checkpoint { scope: identity.group_id.clone(), state: engine.durable().clone() })?).execute(pool).await {
+            *engine = previous; return Err(error.into());
+        }
+    }
+    Ok(result)
+}
+
+fn playback_clock() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
 }
 
 async fn playback_state_from_browser_json(

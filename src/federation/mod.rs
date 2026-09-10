@@ -1123,6 +1123,11 @@ impl Federation {
         .await
     }
 
+    pub async fn fed_device_web_refresh(&self, user_id: i64) -> Result<()> {
+        let pool = self.pool().await?;
+        devices::refresh_web_output(&pool, crate::player::PlayerDeviceHub::shared(), user_id).await
+    }
+
     pub async fn fed_device_web_command(
         &self,
         user_id: i64,

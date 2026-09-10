@@ -1984,6 +1984,8 @@ pub mod db_migrations {
                 )",
             )
             .await?;
+        ctx.db.raw("ALTER TABLE furumusic__fed_device_identity ADD COLUMN IF NOT EXISTS playback_coordination_json JSONB").await?;
+        ctx.db.raw("ALTER TABLE furumusic__fed_device_identity ADD COLUMN IF NOT EXISTS playback_config_json JSONB").await?;
         ctx.db
             .raw(
                 "CREATE TABLE IF NOT EXISTS furumusic__fed_device (

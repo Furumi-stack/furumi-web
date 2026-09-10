@@ -108,7 +108,7 @@ struct LocalUploadResponse {
     upload: LocalUploadDto,
 }
 
-const PLAYER_DEVICE_TTL_MS: i64 = 30_000;
+const PLAYER_DEVICE_TTL_MS: i64 = 120_000;
 const PLAYER_DEVICE_RETURN_TAKEOVER_MS: i64 = 30 * 60 * 1_000;
 const PLAYER_DEVICE_COMMAND_TTL_MS: i64 = 20_000;
 const PLAYER_DEVICE_MAX_COMMANDS: usize = 32;
@@ -124,6 +124,7 @@ struct PlayerDevice {
     id: String,
     name: String,
     kind: String,
+    report_sequence: u64,
     last_seen_ms: i64,
 }
 
@@ -165,6 +166,8 @@ struct PlayerDeviceHubState {
     commands_by_device: HashMap<(i64, String), VecDeque<PendingPlayerDeviceCommand>>,
     playback_state_by_user: HashMap<i64, PlayerDevicePlaybackStateDto>,
     jams_by_id: HashMap<String, PlayerJamSession>,
+    playback_startup_by_user: HashMap<i64, std::time::Instant>,
+    output_report_sequence: u64,
 }
 
 #[derive(Debug, Default)]
@@ -187,6 +190,9 @@ impl PlayerDeviceHub {
         let now = current_millis();
         let mut state = self.state.lock().expect("player device hub lock");
         self.prune_locked(&mut state, now);
+        if self.user_has_joined_jam_locked(&state, user_id) {
+            return Ok(());
+        }
         let devices = state
             .devices_by_user
             .get(&user_id)
@@ -205,17 +211,105 @@ impl PlayerDeviceHub {
                     .map(|device| device.id.clone())
             })
             .ok_or("no browser playback device")?;
-        state.active_device_by_user.insert(user_id, target.clone());
+        if command == "transfer_state" {
+            state.active_device_by_user.insert(user_id, target.clone());
+        }
         self.enqueue_command_locked(&mut state, user_id, &target, command, payload, now);
         Ok(())
     }
 
-    pub(crate) fn federation_playback_is_local(&self, user_id: i64) -> bool {
-        let state = self.state.lock().expect("player device hub lock");
-        !state
+    pub(crate) fn federation_output_report(&self, user_id: i64) -> (bool, bool, u64, bool) {
+        let mut state = self.state.lock().expect("player device hub lock");
+        if self.user_has_joined_jam_locked(&state, user_id) {
+            return (false, false, 0, false);
+        }
+        let now = current_millis();
+        let active = state.active_device_by_user.get(&user_id);
+        let active_browser = active
+            .filter(|id| !is_fed_virtual_device_id(id))
+            .and_then(|id| state.devices_by_user.get(&user_id)?.get(id))
+            .filter(|device| now.saturating_sub(device.last_seen_ms) < PLAYER_DEVICE_TTL_MS);
+        let candidate = state.devices_by_user.get(&user_id).and_then(|devices| {
+            devices
+                .values()
+                .filter(|device| {
+                    !is_fed_virtual_device_id(&device.id)
+                        && now.saturating_sub(device.last_seen_ms) < PLAYER_DEVICE_TTL_MS
+                })
+                .max_by_key(|device| (device.report_sequence, &device.id))
+        });
+        let available = candidate.is_some();
+        // Only the selected browser can renew the gateway's owned output.
+        let report = active_browser.map_or(0, |device| device.report_sequence);
+        let playing = active_browser.is_some()
+            && state
+                .playback_state_by_user
+                .get(&user_id)
+                .is_some_and(|playback| playback.track.is_some() && !playback.paused);
+        let startup = state
+            .playback_startup_by_user
+            .remove(&user_id)
+            .is_some_and(|started| {
+                started.elapsed().as_millis() <= PLAYER_DEVICE_COMMAND_TTL_MS as u128
+            });
+        (available, playing, report, startup)
+    }
+
+    pub(crate) fn enforce_federation_owner(&self, user_id: i64, local: &str, owner: &str) {
+        let mut state = self.state.lock().expect("player device hub lock");
+        if self.user_has_joined_jam_locked(&state, user_id) {
+            return;
+        }
+        if owner == local {
+            let now = current_millis();
+            let active_local = state
+                .active_device_by_user
+                .get(&user_id)
+                .is_some_and(|id| !is_fed_virtual_device_id(id));
+            if !active_local {
+                let candidate = state.devices_by_user.get(&user_id).and_then(|devices| {
+                    devices
+                        .values()
+                        .filter(|device| {
+                            !is_fed_virtual_device_id(&device.id)
+                                && now.saturating_sub(device.last_seen_ms) < PLAYER_DEVICE_TTL_MS
+                        })
+                        .max_by_key(|device| (device.report_sequence, &device.id))
+                        .map(|device| device.id.clone())
+                });
+                if let Some(candidate) = candidate {
+                    state
+                        .active_device_by_user
+                        .insert(user_id, candidate.clone());
+                    if let Some(playback) =
+                        state
+                            .playback_state_by_user
+                            .get(&user_id)
+                            .and_then(|playback| {
+                                serde_json::to_value(playback_state_at(playback.clone(), now)).ok()
+                            })
+                    {
+                        self.enqueue_command_locked(
+                            &mut state,
+                            user_id,
+                            &candidate,
+                            "transfer_state",
+                            playback,
+                            now,
+                        );
+                    }
+                }
+            }
+            return;
+        }
+        state
             .active_device_by_user
-            .get(&user_id)
-            .is_some_and(|id| is_fed_virtual_device_id(id))
+            .insert(user_id, fed_virtual_device_id(owner));
+        // Poll responses also identify the winner. Purge delayed play/transfer
+        // commands so reconnecting browsers cannot resume an obsolete session.
+        state
+            .commands_by_device
+            .retain(|(user, _), _| *user != user_id);
     }
 
     pub(crate) fn playback_state_json_for_commands(
@@ -269,39 +363,27 @@ impl PlayerDeviceHub {
         state.devices_by_user.entry(user_id).or_default().insert(
             virtual_id.clone(),
             PlayerDevice {
+                report_sequence: 0,
                 id: virtual_id.clone(),
                 name: fed_device_name.to_string(),
                 kind: "fed".to_string(),
                 last_seen_ms: now,
             },
         );
-        // Match the trusted-device playback contract used by the TUI: a
-        // background/stale active snapshot must not steal playback from a
-        // browser that is actively playing. An explicit web handoff changes
-        // `active_device_by_user` to the federated virtual device before the
-        // snapshot arrives, so it still passes through here.
-        let local_playback_is_protected = state
-            .active_device_by_user
-            .get(&user_id)
-            .is_some_and(|active_id| !is_fed_virtual_device_id(active_id))
-            && state
-                .playback_state_by_user
-                .get(&user_id)
-                .is_some_and(|playback| playback.track.is_some() && !playback.paused);
-        if active && local_playback_is_protected {
+        // The shared coordinator has already resolved ownership. A local
+        // playing flag is not permission to reject its winning claim.
+        if self.user_has_joined_jam_locked(&state, user_id) {
             return Ok(());
         }
-        let should_update_playback = active
-            || state
-                .active_device_by_user
-                .get(&user_id)
-                .is_some_and(|active_id| active_id == &virtual_id);
         if active {
+            state
+                .commands_by_device
+                .retain(|(user, _), _| *user != user_id);
             state
                 .active_device_by_user
                 .insert(user_id, virtual_id.clone());
         }
-        if should_update_playback {
+        if active {
             state.playback_state_by_user.insert(user_id, playback_state);
         }
         Ok(())
@@ -330,9 +412,32 @@ impl PlayerDeviceHub {
             .playback_state_by_user
             .get(&user_id)
             .is_some_and(|playback| playback.track.is_some() && !playback.paused);
-        let should_claim_idle_playback = is_new_or_returning
-            && previous_active_id.as_deref() != Some(device_id)
-            && !active_is_playing;
+        let mut policy = music_dht::playback::Config::default();
+        // Local browser failover is permitted. The always-on gateway is not
+        // an automatic candidate against another federated output.
+        if previous_active_id
+            .as_deref()
+            .is_some_and(is_fed_virtual_device_id)
+        {
+            policy.automatic_failover = false;
+        }
+        let owner = previous_active_id.as_ref().map(|id| {
+            let age = state
+                .devices_by_user
+                .get(&user_id)
+                .and_then(|devices| devices.get(id))
+                .map_or(u64::MAX, |device| {
+                    now.saturating_sub(device.last_seen_ms).max(0) as u64
+                });
+            (active_is_playing, age)
+        });
+        let should_claim_idle_playback = previous_active_id.as_deref() != Some(device_id)
+            && policy.should_claim(is_new_or_returning, owner);
+        if is_new_or_returning {
+            state
+                .playback_startup_by_user
+                .insert(user_id, std::time::Instant::now());
+        }
         if should_claim_idle_playback {
             let transfer_state = state
                 .playback_state_by_user
@@ -379,9 +484,57 @@ impl PlayerDeviceHub {
         let now = current_millis();
         let mut state = self.state.lock().expect("player device hub lock");
         self.prune_locked(&mut state, now);
+        let previous = state.active_device_by_user.get(&user_id).cloned();
+        if let Some(previous) =
+            previous.filter(|id| id != device_id && !is_fed_virtual_device_id(id))
+        {
+            let age = state
+                .devices_by_user
+                .get(&user_id)
+                .and_then(|devices| devices.get(&previous))
+                .map_or(u64::MAX, |device| {
+                    now.saturating_sub(device.last_seen_ms).max(0) as u64
+                });
+            let playing = state
+                .playback_state_by_user
+                .get(&user_id)
+                .is_some_and(|playback| playback.track.is_some() && !playback.paused);
+            if music_dht::playback::Config::default().should_claim(false, Some((playing, age))) {
+                state
+                    .active_device_by_user
+                    .insert(user_id, device_id.to_string());
+                if let Some(payload) =
+                    state
+                        .playback_state_by_user
+                        .get(&user_id)
+                        .and_then(|playback| {
+                            serde_json::to_value(playback_state_at(playback.clone(), now)).ok()
+                        })
+                {
+                    self.enqueue_command_locked(
+                        &mut state,
+                        user_id,
+                        device_id,
+                        "transfer_state",
+                        payload,
+                        now,
+                    );
+                }
+            }
+        }
         self.touch_locked(&mut state, user_id, device_id, user_agent, now);
         self.update_playback_state_locked(&mut state, user_id, device_id, playback_state, now);
         self.touch_jam_locked(&mut state, user_id, device_id, current_jam_id, now);
+        if current_jam_id.is_none()
+            && state
+                .active_device_by_user
+                .get(&user_id)
+                .is_some_and(|active| active != device_id)
+        {
+            state
+                .commands_by_device
+                .remove(&(user_id, device_id.to_string()));
+        }
         let commands = state
             .commands_by_device
             .remove(&(user_id, device_id.to_string()))
@@ -534,8 +687,11 @@ impl PlayerDeviceHub {
         user_agent: Option<&str>,
         now: i64,
     ) {
+        state.output_report_sequence = state.output_report_sequence.saturating_add(1);
+        let report_sequence = state.output_report_sequence;
         let devices = state.devices_by_user.entry(user_id).or_default();
         let device = PlayerDevice {
+            report_sequence,
             id: device_id.to_string(),
             name: device_name_from_user_agent(user_agent),
             kind: device_kind_from_user_agent(user_agent).to_string(),
@@ -546,15 +702,7 @@ impl PlayerDeviceHub {
             .device_last_seen_ms
             .insert((user_id, device_id.to_string()), now);
 
-        let active_online = state
-            .active_device_by_user
-            .get(&user_id)
-            .is_some_and(|active_id| devices.contains_key(active_id));
-        if !active_online {
-            state
-                .active_device_by_user
-                .insert(user_id, device_id.to_string());
-        }
+        // Discovery only registers devices; startup/select decides ownership.
     }
 
     fn update_playback_state_locked(
@@ -976,25 +1124,11 @@ impl PlayerDeviceHub {
             devices.retain(|_, device| {
                 now.saturating_sub(device.last_seen_ms) <= PLAYER_DEVICE_TTL_MS
             });
-            let active_valid = state
-                .active_device_by_user
-                .get(user_id)
-                .is_some_and(|active_id| devices.contains_key(active_id));
-            if !active_valid {
-                if let Some(first_device_id) = devices.keys().next().cloned() {
-                    state
-                        .active_device_by_user
-                        .insert(*user_id, first_device_id);
-                } else {
-                    state.active_device_by_user.remove(user_id);
-                    state.playback_state_by_user.remove(user_id);
-                }
-            }
+            // Keep ownership and queue when presence expires. The shared
+            // protocol decides failover; HashMap order must never choose audio.
+            let _ = user_id;
             !devices.is_empty()
         });
-        state
-            .playback_state_by_user
-            .retain(|user_id, _| state.devices_by_user.contains_key(user_id));
 
         state
             .commands_by_device
@@ -1171,6 +1305,83 @@ mod device_tests {
     use super::*;
 
     #[test]
+    fn gateway_timer_does_not_manufacture_browser_reports() {
+        let hub = PlayerDeviceHub::default();
+        assert_eq!(hub.federation_output_report(1), (false, false, 0, false));
+        hub.heartbeat(1, "browser", None, None, None);
+        let first = hub.federation_output_report(1);
+        let repeated = hub.federation_output_report(1);
+        assert!(first.0);
+        assert!(first.3);
+        assert_eq!(first.2, repeated.2);
+        assert!(!repeated.3);
+    }
+
+    #[test]
+    fn an_old_browser_startup_does_not_claim_a_late_peer() {
+        let hub = PlayerDeviceHub::default();
+        hub.heartbeat(1, "browser", None, None, None);
+        hub.state.lock().unwrap().playback_startup_by_user.insert(
+            1,
+            std::time::Instant::now()
+                - std::time::Duration::from_millis(PLAYER_DEVICE_COMMAND_TTL_MS as u64 + 1),
+        );
+        assert!(!hub.federation_output_report(1).3);
+    }
+
+    #[test]
+    fn expired_presence_does_not_replace_federated_owner() {
+        let hub = PlayerDeviceHub::default();
+        hub.state
+            .lock()
+            .unwrap()
+            .active_device_by_user
+            .insert(1, "fed:remote".into());
+        let response = hub.poll(1, "browser", None, None, None);
+        assert_eq!(response.active_device_id.as_deref(), Some("fed:remote"));
+        assert!(response.commands.is_empty());
+    }
+
+    #[test]
+    fn browser_poll_fails_over_only_after_local_owner_timeout() {
+        let hub = PlayerDeviceHub::default();
+        hub.heartbeat(1, "first", None, None, None);
+        assert_eq!(
+            hub.poll(1, "second", None, None, None)
+                .active_device_id
+                .as_deref(),
+            Some("first")
+        );
+        hub.state
+            .lock()
+            .unwrap()
+            .devices_by_user
+            .get_mut(&1)
+            .unwrap()
+            .get_mut("first")
+            .unwrap()
+            .last_seen_ms = current_millis() - PLAYER_DEVICE_TTL_MS - 1;
+        assert_eq!(
+            hub.poll(1, "second", None, None, None)
+                .active_device_id
+                .as_deref(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn pruning_keeps_the_owner_when_every_device_is_offline() {
+        let hub = PlayerDeviceHub::default();
+        hub.heartbeat(1, "browser", None, None, None);
+        let mut state = hub.state.lock().unwrap();
+        hub.prune_locked(&mut state, current_millis() + PLAYER_DEVICE_TTL_MS + 1);
+        assert_eq!(
+            state.active_device_by_user.get(&1).map(String::as_str),
+            Some("browser")
+        );
+    }
+
+    #[test]
     fn detects_furumi_android_native_client() {
         let user_agent = Some("FurumiAndroid/1.0 Android Mobile");
 
@@ -1217,7 +1428,7 @@ mod device_tests {
     }
 
     #[test]
-    fn federated_snapshot_does_not_steal_active_browser_playback() {
+    fn resolved_federation_owner_overrides_a_playing_browser() {
         let hub = PlayerDeviceHub::default();
         let user_id = 7;
         {
@@ -1225,6 +1436,7 @@ mod device_tests {
             state.devices_by_user.entry(user_id).or_default().insert(
                 "browser".to_string(),
                 PlayerDevice {
+                    report_sequence: 0,
                     id: "browser".to_string(),
                     name: "Browser".to_string(),
                     kind: "computer".to_string(),
@@ -1276,7 +1488,7 @@ mod device_tests {
                 .active_device_by_user
                 .get(&user_id)
                 .map(String::as_str),
-            Some("browser")
+            Some("fed:remote")
         );
         assert!(
             state
@@ -1372,6 +1584,7 @@ mod device_tests {
             state.devices_by_user.entry(user_id).or_default().insert(
                 "browser".to_string(),
                 PlayerDevice {
+                    report_sequence: 0,
                     id: "browser".to_string(),
                     name: "Browser".to_string(),
                     kind: "computer".to_string(),
@@ -5347,6 +5560,12 @@ async fn devices_heartbeat_handler(
             return Ok(json_error(StatusCode::BAD_REQUEST, &format!("{err}")));
         }
     }
+    if let Err(error) = crate::federation::handle()
+        .fed_device_web_refresh(user.id)
+        .await
+    {
+        tracing::warn!(user_id = user.id, %error, "playback coordination startup failed");
+    }
     Json(response).into_response()
 }
 
@@ -5364,6 +5583,12 @@ async fn devices_poll_handler(
         return Ok(json_error(StatusCode::BAD_REQUEST, "invalid device id"));
     };
 
+    if let Err(error) = crate::federation::handle()
+        .fed_device_web_refresh(user.id)
+        .await
+    {
+        tracing::warn!(user_id = user.id, %error, "playback coordination refresh failed");
+    }
     let response = hub.poll(
         user.id,
         &device_id,
