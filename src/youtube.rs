@@ -187,6 +187,20 @@ pub async fn selected_cookie_contents(
     Ok(Some(file.contents().to_owned()))
 }
 
+/// Parse the Netscape cookie expiration field, normalizing to an integer
+/// Unix timestamp. Accepts plain integers as well as the fractional
+/// timestamps some browser-export tools emit (e.g. `1824149508.417`).
+fn parse_cookie_expiry(field: &str) -> Option<i64> {
+    if let Ok(value) = field.parse::<i64>() {
+        return Some(value);
+    }
+    let value = field.parse::<f64>().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    Some(value.trunc() as i64)
+}
+
 pub fn parse_cookie_file(data: &[u8]) -> anyhow::Result<(String, usize)> {
     if data.is_empty() {
         bail!("cookie file is empty");
@@ -211,16 +225,20 @@ pub fn parse_cookie_file(data: &[u8]) -> anyhow::Result<(String, usize)> {
             );
         }
         let domain = fields[0].strip_prefix("#HttpOnly_").unwrap_or(fields[0]);
+        let expiry = parse_cookie_expiry(fields[4]);
         if domain.is_empty()
             || domain.chars().any(char::is_whitespace)
             || !matches!(fields[1], "TRUE" | "FALSE")
             || fields[2].is_empty()
             || !matches!(fields[3], "TRUE" | "FALSE")
-            || fields[4].parse::<i64>().is_err()
+            || expiry.is_none()
             || fields[5].is_empty()
         {
             bail!("invalid Netscape cookie on line {}", index + 1);
         }
+        let mut fields = fields;
+        let expiry = expiry.expect("expiry validated above").to_string();
+        fields[4] = expiry.as_str();
         normalized.push(fields.join("\t"));
     }
 
@@ -2810,6 +2828,15 @@ mod tests {
         assert!(contents.starts_with("# Netscape HTTP Cookie File\n"));
         assert!(contents.contains("#HttpOnly_.youtube.com\tTRUE"));
         assert!(!contents.contains('\r'));
+    }
+
+    #[test]
+    fn accepts_fractional_expiry_timestamps() {
+        let source = b".youtube.com\tTRUE\t/\tTRUE\t1824149508.417\t__Secure-YENID\tvalue\r\n";
+        let (contents, count) = parse_cookie_file(source).unwrap();
+        assert_eq!(count, 1);
+        assert!(contents.contains("\tTRUE\t1824149508\t__Secure-YENID\tvalue"));
+        assert!(!contents.contains("1824149508.417"));
     }
 
     #[test]
