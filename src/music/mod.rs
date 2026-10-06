@@ -2784,6 +2784,45 @@ pub mod db_migrations {
             &[Operation::custom(create_youtube_import_media_links).build()];
     }
 
+    // -- M0048: playback coordination columns -----------------------------
+
+    // These columns were originally added to M0038 after that migration had
+    // already shipped. Existing databases therefore never ran the ALTERs:
+    // migration bodies are immutable once their name is recorded as applied.
+    #[cot::db::migrations::migration_op]
+    async fn add_playback_coordination_columns(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__fed_device_identity
+                 ADD COLUMN IF NOT EXISTS playback_coordination_json JSONB",
+            )
+            .await?;
+        ctx.db
+            .raw(
+                "ALTER TABLE furumusic__fed_device_identity
+                 ADD COLUMN IF NOT EXISTS playback_config_json JSONB",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0048AddPlaybackCoordinationColumns;
+
+    impl migrations::Migration for M0048AddPlaybackCoordinationColumns {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0048_add_playback_coordination_columns";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0047_create_youtube_import_media_links",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(add_playback_coordination_columns).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2822,5 +2861,6 @@ pub mod db_migrations {
         &M0045CreateYouTubeDownloads,
         &M0046CreateLocalUploadHistory,
         &M0047CreateYouTubeImportMediaLinks,
+        &M0048AddPlaybackCoordinationColumns,
     ];
 }

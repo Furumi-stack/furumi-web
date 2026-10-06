@@ -48,6 +48,11 @@ pub use similarity::SIMILARITY_ALPN;
 
 /// How often the published library is re-synchronized with the database.
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
+// Active records live for twelve hours. Refreshing a large server library
+// every ten minutes rewrites hundreds of thousands of PostgreSQL rows even
+// though no catalog metadata changed; hourly refreshes leave at least an
+// eleven-hour lifetime if the owner disappears between successful rounds.
+const REPUBLISH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const SUPERVISOR_INTERVAL: Duration = Duration::from_secs(15);
 const RECOVERY_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const TRANSPORT_SAMPLE_LIMIT: usize = 16;
@@ -285,6 +290,7 @@ pub struct Federation {
     download_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pool: tokio::sync::OnceCell<PgPool>,
     running: tokio::sync::Mutex<Option<Running>>,
+    sync_lock: tokio::sync::Mutex<()>,
     supervisor_started: AtomicBool,
     recovery_count: AtomicU64,
     last_sync: std::sync::Mutex<Option<String>>,
@@ -319,6 +325,7 @@ pub fn handle() -> Arc<Federation> {
             download_locks: std::sync::Mutex::new(Default::default()),
             pool: tokio::sync::OnceCell::new(),
             running: tokio::sync::Mutex::new(None),
+            sync_lock: tokio::sync::Mutex::new(()),
             supervisor_started: AtomicBool::new(false),
             recovery_count: AtomicU64::new(0),
             last_sync: std::sync::Mutex::new(None),
@@ -482,6 +489,7 @@ impl Federation {
         let config = MusicDhtConfig::builder()
             .data_dir(&self.data_dir)
             .network_id(NetworkId::from_name(&network_name))
+            .republish_interval(REPUBLISH_INTERVAL)
             // Peers of the network find each other knowing only its name.
             .rendezvous(RendezvousConfig::default())
             .stream_protocol(AUDIO_ALPN)
@@ -533,6 +541,7 @@ impl Federation {
         let sync_service = Arc::clone(&service);
         let sync_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(SYNC_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
                 let _ = sync_self.sync_once(&sync_service).await;
@@ -686,8 +695,9 @@ impl Federation {
     }
 
     pub async fn sync_now(self: &Arc<Self>) -> Result<()> {
+        let _sync_guard = self.sync_lock.lock().await;
         let service = self.service().await?;
-        let sync_stats = self.sync_once(&service).await?;
+        let sync_stats = self.sync_once_locked(&service).await?;
         let publish_stats = match service.republish().await {
             Ok(stats) => stats,
             Err(err) => {
@@ -701,6 +711,11 @@ impl Federation {
     }
 
     async fn sync_once(self: &Arc<Self>, service: &MusicDhtService) -> Result<SyncStats> {
+        let _sync_guard = self.sync_lock.lock().await;
+        self.sync_once_locked(service).await
+    }
+
+    async fn sync_once_locked(self: &Arc<Self>, service: &MusicDhtService) -> Result<SyncStats> {
         let specs = match self.collect_specs().await {
             Ok(specs) => specs,
             Err(err) => {
@@ -964,19 +979,30 @@ impl Federation {
             Some(running) => {
                 let service = &running.service;
                 let health = service.network_health();
-                let published = service
-                    .list_local_items()
+                // The admin page polls this endpoint. Loading and decoding the
+                // complete library just to display its size used all four DB
+                // connections for large libraries and starved catalog/device
+                // requests. COUNT avoids fetching every serialized payload.
+                let pool = self.pool().await.ok();
+                let published = if let Some(pool) = &pool {
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT COUNT(*) FROM furumusic__federation_local_item
+                         WHERE deleted = false",
+                    )
+                    .fetch_one(pool)
                     .await
-                    .map(|items| items.len())
-                    .unwrap_or(0);
+                    .unwrap_or(0) as usize
+                } else {
+                    0
+                };
                 let peers: Vec<String> = service
                     .connected_peers()
                     .iter()
                     .map(|p| p.to_string())
                     .collect();
                 let mut transport = self.transport_stats.snapshot();
-                if let Ok(pool) = self.pool().await {
-                    enrich_transport_users(&pool, &mut transport).await;
+                if let Some(pool) = &pool {
+                    enrich_transport_users(pool, &mut transport).await;
                 }
                 json!({
                     "running": true,

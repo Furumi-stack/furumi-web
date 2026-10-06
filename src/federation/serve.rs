@@ -2,6 +2,7 @@
 //! the PostgreSQL library and the media storage directory. Wire compatible
 //! with the furumi TUI client and any other furumi peer.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -228,31 +229,6 @@ async fn track_artist_image_file(pool: &PgPool, track_id: i64) -> Result<Option<
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|row| (row.get(0), row.get(1))))
-}
-
-async fn track_catalog_artist_names(
-    pool: &PgPool,
-    track_id: i64,
-) -> Result<(Vec<String>, Vec<String>)> {
-    let mut artists = Vec::new();
-    let mut featured = Vec::new();
-    let rows = sqlx::query(
-        "SELECT a.name, ta.role FROM furumusic__track_artist ta
-         JOIN furumusic__artist a ON a.id = ta.artist_id
-         WHERE ta.track_id = $1 ORDER BY ta.position",
-    )
-    .bind(track_id)
-    .fetch_all(pool)
-    .await?;
-    for row in rows {
-        let name: String = row.get(0);
-        match row.get::<String, _>(1).as_str() {
-            "featuring" => featured.push(name),
-            "main" => artists.push(name),
-            _ => {}
-        }
-    }
-    Ok((artists, featured))
 }
 
 async fn track_metadata(pool: &PgPool, track_id: i64) -> Result<Option<TrackMetadata>> {
@@ -620,43 +596,72 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
     .bind(artist_id)
     .fetch_all(pool)
     .await?;
-    let mut releases = Vec::new();
-    for release_row in release_rows {
-        let release_id: i64 = release_row.get(0);
-        let track_rows = sqlx::query(
-            "SELECT t.id, t.title, t.track_number, t.disc_number, t.duration_seconds,
-                    c.content_id
+
+    // Fetch every release track and its credits in one round trip. The old
+    // implementation performed one track query per release and one artist
+    // query per track; a large discography could not finish before the
+    // client's five-second catalog deadline when PostgreSQL was busy.
+    let release_ids: Vec<i64> = release_rows.iter().map(|row| row.get(0)).collect();
+    let track_rows = if release_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query(
+            "SELECT t.release_id, t.id, t.title, t.track_number, t.disc_number,
+                    t.duration_seconds, c.content_id,
+                    COALESCE(
+                        array_agg(a.name::text ORDER BY ta.position)
+                            FILTER (WHERE ta.role = 'main'),
+                        ARRAY[]::text[]
+                    ) AS artists,
+                    COALESCE(
+                        array_agg(a.name::text ORDER BY ta.position)
+                            FILTER (WHERE ta.role = 'featuring'),
+                        ARRAY[]::text[]
+                    ) AS featured_artists
              FROM furumusic__track t
              JOIN furumusic__media_file m ON m.id = t.audio_file_id
              LEFT JOIN furumusic__federation_content_id_cache c
                     ON c.media_file_id = m.id AND c.sha256_hash = m.sha256_hash
-             WHERE t.release_id = $1 AND t.is_hidden = false
-             ORDER BY t.disc_number NULLS FIRST, t.track_number NULLS LAST, t.title",
+             LEFT JOIN furumusic__track_artist ta ON ta.track_id = t.id
+             LEFT JOIN furumusic__artist a ON a.id = ta.artist_id
+             WHERE t.release_id = ANY($1) AND t.is_hidden = false
+             GROUP BY t.release_id, t.id, t.title, t.track_number, t.disc_number,
+                      t.duration_seconds, c.content_id
+             ORDER BY t.release_id, t.disc_number NULLS FIRST,
+                      t.track_number NULLS LAST, t.title",
         )
-        .bind(release_id)
+        .bind(&release_ids)
         .fetch_all(pool)
-        .await?;
-        let mut tracks = Vec::with_capacity(track_rows.len());
-        for row in track_rows {
-            let track_id: i64 = row.get(0);
-            let duration: f64 = row.get(4);
-            let (artists, featured_artists) = track_catalog_artist_names(pool, track_id).await?;
-            tracks.push(CatalogTrack {
-                title: row.get(1),
-                artists,
-                featured_artists,
-                track_number: row.get(2),
-                disc_number: row.get(3),
+        .await?
+    };
+    let mut tracks_by_release: HashMap<i64, Vec<CatalogTrack>> = HashMap::new();
+    for row in track_rows {
+        let release_id: i64 = row.get(0);
+        let track_id: i64 = row.get(1);
+        let duration: f64 = row.get(5);
+        tracks_by_release
+            .entry(release_id)
+            .or_default()
+            .push(CatalogTrack {
+                title: row.get(2),
+                artists: row.get(7),
+                featured_artists: row.get(8),
+                track_number: row.get(3),
+                disc_number: row.get(4),
                 duration_seconds: (duration > 0.0).then_some(duration),
-                content_id: row.get(5),
+                content_id: row.get(6),
                 item_id: item_id_of(own, track_id),
             });
-        }
+    }
+
+    let mut releases = Vec::new();
+    for release_row in release_rows {
+        let release_id: i64 = release_row.get(0);
         releases.push(CatalogRelease {
             title: release_row.get(1),
             release_type: release_row.get(2),
             year: release_row.get(3),
-            tracks,
+            tracks: tracks_by_release.remove(&release_id).unwrap_or_default(),
         });
     }
 

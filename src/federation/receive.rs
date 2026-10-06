@@ -399,7 +399,12 @@ impl Federation {
         // when a federation peer is slow or offline.
         let federation = std::sync::Arc::clone(self);
         tokio::spawn(async move {
-            if let Err(err) = federation.sync_now().await {
+            let result = async {
+                let service = federation.service().await?;
+                federation.sync_once(&service).await.map(|_| ())
+            }
+            .await;
+            if let Err(err) = result {
                 tracing::warn!(track_id, "post-import federation publish failed: {err:#}");
             }
         });

@@ -8,6 +8,11 @@ use music_dht::{
 use sqlx::{PgPool, Row as _};
 
 const IDENTITY_NAME: &str = "default";
+// Several republish paths can converge on the same record within seconds
+// (startup discovery, a manual sync and a periodic tick). Extending a
+// twelve-hour TTL by less than five minutes is operationally identical, but
+// rewriting the wide row and its expiry index generates substantial WAL.
+const MIN_EXPIRY_EXTENSION_MS: u64 = 5 * 60 * 1_000;
 
 const SCHEMA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS furumusic__federation_identity (
@@ -133,7 +138,18 @@ impl MusicDhtStorage for PostgresFederationStorage {
                 revision = EXCLUDED.revision,
                 deleted = EXCLUDED.deleted,
                 updated_at_ms = EXCLUDED.updated_at_ms,
-                payload = EXCLUDED.payload",
+                payload = EXCLUDED.payload
+             WHERE (furumusic__federation_local_item.normalized_name,
+                    furumusic__federation_local_item.revision,
+                    furumusic__federation_local_item.deleted,
+                    furumusic__federation_local_item.updated_at_ms,
+                    furumusic__federation_local_item.payload)
+                   IS DISTINCT FROM
+                   (EXCLUDED.normalized_name,
+                    EXCLUDED.revision,
+                    EXCLUDED.deleted,
+                    EXCLUDED.updated_at_ms,
+                    EXCLUDED.payload)",
         )
         .bind(item.id.as_bytes().as_slice())
         .bind(&item.normalized_name)
@@ -317,11 +333,17 @@ async fn store_record_in_conn(
 
     match decide_store(existing, record) {
         StoreDecision::Ignore => return Ok(false),
-        StoreDecision::Write | StoreDecision::RefreshExpiry(_) => {}
+        StoreDecision::RefreshExpiry(new_expiry) => {
+            let previous_expiry = existing.map(|(_, _, expiry)| expiry).unwrap_or(0);
+            if new_expiry.saturating_sub(previous_expiry) < MIN_EXPIRY_EXTENSION_MS {
+                return Ok(false);
+            }
+        }
+        StoreDecision::Write => {}
     }
 
     let payload = postcard::to_stdvec(record).map_err(db_error)?;
-    sqlx::query(
+    let written = sqlx::query(
         "INSERT INTO furumusic__federation_dht_record
          (dht_key, item_id, owner_peer_id, payload, revision, deleted, expires_at_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -329,7 +351,16 @@ async fn store_record_in_conn(
             payload = EXCLUDED.payload,
             revision = EXCLUDED.revision,
             deleted = EXCLUDED.deleted,
-            expires_at_ms = EXCLUDED.expires_at_ms",
+            expires_at_ms = EXCLUDED.expires_at_ms
+         WHERE (furumusic__federation_dht_record.payload,
+                furumusic__federation_dht_record.revision,
+                furumusic__federation_dht_record.deleted,
+                furumusic__federation_dht_record.expires_at_ms)
+               IS DISTINCT FROM
+               (EXCLUDED.payload,
+                EXCLUDED.revision,
+                EXCLUDED.deleted,
+                EXCLUDED.expires_at_ms)",
     )
     .bind(key.as_bytes().as_slice())
     .bind(record.item.id.as_bytes().as_slice())
@@ -340,8 +371,9 @@ async fn store_record_in_conn(
     .bind(record.expires_at_ms as i64)
     .execute(&mut *conn)
     .await
-    .map_err(db_error)?;
-    Ok(true)
+    .map_err(db_error)?
+    .rows_affected();
+    Ok(written > 0)
 }
 
 fn db_error(err: impl std::fmt::Display) -> MusicDhtError {
