@@ -558,6 +558,14 @@
                            type="file"
                            multiple
                            accept="audio/*,.mp3,.flac,.wav,.m4a,.ogg,.opus,.aac"
+                           :disabled="$store.torrents.localFilesUploading"
+                           @change="$store.torrents.setLocalFiles($event.target.files); $event.target.value = ''">
+                    <input id="direct-audio-folder-input"
+                           class="file-upload-input"
+                           type="file"
+                           webkitdirectory
+                           multiple
+                           :disabled="$store.torrents.localFilesUploading"
                            @change="$store.torrents.setLocalFiles($event.target.files); $event.target.value = ''">
                     <label class="file-drop-zone"
                            for="direct-audio-file-input"
@@ -576,6 +584,15 @@
                         <span>{{ t.player_drop_audio_hint }}</span>
                         <small>{{ t.player_drop_audio_formats }}</small>
                     </label>
+                    <div class="file-upload-picker-actions">
+                        <button type="button" class="modal-btn modal-btn-ghost"
+                                :disabled="$store.torrents.localFilesUploading"
+                                @click="document.getElementById('direct-audio-file-input').click()">{{ t.player_choose_audio_files }}</button>
+                        <button type="button" class="modal-btn modal-btn-ghost"
+                                :disabled="$store.torrents.localFilesUploading"
+                                @click="document.getElementById('direct-audio-folder-input').click()">{{ t.player_choose_audio_folder }}</button>
+                        <small>{{ t.player_audio_folder_hint }}</small>
+                    </div>
 
                     <div class="file-upload-selection" x-show="$store.torrents.localFiles.length > 0">
                         <span x-text="$store.torrents.localUploadSummary()"></span>

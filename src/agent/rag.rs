@@ -83,15 +83,40 @@ pub async fn find_similar_releases(
 /// are ignored so that re-discovery is possible after the user deletes
 /// artists/releases/tracks.
 pub async fn file_hash_exists(pool: &PgPool, sha256: &str) -> anyhow::Result<bool> {
-    let row: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(\
-            SELECT 1 FROM furumusic__media_file mf \
-            JOIN furumusic__track t ON t.audio_file_id = mf.id \
-            WHERE mf.sha256_hash = $1\
-         )",
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM furumusic__media_file mf \
+         JOIN furumusic__track t ON t.audio_file_id = mf.id \
+         WHERE mf.sha256_hash = $1)",
     )
     .bind(sha256)
     .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
+/// Verify the bytes on disk as well as the database hash before dropping an
+/// inbox upload. Stale catalog hashes must not discard a replacement file.
+pub async fn file_hash_exists_verified(
+    pool: &PgPool,
+    sha256: &str,
+    storage_dir: &str,
+) -> anyhow::Result<bool> {
+    let paths: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT mf.file_path FROM furumusic__media_file mf \
+            JOIN furumusic__track t ON t.audio_file_id = mf.id \
+            WHERE mf.sha256_hash = $1",
+    )
+    .bind(sha256)
+    .fetch_all(pool)
     .await?;
-    Ok(row.0)
+    for path in paths {
+        let path = crate::media_paths::resolve_media_file_path(storage_dir, &path);
+        if super::mover::sha256_file(&path)
+            .await
+            .is_ok_and(|actual| actual == sha256)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

@@ -5157,6 +5157,47 @@ async fn local_upload_handler(
         ));
     }
 
+    let batch_header_id = request
+        .headers()
+        .get("x-furumusic-upload-batch-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| uuid::Uuid::parse_str(value.trim()).ok());
+    let batch_root = batch_header_id.map(|id| {
+        inbox_root
+            .join("user_uploads")
+            .join(user.id.to_string())
+            .join(format!("local-{id}"))
+    });
+    if request
+        .headers()
+        .get("x-furumusic-upload-complete")
+        .is_some_and(|value| value == "true")
+    {
+        let Some(root) = batch_root else {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "batch completion requires a valid batch ID",
+            ));
+        };
+        crate::local_uploads::finish_batch(&root)
+            .await
+            .map_err(|err| cot::Error::internal(err.to_string()))?;
+        if let Some(handle) = scheduler_handle.get() {
+            let handle = Arc::clone(handle);
+            tokio::spawn(async move {
+                if let Err(err) = handle.trigger_job_now("inbox_discover").await {
+                    tracing::warn!("failed to trigger discovery after folder upload: {err}");
+                }
+            });
+        }
+        return Json(serde_json::json!({"ok": true})).into_response();
+    }
+    if let Some(root) = &batch_root {
+        crate::local_uploads::begin_batch(root)
+            .await
+            .map_err(|err| cot::Error::internal(err.to_string()))?;
+    }
+
     let filename_header = HeaderName::from_static("x-furumusic-filename");
     let original_name = request
         .headers()
@@ -5176,6 +5217,32 @@ async fn local_upload_handler(
         .unwrap_or_else(uuid::Uuid::new_v4)
         .to_string();
 
+    // One batch directory preserves sibling and nested folders from the picker.
+    // Older clients keep their existing per-file upload directories.
+    let batch_id = request
+        .headers()
+        .get("x-furumusic-upload-batch-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| uuid::Uuid::parse_str(value.trim()).ok())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| upload_id.clone());
+    let relative_path = match request.headers().get("x-furumusic-relative-path") {
+        Some(value) => match value.to_str().ok().map(percent_decode_header) {
+            Some(value) => match crate::local_uploads::relative_upload_path(&value) {
+                Ok(path) => path,
+                Err(err) => return Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string())),
+            },
+            None => {
+                return Ok(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid upload path header",
+                ));
+            }
+        },
+        None => std::path::PathBuf::from(&filename),
+    };
+    let display_name = relative_path.to_string_lossy().to_string();
+
     let bytes = request
         .into_body()
         .into_bytes()
@@ -5191,8 +5258,8 @@ async fn local_upload_handler(
     let upload_dir = inbox_root
         .join("user_uploads")
         .join(user.id.to_string())
-        .join(format!("local-{upload_id}"));
-    let destination = upload_dir.join(&filename);
+        .join(format!("local-{batch_id}"));
+    let destination = upload_dir.join(&relative_path);
     let Some(inbox_path) =
         crate::media_paths::path_for_root(&inbox_root.to_string_lossy(), &destination)
     else {
@@ -5201,11 +5268,18 @@ async fn local_upload_handler(
             "upload destination escaped agent_inbox_dir",
         ));
     };
+    if let Some(upload) =
+        crate::local_uploads::successful_receipt(pool, user.id, &upload_id, &inbox_path)
+            .await
+            .map_err(|err| cot::Error::internal(err.to_string()))?
+    {
+        return Json(LocalUploadResponse { ok: true, upload }).into_response();
+    }
     if let Err(err) = crate::local_uploads::create(
         pool,
         &upload_id,
         user.id,
-        &filename,
+        &display_name,
         bytes.len() as u64,
         &inbox_path,
     )
@@ -5214,17 +5288,9 @@ async fn local_upload_handler(
         return Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()));
     }
 
-    let temporary = upload_dir.join(format!(".{upload_id}.uploading"));
-    let write_result = async {
-        tokio::fs::create_dir_all(&upload_dir).await?;
-        tokio::fs::write(&temporary, &bytes).await?;
-        tokio::fs::rename(&temporary, &destination).await?;
-        Ok::<(), std::io::Error>(())
-    }
-    .await;
+    let write_result = crate::local_uploads::save_file(&destination, &upload_id, &bytes).await;
     if let Err(err) = write_result {
         let message = format!("could not save uploaded file: {err}");
-        let _ = tokio::fs::remove_dir_all(&upload_dir).await;
         let _ = crate::local_uploads::mark_failed(pool, &upload_id, user.id, &message).await;
         return Ok(json_error(StatusCode::INTERNAL_SERVER_ERROR, &message));
     }
@@ -5239,7 +5305,9 @@ async fn local_upload_handler(
         }
     };
 
-    if let Some(handle) = scheduler_handle.get() {
+    if batch_root.is_none()
+        && let Some(handle) = scheduler_handle.get()
+    {
         let handle = Arc::clone(handle);
         tokio::spawn(async move {
             if let Err(err) = handle.trigger_job_now("inbox_discover").await {

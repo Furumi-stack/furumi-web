@@ -1,5 +1,6 @@
 pub mod cover_art;
 pub mod cover_variants;
+pub mod dedup;
 pub mod dto;
 pub mod metadata;
 pub mod mover;
@@ -54,6 +55,8 @@ pub async fn probe_llm(llm_url: &str, llm_model: &str, llm_auth: &str) -> AgentP
         ],
         "stream": false,
         "temperature": 0.3,
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {"enable_thinking": false},
         "max_tokens": 256
     });
 

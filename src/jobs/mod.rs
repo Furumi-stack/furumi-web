@@ -29,7 +29,15 @@ pub fn strip_user_upload_prefix(relative_path: &Path) -> PathBuf {
     if components.len() >= 3
         && matches!(components[0], Component::Normal(value) if value == "user_uploads")
     {
-        components[2..].iter().collect()
+        let start = if matches!(components[2], Component::Normal(value)
+            if value.to_str().and_then(|v| v.strip_prefix("local-"))
+                .and_then(|v| uuid::Uuid::parse_str(v).ok()).is_some())
+        {
+            3
+        } else {
+            2
+        };
+        components[start..].iter().collect()
     } else {
         relative_path.to_path_buf()
     }
@@ -74,5 +82,35 @@ pub async fn uploader_from_relative_path(
             name,
         },
         _ => UploaderAttribution::unknown(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_upload_batch_id_is_not_an_artist_hint() {
+        let path = Path::new(
+            "user_uploads/6/local-123e4567-e89b-12d3-a456-426614174000/Artist/Album/01.mp3",
+        );
+        assert_eq!(
+            strip_user_upload_prefix(path),
+            PathBuf::from("Artist/Album/01.mp3")
+        );
+        assert_eq!(
+            strip_user_upload_prefix(Path::new(
+                "user_uploads/6/local-123e4567-e89b-12d3-a456-426614174000/01.mp3"
+            )),
+            PathBuf::from("01.mp3")
+        );
+    }
+
+    #[test]
+    fn ordinary_upload_folder_names_are_preserved() {
+        assert_eq!(
+            strip_user_upload_prefix(Path::new("user_uploads/6/local-band/Album/01.mp3")),
+            PathBuf::from("local-band/Album/01.mp3")
+        );
     }
 }

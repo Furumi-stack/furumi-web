@@ -28,6 +28,7 @@
 
           buildInputs = with pkgs; [
             cacert
+            chromaprint
             deno
             ffmpeg-headless
             openssl

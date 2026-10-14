@@ -525,6 +525,9 @@ translations! {
     player_drop_audio_title: "Drop audio files here"           , "Перетащите аудиофайлы сюда";
     player_drop_audio_hint:  "or click to choose files"        , "или нажмите, чтобы выбрать файлы";
     player_drop_audio_formats: "MP3, FLAC, WAV, M4A, OGG, Opus and AAC" , "MP3, FLAC, WAV, M4A, OGG, Opus и AAC";
+    player_choose_audio_files: "Choose files"                  , "Выбрать файлы";
+    player_choose_audio_folder: "Choose folder"                , "Выбрать папку";
+    player_audio_folder_hint: "Audio files from subfolders are included; folder structure is preserved." , "Аудиофайлы из вложенных папок тоже загрузятся; структура папок сохранится.";
     player_upload_selected_files: "Upload selected files"      , "Загрузить выбранные файлы";
     player_upload_history:   "Upload history"                  , "История загрузок";
     player_no_file_uploads:  "No file uploads yet"             , "Загрузок файлов пока нет";

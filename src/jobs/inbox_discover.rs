@@ -180,10 +180,17 @@ impl Job for InboxDiscoverJob {
                     };
 
                 // Skip if hash already in media_files
-                if crate::agent::rag::file_hash_exists(&ctx.pool, &hash)
-                    .await
-                    .unwrap_or(false)
+                if crate::agent::rag::file_hash_exists_verified(
+                    &ctx.pool,
+                    &hash,
+                    &config.agent_storage_dir,
+                )
+                .await
+                .unwrap_or(false)
                 {
+                    // Close the upload by removing the exact inbox duplicate;
+                    // otherwise its history remains queued forever.
+                    tokio::fs::remove_file(file_path).await?;
                     skipped_hash += 1;
                     continue;
                 }
@@ -320,6 +327,9 @@ pub fn group_by_folder(files: &[PathBuf]) -> Vec<(PathBuf, Vec<PathBuf>)> {
 }
 
 pub async fn collect_audio_files(dir: &Path, audio: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    if crate::local_uploads::incomplete_batch(dir).await? {
+        return Ok(());
+    }
     let mut entries = tokio::fs::read_dir(dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let name = entry.file_name().to_string_lossy().into_owned();

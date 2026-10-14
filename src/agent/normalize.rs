@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use super::dto::{
@@ -7,6 +8,9 @@ use super::dto::{
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+// Large album batches can take longer than ten minutes on the local model.
+const LLM_REQUEST_TIMEOUT_SECS: u64 = 3600;
 
 /// A single message in the chat history.
 #[derive(Clone, Serialize)]
@@ -22,6 +26,13 @@ struct ChatRequest {
     response_format: ChatResponseFormat,
     stream: bool,
     temperature: f64,
+    reasoning_effort: &'static str,
+    chat_template_kwargs: ChatTemplateKwargs,
+}
+
+#[derive(Serialize)]
+struct ChatTemplateKwargs {
+    enable_thinking: bool,
 }
 
 #[derive(Serialize)]
@@ -60,7 +71,8 @@ async fn call_llm_chat(
     auth: Option<&str>,
 ) -> anyhow::Result<(String, String, ChatUsage)> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
         .build()?;
 
     let request = ChatRequest {
@@ -71,6 +83,11 @@ async fn call_llm_chat(
         },
         stream: false,
         temperature: 0.1,
+        // Disable reasoning through both the API and the model's chat template.
+        reasoning_effort: "none",
+        chat_template_kwargs: ChatTemplateKwargs {
+            enable_thinking: false,
+        },
     };
 
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
@@ -78,6 +95,8 @@ async fn call_llm_chat(
         %url,
         model,
         message_count = messages.len(),
+        timeout_secs = LLM_REQUEST_TIMEOUT_SECS,
+        thinking = false,
         "Calling LLM API (chat mode)..."
     );
 
@@ -86,7 +105,17 @@ async fn call_llm_chat(
     if let Some(auth_header) = auth {
         req = req.header("Authorization", auth_header);
     }
-    let resp = req.send().await?;
+    let resp = req.send().await.map_err(|error| {
+        let elapsed_secs = start.elapsed().as_secs();
+        let message = if error.is_timeout() {
+            format!(
+                "LLM request timed out after {elapsed_secs}s (request timeout: {LLM_REQUEST_TIMEOUT_SECS}s, connect timeout: 15s)"
+            )
+        } else {
+            format!("LLM request failed after {elapsed_secs}s")
+        };
+        anyhow::Error::new(error).context(message)
+    })?;
     let elapsed = start.elapsed();
 
     if !resp.status().is_success() {
@@ -97,7 +126,10 @@ async fn call_llm_chat(
         anyhow::bail!("LLM returned {}: {}", status, body);
     }
 
-    let chat_resp: ChatResponse = resp.json().await?;
+    let chat_resp: ChatResponse = resp
+        .json()
+        .await
+        .context("Failed to decode LLM chat response")?;
     let resp_model = chat_resp.model.unwrap_or_else(|| model.to_owned());
     let usage = chat_resp.usage.unwrap_or_default();
     let content = chat_resp
@@ -604,4 +636,109 @@ fn parse_batch_response(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn mixed_folder_results_keep_metadata_per_file() {
+        let files = vec![
+            BatchFileInput {
+                filename: "01 - One.mp3".into(),
+                raw: RawMetadata::default(),
+                hints: PathHints::default(),
+            },
+            BatchFileInput {
+                filename: "02 - Two.mp3".into(),
+                raw: RawMetadata::default(),
+                hints: PathHints::default(),
+            },
+        ];
+        let response = r#"{"results":[
+            {"filename":"02 - Two.mp3","artist":"Artist B","album":"Album B","year":2020},
+            {"filename":"01 - One.mp3","artist":"Artist A","album":"Album A","year":2002}
+        ]}"#;
+        let results: std::collections::HashMap<_, _> = parse_batch_response(response, &files)
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(results["01 - One.mp3"].artist.as_deref(), Some("Artist A"));
+        assert_eq!(results["01 - One.mp3"].album.as_deref(), Some("Album A"));
+        assert_eq!(results["01 - One.mp3"].year, Some(2002));
+        assert_eq!(results["02 - Two.mp3"].artist.as_deref(), Some("Artist B"));
+        assert_eq!(results["02 - Two.mp3"].album.as_deref(), Some("Album B"));
+        assert_eq!(results["02 - Two.mp3"].year, Some(2020));
+    }
+
+    #[tokio::test]
+    async fn chat_request_disables_thinking_on_the_wire() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 4096];
+                let payload = loop {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert!(count > 0, "client closed before sending the request");
+                    request.extend_from_slice(&buffer[..count]);
+                    let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                    assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1"));
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if request.len() >= header_end + 4 + length {
+                        break serde_json::from_slice::<serde_json::Value>(
+                            &request[header_end + 4..header_end + 4 + length],
+                        )
+                        .unwrap();
+                    }
+                };
+                let response = serde_json::json!({
+                    "model": "local-model",
+                    "choices": [{"message": {"content": "{\"results\":[]}"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+                })
+                .to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                            response.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                payload
+            });
+            let (content, model, usage) = call_llm_chat(&url, "local-model", &[], None)
+                .await
+                .unwrap();
+            let payload = server.await.unwrap();
+            assert_eq!(payload["reasoning_effort"], "none");
+            assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], false);
+            assert_eq!(payload["response_format"]["type"], "json_object");
+            assert_eq!(content, "{\"results\":[]}");
+            assert_eq!(model, "local-model");
+            assert_eq!(usage.completion_tokens, Some(5));
+        })
+        .await
+        .expect("mock LLM request should finish within five seconds");
+    }
 }

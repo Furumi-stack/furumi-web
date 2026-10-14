@@ -28,13 +28,23 @@ pub fn parse(relative_path: &Path) -> PathHints {
     parse_filename(stem, &mut hints);
 
     match components.len() {
-        // Artist/Album/file.ext
+        // Artist/.../Album/file.ext: use the nearest release folder rather
+        // than an organizational directory such as "Альбомы и синглы".
         3.. => {
-            hints.artist = Some(components[0].to_owned());
-
-            let album_raw = components[1];
+            let mut album_index = components.len() - 2;
+            if album_index > 0 && is_disc_folder(components[album_index]) {
+                album_index -= 1;
+            }
+            hints.artist = components[..album_index]
+                .iter()
+                .rev()
+                .find(|name| !is_organizational_folder(name))
+                .map(|name| (*name).to_owned());
+            let album_raw = components[album_index];
             let (album, year) = parse_album_with_year(album_raw);
-            hints.album = Some(album);
+            if !is_organizational_folder(&album) {
+                hints.album = Some(album);
+            }
             if year.is_some() {
                 hints.year = year;
             }
@@ -43,7 +53,9 @@ pub fn parse(relative_path: &Path) -> PathHints {
         2 => {
             let dir = components[0];
             let (name, year) = parse_album_with_year(dir);
-            hints.album = Some(name);
+            if !is_organizational_folder(&name) {
+                hints.album = Some(name);
+            }
             if year.is_some() {
                 hints.year = year;
             }
@@ -53,6 +65,34 @@ pub fn parse(relative_path: &Path) -> PathHints {
     }
 
     hints
+}
+
+fn is_organizational_folder(name: &str) -> bool {
+    matches!(
+        name.trim().to_lowercase().as_str(),
+        "music"
+            | "downloads"
+            | "albums"
+            | "singles"
+            | "albums and singles"
+            | "mixed"
+            | "mix"
+            | "музыка"
+            | "загрузки"
+            | "альбомы"
+            | "синглы"
+            | "альбомы и синглы"
+            | "разное"
+    )
+}
+
+fn is_disc_folder(name: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    ["cd", "disc", "disk", "диск"].iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .and_then(|number| number.trim().parse::<u32>().ok())
+            .is_some_and(|number| number > 0)
+    })
 }
 
 /// Try to extract track number and title from a filename stem.
@@ -106,6 +146,14 @@ fn try_strip_track_prefix(s: &str) -> Option<(&str, &str)> {
 ///
 /// Patterns: "Album (2001)", "(2001) Album", "Album [2001]", "Album"
 fn parse_album_with_year(dir: &str) -> (String, Option<i32>) {
+    // Common discography folders: "2002 - Album".
+    if let Some((prefix, album)) = dir.split_once(" - ")
+        && let Ok(year) = prefix.trim().parse::<i32>()
+        && (1900..=2100).contains(&year)
+        && !album.trim().is_empty()
+    {
+        return (album.trim().to_owned(), Some(year));
+    }
     // Try "Album (YYYY)" or "Album [YYYY]"
     for (open, close) in [('(', ')'), ('[', ']')] {
         if let Some(start) = dir.rfind(open) {
@@ -190,5 +238,40 @@ mod tests {
         let h = parse(&p);
         assert_eq!(h.album.as_deref(), Some("Album"));
         assert_eq!(h.year, Some(1999));
+    }
+
+    #[test]
+    fn nested_discography_uses_the_release_folder() {
+        let h = parse(Path::new(
+            "Diskoteka_Avariya-Diskografia/Альбомы и синглы/2002 - Х.Х.Х.И.Р.Н.Р/08 - Где же ваши руки.mp3",
+        ));
+        assert_eq!(h.artist.as_deref(), Some("Diskoteka_Avariya-Diskografia"));
+        assert_eq!(h.album.as_deref(), Some("Х.Х.Х.И.Р.Н.Р"));
+        assert_eq!(h.year, Some(2002));
+        assert_eq!(h.track_number, Some(8));
+    }
+
+    #[test]
+    fn mixed_folder_does_not_supply_an_album() {
+        let h = parse(Path::new("Mix/Track.mp3"));
+        assert_eq!(h.artist, None);
+        assert_eq!(h.album, None);
+        assert_eq!(h.title.as_deref(), Some("Track"));
+    }
+
+    #[test]
+    fn collection_root_does_not_replace_the_artist() {
+        let h = parse(Path::new("Music/Artist/2020 - Album/01 - Song.flac"));
+        assert_eq!(h.artist.as_deref(), Some("Artist"));
+        assert_eq!(h.album.as_deref(), Some("Album"));
+        assert_eq!(h.year, Some(2020));
+    }
+
+    #[test]
+    fn disc_subfolder_keeps_the_album_and_artist() {
+        let h = parse(Path::new("Artist/2002 - Album/CD 1/01 - Song.flac"));
+        assert_eq!(h.artist.as_deref(), Some("Artist"));
+        assert_eq!(h.album.as_deref(), Some("Album"));
+        assert_eq!(h.year, Some(2002));
     }
 }

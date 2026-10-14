@@ -4644,6 +4644,8 @@ document.addEventListener('alpine:init', () => {
         youtubeCancellingIds: new Set(),
         file: null,
         localFiles: [],
+        localFilesBatchId: null,
+        localFileUploadIds: new WeakMap(),
         localFilesDragging: false,
         localFilesUploading: false,
         localUploadHistory: [],
@@ -5971,12 +5973,15 @@ document.addEventListener('alpine:init', () => {
         },
 
         setLocalFiles(files) {
+            if (this.localFilesUploading) return;
             const supported = new Set(['mp3', 'flac', 'wav', 'm4a', 'ogg', 'opus', 'aac']);
             const selected = Array.from(files || []).filter(file => {
                 const extension = String(file.name || '').split('.').pop().toLowerCase();
                 return String(file.type || '').startsWith('audio/') || supported.has(extension);
             });
             this.localFiles = selected;
+            this.localFilesBatchId = selected.length ? crypto.randomUUID() : null;
+            this.localFileUploadIds = new WeakMap();
             this.localFilesDragging = false;
             this.uploadProgress = 0;
             this.uploadProgressText = '';
@@ -5990,6 +5995,8 @@ document.addEventListener('alpine:init', () => {
         clearLocalFiles() {
             if (this.localFilesUploading) return;
             this.localFiles = [];
+            this.localFilesBatchId = null;
+            this.localFileUploadIds = new WeakMap();
             this.uploadProgress = 0;
             this.uploadProgressText = '';
         },
@@ -6019,7 +6026,16 @@ document.addEventListener('alpine:init', () => {
                 xhr.open('POST', '/api/player/uploads/local');
                 xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
                 xhr.setRequestHeader('X-Furumusic-Filename', encodeURIComponent(file.name || 'upload.mp3'));
-                xhr.setRequestHeader('X-Furumusic-Upload-Id', crypto.randomUUID());
+                let uploadId = this.localFileUploadIds.get(file);
+                if (!uploadId) {
+                    uploadId = crypto.randomUUID();
+                    this.localFileUploadIds.set(file, uploadId);
+                }
+                xhr.setRequestHeader('X-Furumusic-Upload-Id', uploadId);
+                xhr.setRequestHeader('X-Furumusic-Upload-Batch-Id', this.localFilesBatchId);
+                if (file.webkitRelativePath) {
+                    xhr.setRequestHeader('X-Furumusic-Relative-Path', encodeURIComponent(file.webkitRelativePath));
+                }
                 xhr.upload.onprogress = event => {
                     if (!event.lengthComputable || totalBytes <= 0) return;
                     const loaded = loadedBefore + event.loaded;
@@ -6040,6 +6056,7 @@ document.addEventListener('alpine:init', () => {
 
         async uploadLocalFiles() {
             if (this.localFilesUploading || this.localFiles.length === 0) return;
+            const batchId = this.localFilesBatchId;
             this.localFilesUploading = true;
             this.uploadProgress = 0;
             this.uploadProgressText = '0.0%';
@@ -6056,18 +6073,33 @@ document.addEventListener('alpine:init', () => {
                         ];
                     }
                     loadedBefore += Number(file.size || 0);
+                    this.localFileUploadIds.delete(file);
                     this.localFiles = this.localFiles.filter(item => item !== file);
                     this.uploadProgress = totalBytes > 0 ? Math.min(100, loadedBefore / totalBytes * 100) : 100;
                     this.uploadProgressText = this.uploadProgress.toFixed(1) + '%';
                 }
                 this.uploadProgress = 100;
+                this.localFilesBatchId = null;
                 this.uploadProgressText = '100.0%';
                 this._setMessage(T.uploadComplete);
-                await this.loadAgentStatus();
-                await this.loadLocalUploadHistory({ silent: true });
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
+                try {
+                    const response = await fetch('/api/player/uploads/local', {
+                        method: 'POST',
+                        headers: {
+                            'X-Furumusic-Upload-Batch-Id': batchId,
+                            'X-Furumusic-Upload-Complete': 'true',
+                        },
+                    });
+                    redirectOnUnauthorized(response.status);
+                    if (!response.ok) throw new Error(T.uploadFailed);
+                    await this.loadAgentStatus();
+                    await this.loadLocalUploadHistory({ silent: true });
+                } catch (err) {
+                    this._setMessage(err.message || T.uploadFailed, true);
+                }
                 this.localFilesUploading = false;
             }
         },

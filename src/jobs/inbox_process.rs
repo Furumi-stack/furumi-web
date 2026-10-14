@@ -7,6 +7,9 @@ use cot::db::{Database, Model};
 
 /// Guard to prevent multiple inbox_process orchestrators from running simultaneously.
 static ORCHESTRATOR_RUNNING: AtomicBool = AtomicBool::new(false);
+// Bound approvals waiting on database import locks so active imports retain
+// spare pool connections for candidate queries and upgrade transactions.
+static IMPORT_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 /// Well-known advisory lock ID for the inbox_process orchestrator.
 /// PostgreSQL advisory locks use a 64-bit key; this is an arbitrary unique value.
@@ -387,7 +390,7 @@ async fn process_folder_batch(
             .to_owned();
         let file_exists = file_path.exists();
         if !sha.is_empty()
-            && crate::agent::rag::file_hash_exists(pool, &sha)
+            && crate::agent::rag::file_hash_exists_verified(pool, &sha, &config.agent_storage_dir)
                 .await
                 .unwrap_or(false)
         {
@@ -642,7 +645,9 @@ async fn process_folder_batch(
         folder_files.sort();
         let track_count = folder_files.len();
         FolderContext {
-            folder_path: folder_rel.to_owned(),
+            folder_path: crate::jobs::strip_user_upload_prefix(Path::new(folder_rel))
+                .to_string_lossy()
+                .into_owned(),
             folder_files,
             track_count,
         }
@@ -696,7 +701,7 @@ async fn process_folder_batch(
         Err(e) => {
             crate::metrics::record_agent_failed("llm");
             crate::metrics::record_agent_folder_batch("failed", file_count, batch_start.elapsed());
-            let err_msg = format!("Batch LLM call failed: {e}");
+            let err_msg = format!("Batch LLM call failed: {e:#}");
             log.error(&err_msg);
             // Mark all files as failed
             let prepared_count = prepared.len() as u64;
@@ -810,6 +815,30 @@ async fn process_folder_batch(
                     crate::metrics::record_agent_file_processed("ok", "auto_approved");
                     ok_count += 1;
                 }
+                Err(e)
+                    if e.downcast_ref::<crate::agent::dedup::DuplicateReview>()
+                        .is_some() =>
+                {
+                    let message = e.to_string();
+                    p.review.status = cot::db::LimitedString::new("pending").unwrap();
+                    p.review.error_message = Some(message.clone());
+                    p.review.updated_at = cot::db::LimitedString::new(
+                        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                    )
+                    .unwrap();
+                    if let Some(result) = p.review.result_json.as_deref()
+                        && let Ok(mut result) = serde_json::from_str::<serde_json::Value>(result)
+                    {
+                        let previous = result["notes"].as_str().unwrap_or_default();
+                        result["notes"] =
+                            serde_json::json!(format!("{previous}\n{message}").trim());
+                        p.review.result_json = Some(result.to_string());
+                    }
+                    let _ = p.review.save(db).await;
+                    crate::metrics::record_agent_file_processed("ok", "pending_review");
+                    log.warn(&format!("{filename}: {message}"));
+                    ok_count += 1;
+                }
                 Err(e) => {
                     crate::metrics::record_agent_failed("finalize");
                     crate::metrics::record_agent_file_processed("failed", "failed");
@@ -869,8 +898,54 @@ pub async fn finalize_approved(
     let year = normalized.year;
     let track_number = normalized.track_number;
 
+    // Serialize imports of a recording across orchestrators and manual approvals.
+    // This transaction owns only the advisory lock; the existing Cot writes use
+    // their normal connections and remain protected until finalization returns.
+    let _import_permit = IMPORT_PERMITS.acquire().await?;
+    let mut import_lock = pool.begin().await?;
+    let mut import_artists: Vec<_> = normalized
+        .featured_artists
+        .iter()
+        .map(|name| name.trim().to_lowercase())
+        .collect();
+    import_artists.push(artist_name.trim().to_lowercase());
+    import_artists.sort();
+    import_artists.dedup();
+    for name in import_artists {
+        let lock_key = serde_json::to_string(&(
+            "furumi-recording-import",
+            name,
+            track_title.trim().to_lowercase(),
+        ))?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(lock_key)
+            .execute(&mut *import_lock)
+            .await?;
+    }
+    if crate::agent::dedup::merge_existing(
+        pool,
+        storage_dir_str,
+        Path::new(input_path_str),
+        normalized,
+        context,
+    )
+    .await?
+    {
+        import_lock.commit().await?;
+        return Ok(());
+    }
+
     let artist = find_or_create_artist(db, artist_name, model_name).await?;
-    let release = find_or_create_release(db, release_title, release_type, year, model_name).await?;
+    let release = find_or_create_release(
+        db,
+        pool,
+        artist.id_val(),
+        release_title,
+        release_type,
+        year,
+        model_name,
+    )
+    .await?;
 
     // Link ReleaseArtist
     let existing_links = ReleaseArtist::find_by_release(db, release.id_val())
@@ -1215,6 +1290,7 @@ pub async fn finalize_approved(
         "Track finalized"
     );
 
+    import_lock.commit().await?;
     Ok(())
 }
 
@@ -1241,17 +1317,31 @@ async fn find_or_create_artist(
 
 async fn find_or_create_release(
     db: &cot::db::Database,
+    pool: &sqlx::PgPool,
+    artist_id: i64,
     title: &str,
     release_type: &str,
     year: Option<i32>,
     model_name: Option<&str>,
 ) -> anyhow::Result<Release> {
     let title_sort = title.trim().to_lowercase();
-    let all = Release::list_all(db).await.unwrap_or_default();
-    for r in &all {
-        if r.title_sort.as_str() == title_sort && r.release_type.as_str() == release_type {
-            return Ok(r.clone());
-        }
+    // Release type describes an album; it is not a separate identity key.
+    let existing_id: Option<i64> = sqlx::query_scalar(
+        r#"SELECT r.id FROM furumusic__release r
+           JOIN furumusic__release_artist ra ON ra.release_id=r.id
+           WHERE ra.artist_id=$1 AND r.title_sort=$2
+             AND ($3::integer IS NULL OR r.year IS NULL OR r.year=$3)
+           ORDER BY r.id LIMIT 1"#,
+    )
+    .bind(artist_id)
+    .bind(title_sort)
+    .bind(year)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(id) = existing_id
+        && let Some(release) = Release::get_by_id(db, id).await?
+    {
+        return Ok(release);
     }
     Release::create(db, title, release_type, year, model_name)
         .await
