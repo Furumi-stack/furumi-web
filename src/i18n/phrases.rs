@@ -194,6 +194,8 @@ translations! {
     jobs_back_to_list:        "Back to jobs"                     , "Назад к заданиям";
     jobs_run_detail:          "Run detail"                       , "Детали запуска";
     jobs_back_to_job:         "Back to job"                      , "Назад к заданию";
+    jobs_lastfm_light_help: "Light mode checks only unchecked tracks, changed titles or artists, and failed lookups. Previous matches and confirmed misses are skipped." , "Лайт-режим проверяет только непроверенные треки, изменённые названия или исполнителей и ошибки прошлых запросов. Найденные и подтверждённо отсутствующие треки пропускаются.";
+    jobs_lastfm_full: "Full refresh: check all visible tracks, including previous matches and misses" , "Полное обновление: проверить все видимые треки, включая ранее найденные и отсутствующие";
     jobs_metadata_backfill_options: "Metadata backfill options"   , "Параметры обновления метадаты";
     jobs_metadata_backfill_fields: "Fields to update"             , "Поля для обновления";
     jobs_metadata_backfill_fill_missing: "Fill missing only"      , "Заполнить только пустые";

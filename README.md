@@ -131,6 +131,22 @@ The browser interface and JSON API are served by the same application. Import,
 artwork, metadata enrichment, similarity indexing, and maintenance run as
 durable background jobs rather than blocking playback requests.
 
+The `lastfm_popularity` job defaults to **light** mode: it requests popularity
+only for tracks without a completed lookup or with a changed title or primary
+artist. Both matches (including zero counts) and explicit Last.fm “Track not
+found” results are skipped on subsequent light runs. HTTP errors, timeouts,
+invalid responses, and other API errors remain eligible for retry. A failed
+full refresh also makes that track eligible for the next light run.
+
+Choose **Full: refresh all visible tracks** in the task's admin parameters to
+refresh existing statistics and retry previous misses. The options endpoint
+`POST /admin/v2/api/jobs/lastfm_popularity/run-options` accepts
+`{"refresh_existing": true}`; an empty object, scheduled runs, and the ordinary
+run endpoint use light mode. Neither mode limits the number of tracks processed.
+An authoritative miss clears current statistics while preserving their history.
+The migration preserves existing popularity; legacy misses need one more lookup
+because older versions did not persist them.
+
 ## Contributing
 
 Bug reports, design discussions, and patches are welcome. Before submitting a
@@ -140,4 +156,11 @@ change, run:
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
+```
+
+Last.fm database tests use temporary tables on a disposable PostgreSQL database:
+
+```bash
+FURUMUSIC_LASTFM_TEST_DATABASE_URL=postgres://user:pass@localhost/test_db \
+  cargo test lastfm_popularity -- --include-ignored
 ```

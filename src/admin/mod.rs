@@ -389,6 +389,32 @@ impl App for AdminApp {
                 "admin_v2_artwork_backfill_run_options",
             ),
             Route::with_handler_and_name(
+                "/v2/api/jobs/lastfm_popularity/run-options",
+                cot::router::method::post({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |session: Session,
+                          db: Database,
+                          json: Json<v2::LastfmPopularityRunRequest>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                        .expect("admin pool")
+                                })
+                                .await;
+                            v2::run_lastfm_popularity(session, db, pg_pool, json).await
+                        }
+                    }
+                }),
+                "admin_v2_lastfm_popularity_run_options",
+            ),
+            Route::with_handler_and_name(
                 "/v2/api/jobs/{name}/run",
                 cot::router::method::post({
                     let handle = Arc::clone(&self.scheduler_handle);
@@ -1238,6 +1264,33 @@ impl App for AdminApp {
                 "admin_metadata_backfill_run",
             ),
             Route::with_handler_and_name(
+                "/jobs/lastfm_popularity/run-options",
+                cot::router::method::post({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |session: Session, db: Database,
+                          form: RequestForm<views::LastfmPopularityForm>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let admin = match auth::require_admin_or_redirect(&session, &db).await {
+                                Ok(u) => u,
+                                Err(resp) => return Ok(resp),
+                            };
+                            let pg_pool = pool.get_or_init(|| async {
+                                sqlx::postgres::PgPoolOptions::new()
+                                    .max_connections(3)
+                                    .connect(&pool_config.database_url)
+                                    .await
+                                    .expect("admin pool")
+                            }).await;
+                            views::lastfm_popularity_run(admin, &db, pg_pool, form).await
+                        }
+                    }
+                }),
+                "admin_lastfm_popularity_run",
+            ),
+            Route::with_handler_and_name(
                 "/jobs/{name}/run",
                 cot::router::method::post({
                     let handle = Arc::clone(&self.scheduler_handle);
@@ -1489,4 +1542,47 @@ impl App for AdminApp {
         ));
         all
     }
+}
+
+/// Start an options-based run for both admin interfaces. Ordinary scheduler
+/// entry points continue to call Job::run with light-mode defaults.
+async fn start_lastfm_popularity(
+    db: &Database,
+    pool: &sqlx::PgPool,
+    options: crate::jobs::lastfm_popularity::LastfmPopularityOptions,
+) -> cot::Result<i64> {
+    use crate::scheduler::{JobContext, JobLog, JobRun};
+
+    let mut run = JobRun::create_running(db, "lastfm_popularity", "manual")
+        .await
+        .map_err(|err| cot::Error::internal(format!("failed to create job run: {err}")))?;
+    let run_id = run.id_val();
+    let (live_config, _) = AppConfig::load_with_db(db).await;
+    let db = db.clone();
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let start = std::time::Instant::now();
+        let ctx = JobContext {
+            config: Arc::new(live_config),
+            db: db.clone(),
+            pool: pool.clone(),
+            run_id,
+            registry: Arc::new(JobRegistry::new()),
+        };
+        let mut log = JobLog::with_live_flush(pool, run_id);
+        let result =
+            crate::jobs::lastfm_popularity::run_with_options(&ctx, &mut log, options).await;
+        let duration_ms = start.elapsed().as_millis() as i64;
+        match result {
+            Ok(()) => {
+                let _ = run.set_completed(&db, duration_ms, &log.output()).await;
+            }
+            Err(err) => {
+                let _ = run
+                    .set_failed(&db, duration_ms, &log.output(), &err.to_string())
+                    .await;
+            }
+        }
+    });
+    Ok(run_id)
 }

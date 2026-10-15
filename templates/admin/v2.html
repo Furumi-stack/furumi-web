@@ -2292,13 +2292,20 @@ tbody tr:hover {
                                 <label><input type="radio" value="overwrite" x-model="artworkBackfillOptions.mode" /> Search all and replace existing</label>
                             </div>
                         </div>
+                        <div class="metadata-backfill-options" x-show="isLastfmPopularityJob(activeJob)">
+                            <div class="mode-row">
+                                <label><input type="radio" value="light" x-model="lastfmPopularityOptions.mode" /> Light: unchecked tracks only</label>
+                                <label><input type="radio" value="full" x-model="lastfmPopularityOptions.mode" /> Full: refresh all visible tracks</label>
+                            </div>
+                            <p class="job-param-note">Light mode skips previous matches and tracks confirmed missing. Changed titles or artists and failed lookups are checked again. Full mode also retries previous matches and misses.</p>
+                        </div>
                         <div class="job-param-note" x-show="activeJob && !jobHasParameterForm(activeJob)">
                             This task has no manual parameters.
                         </div>
                         <div class="toolbar" style="margin-bottom:12px">
                             <button class="btn primary" type="button" @click="runJob(activeJob)">
                                 <i data-lucide="play"></i>
-                                <span x-text="isMetadataBackfillJob(activeJob) ? 'Run with options' : 'Run now'"></span>
+                                <span x-text="jobHasParameterForm(activeJob) ? 'Run with options' : 'Run now'"></span>
                             </button>
                             <button class="btn" type="button" @click="toggleJob(activeJob)">
                                 <i data-lucide="power"></i>
@@ -3811,6 +3818,7 @@ function adminV2() {
             musicbrainz_tags: true,
             mode: 'fill_missing'
         },
+        lastfmPopularityOptions: { mode: 'light' },
         artworkBackfillOptions: {
             mode: 'missing'
         },
@@ -4624,6 +4632,11 @@ function adminV2() {
                         method: 'POST',
                         body: JSON.stringify(this.artworkBackfillPayload())
                     })
+                    : this.isLastfmPopularityJob(job)
+                    ? await this.request(`${this.apiBase}/jobs/lastfm_popularity/run-options`, {
+                        method: 'POST',
+                        body: JSON.stringify({ refresh_existing: this.lastfmPopularityOptions.mode === 'full' })
+                    })
                     : await this.request(`${this.apiBase}/jobs/${encodeURIComponent(job.name)}/run`, { method: 'POST' });
                 this.showToast(`Run #${result.run_id} started`);
                 this.activeJobName = job.name;
@@ -4647,8 +4660,12 @@ function adminV2() {
             return job && job.name === 'artwork_backfill';
         },
 
+        isLastfmPopularityJob(job) {
+            return job && job.name === 'lastfm_popularity';
+        },
+
         jobHasParameterForm(job) {
-            return this.isMetadataBackfillJob(job) || this.isArtworkBackfillJob(job);
+            return this.isMetadataBackfillJob(job) || this.isArtworkBackfillJob(job) || this.isLastfmPopularityJob(job);
         },
 
         metadataBackfillPayload() {

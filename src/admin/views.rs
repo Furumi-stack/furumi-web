@@ -1453,6 +1453,30 @@ pub async fn job_run_now(
     Ok(auth::redirect(&format!("/admin/jobs/{job_name}")))
 }
 
+#[derive(Debug, Form)]
+pub struct LastfmPopularityForm {
+    refresh_existing: Option<String>,
+}
+
+pub async fn lastfm_popularity_run(
+    _admin: AuthenticatedUser,
+    db: &Database,
+    pool: &sqlx::PgPool,
+    form: RequestForm<LastfmPopularityForm>,
+) -> cot::Result<cot::http::Response<Body>> {
+    let RequestForm(result) = form;
+    let FormResult::Ok(data) = result else {
+        return Ok(auth::redirect("/admin/jobs/lastfm_popularity"));
+    };
+    let options = crate::jobs::lastfm_popularity::LastfmPopularityOptions {
+        refresh_existing: data.refresh_existing.is_some(),
+    };
+    let run_id = super::start_lastfm_popularity(db, pool, options).await?;
+    Ok(auth::redirect(&format!(
+        "/admin/jobs/lastfm_popularity/runs/{run_id}"
+    )))
+}
+
 pub async fn metadata_backfill_run(
     _admin: AuthenticatedUser,
     db: &Database,

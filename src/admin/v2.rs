@@ -110,6 +110,8 @@ pub struct ArtworkBackfillRunRequest {
     overwrite_existing: bool,
 }
 
+pub type LastfmPopularityRunRequest = crate::jobs::lastfm_popularity::LastfmPopularityOptions;
+
 #[derive(Debug, Deserialize)]
 pub(super) struct UpdateLibraryItemRequest {
     kind: String,
@@ -1731,6 +1733,19 @@ pub async fn run_metadata_backfill(
         }
     });
 
+    Json(JobRunStartedDto { ok: true, run_id }).into_response()
+}
+
+pub async fn run_lastfm_popularity(
+    session: Session,
+    db: Database,
+    pool: &PgPool,
+    Json(options): Json<LastfmPopularityRunRequest>,
+) -> cot::Result<cot::response::Response> {
+    if let Err(response) = require_admin_json(&session, &db).await {
+        return Ok(response);
+    }
+    let run_id = super::start_lastfm_popularity(&db, pool, options).await?;
     Json(JobRunStartedDto { ok: true, run_id }).into_response()
 }
 

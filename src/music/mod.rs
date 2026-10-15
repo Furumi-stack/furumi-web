@@ -2823,6 +2823,35 @@ pub mod db_migrations {
             &[Operation::custom(add_playback_coordination_columns).build()];
     }
 
+    // -- M0049: persist Last.fm lookup results and their metadata identity --
+
+    #[cot::db::migrations::migration_op]
+    async fn add_lastfm_lookup_state(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        // Cot prepares raw queries, so execute these static DDL statements
+        // separately rather than sending a multi-statement prepared query.
+        for statement in include_str!("lastfm_popularity_lookup.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0049AddLastfmLookupState;
+
+    impl migrations::Migration for M0049AddLastfmLookupState {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0049_add_lastfm_lookup_state";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0048_add_playback_coordination_columns",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(add_lastfm_lookup_state).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2862,5 +2891,6 @@ pub mod db_migrations {
         &M0046CreateLocalUploadHistory,
         &M0047CreateYouTubeImportMediaLinks,
         &M0048AddPlaybackCoordinationColumns,
+        &M0049AddLastfmLookupState,
     ];
 }
