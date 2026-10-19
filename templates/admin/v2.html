@@ -3921,6 +3921,8 @@ function adminV2() {
         repairTrackOffset: 0,
         repairTrackTotal: 0,
         repairPendingInstruction: '',
+        repairReference: '',
+        repairExpandedReference: '',
         repairHistory: [],
         settings: { values: {}, sources: {}, youtube_cookie_files: [], lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
         settingsDraft: {
@@ -4171,6 +4173,8 @@ function adminV2() {
             this.repairIncomplete = false;
             this.repairTrackOffset = 0;
             this.repairPendingInstruction = '';
+            this.repairReference = '';
+            this.repairExpandedReference = '';
             this.repairSearch = '';
             this.repairSearchResults = [];
         },
@@ -4186,6 +4190,8 @@ function adminV2() {
             this.repairTrackOffset = 0;
             this.repairTrackTotal = 0;
             this.repairPendingInstruction = '';
+            this.repairReference = '';
+            this.repairExpandedReference = '';
         },
         repairSelection(expanded = false) {
             const selection = {artists:[],releases:[],tracks:[]};
@@ -4215,6 +4221,8 @@ function adminV2() {
             this.repairIncomplete = false;
             this.repairTrackOffset = 0;
             this.repairPendingInstruction = '';
+            this.repairReference = '';
+            this.repairExpandedReference = '';
         },
         async expandRepair() {
             if (this.repairSelected.length === 0) return;
@@ -4222,8 +4230,9 @@ function adminV2() {
             this.repairStage = 'expanding';
             try {
                 this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {
-                    method:'POST',body:JSON.stringify({selection:this.repairSelection(false)})
+                    method:'POST',body:JSON.stringify({selection:this.repairSelection(false),reference:this.repairReference || null})
                 });
+                this.repairExpandedReference = this.repairReference;
                 this.repairPlan = null;
                 this.repairSnapshot = null;
                 this.repairIncluded = {};
@@ -4272,7 +4281,12 @@ function adminV2() {
         async sendRepair() {
             const instruction = this.repairDraft.trim();
             if (!instruction || this.repairBusy || !this.repairIncludedCount()) return;
+            if (!this.repairReference) {
+                const source = this.repairChat.find(turn => turn.role === 'user' && turn.content.includes('### ') && /^\s*\d+\.\s+\S/m.test(turn.content));
+                if (source) this.repairReference = source.content;
+            }
             const resuming = this.repairIncomplete && this.repairPendingInstruction === instruction;
+            if (instruction.includes('### ') && /^\s*\d+\.\s+\S/m.test(instruction)) this.repairReference = instruction;
             if (!resuming) {
                 this.repairTrackOffset = 0;
                 this.repairTrackTotal = 0;
@@ -4286,12 +4300,12 @@ function adminV2() {
             const previous = this.repairChat.slice(-6);
             if (!resuming) this.repairChat.push({role:'user',content:instruction});
             try {
-                if (!this.repairExpanded) {
-                    this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(false)})});
-                    this.repairIncluded = {};
+                if (!this.repairExpanded || this.repairExpandedReference !== this.repairReference) {
+                    this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(false),reference:this.repairReference || null})});
+                    this.repairExpandedReference = this.repairReference;
                 }
                 while (true) {
-                    const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null,track_offset:this.repairTrackOffset})});
+                    const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,reference:this.repairReference || null,primary_artist_ids:this.repairSelected.filter(item => item.kind === 'artists').map(item => item.id),conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null,track_offset:this.repairTrackOffset})});
                     this.repairPlan = result.plan;
                     this.repairSnapshot = result.snapshot;
                     this.repairTrackTotal = result.total_tracks;
