@@ -5,3 +5,4 @@
 /federation
 /similarity-models
 /federation-cache
+*.DS_Store
