@@ -4,6 +4,11 @@ version = "0.11.1"
 edition = "2024"
 description = "Reusable web-app boilerplate: auth, OIDC/SSO, admin panel, user management, i18n, PostgreSQL"
 
+# macOS 27 rejects some stripped proc-macro dylibs with a misaligned LINKEDIT
+# string pool. Build scripts and proc macros are compile-time artifacts only.
+[profile.release.build-override]
+strip = false
+
 [dependencies]
 # default-features off: cot's defaults include the sqlite backend, whose old
 # libsqlite3-sys collides with music-dht's rusqlite (one native sqlite3 per
