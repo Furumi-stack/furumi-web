@@ -2565,8 +2565,8 @@ tbody tr:hover {
                     <section class="panel">
                         <div class="panel-head"><div class="panel-title"><strong>Metadata Repair</strong><span>Select problematic entities</span></div></div>
                         <div class="repair-scroll">
-                            <div class="toolbar"><select class="search" x-model="repairSearchKind"><option value="artists">Artists</option><option value="releases">Releases</option><option value="tracks">Tracks</option></select></div>
-                            <input class="search" style="width:100%;margin-top:8px" placeholder="Search library…" x-model="repairSearch" @input.debounce.300ms="searchRepair()" />
+                            <div class="toolbar"><select class="search" x-model="repairSearchKind" :disabled="repairBusy"><option value="artists">Artists</option><option value="releases">Releases</option><option value="tracks">Tracks</option></select></div>
+                            <input class="search" style="width:100%;margin-top:8px" placeholder="Search library…" x-model="repairSearch" @input.debounce.300ms="searchRepair()" :disabled="repairBusy" />
                             <div class="repair-search-results" x-show="repairSearchResults.length">
                                 <template x-for="item in repairSearchResults" :key="item.kind + ':' + item.id"><button type="button" @click="addRepairEntity(item)" x-text="item.title + (item.subtitle ? ' · ' + item.subtitle : '')"></button></template>
                             </div>
@@ -2576,7 +2576,7 @@ tbody tr:hover {
                                 <div x-show="repairRows(kind).length">
                                     <div class="repair-group" x-text="kind"></div>
                                     <template x-for="item in repairRows(kind)" :key="kind + item.id">
-                                        <label class="repair-entity"><input type="checkbox" :checked="repairIncluded[kind + ':' + item.id] !== false" @change="setRepairIncluded(kind,item.id,$event.target.checked)" /><span x-text="(item.name || item.title) + ' #' + item.id"></span></label>
+                                        <label class="repair-entity"><input type="checkbox" :checked="repairIncluded[kind + ':' + item.id] !== false" @change="setRepairIncluded(kind,item.id,$event.target.checked)" :disabled="repairBusy" /><span x-text="(item.name || item.title) + ' #' + item.id"></span></label>
                                     </template>
                                 </div>
                             </template>
@@ -2588,8 +2588,8 @@ tbody tr:hover {
                 </aside>
                 <div class="repair-work">
                     <section class="panel repair-plan">
-                        <div class="panel-head"><div class="panel-title"><strong>Proposed changes</strong><span x-text="repairPlan ? 'Review and edit before applying' : 'The agent’s plan will appear here'"></span></div><div class="toolbar"><span class="selection-summary" x-show="repairPlan" x-text="repairChangeCount() + ' changes'"></span><button class="btn primary" x-show="repairPlan" @click="applyRepair()" :disabled="repairBusy || !repairChangeCount()">Apply plan</button></div></div>
-                        <div class="repair-scroll">
+                        <div class="panel-head"><div class="panel-title"><strong>Proposed changes</strong><span x-text="repairIncomplete ? (repairBusy ? 'Processing tracks: ' : 'Paused at track: ') + repairTrackOffset + ' / ' + repairTrackTotal : (repairPlan ? 'Review and edit before applying' : 'The agent’s plan will appear here')"></span></div><div class="toolbar"><span class="selection-summary" x-show="repairPlan" x-text="repairChangeCount() + ' changes'"></span><button class="btn primary" x-show="repairPlan" @click="applyRepair()" :disabled="repairBusy || repairIncomplete || !repairChangeCount()">Apply plan</button></div></div>
+                        <div class="repair-scroll" :style="repairBusy ? 'pointer-events:none' : ''">
                             <div class="repair-thinking" x-show="repairBusy && repairStage === 'thinking'">Agent is reviewing the selected metadata…</div>
                             <div class="empty" x-show="!repairPlan && !(repairBusy && repairStage === 'thinking')">Select entities and describe the correction in the chat below.</div>
                             <template x-if="repairPlan"><div>
@@ -2606,7 +2606,7 @@ tbody tr:hover {
                             </div></template>
                         </div>
                     </section>
-                    <section class="panel repair-chat"><div class="repair-scroll" style="display:flex;flex-direction:column;gap:7px" x-ref="repairChat"><template x-for="(turn,index) in repairChat" :key="index"><div class="repair-message" :class="turn.role" x-text="turn.content"></div></template><div class="muted" x-show="repairChat.length === 0">Describe what should change. The agent will respond in your language.</div></div><form class="repair-composer" @submit.prevent="sendRepair()"><textarea rows="2" placeholder="Describe the metadata problem…" x-model="repairDraft" @keydown.ctrl.enter.prevent="sendRepair()"></textarea><button class="btn primary" type="submit" :disabled="repairBusy || !repairDraft.trim() || !repairIncludedCount()">Send</button></form></section>
+                    <section class="panel repair-chat"><div class="repair-scroll" style="display:flex;flex-direction:column;gap:7px" x-ref="repairChat"><template x-for="(turn,index) in repairChat" :key="index"><div class="repair-message" :class="turn.role" x-text="turn.content"></div></template><div class="muted" x-show="repairChat.length === 0">Describe what should change. The agent will respond in your language.</div></div><form class="repair-composer" @submit.prevent="sendRepair()"><textarea rows="2" placeholder="Describe the metadata problem…" x-model="repairDraft" @keydown.ctrl.enter.prevent="sendRepair()"></textarea><button class="btn primary" type="submit" :disabled="repairBusy || !repairDraft.trim() || !repairIncludedCount()" x-text="repairIncomplete && repairDraft.trim() === repairPendingInstruction ? 'Retry' : 'Send'"></button></form></section>
                 </div>
             </div>
         </div>
@@ -3917,6 +3917,10 @@ function adminV2() {
         repairInstruction: '',
         repairBusy: false,
         repairStage: '',
+        repairIncomplete: false,
+        repairTrackOffset: 0,
+        repairTrackTotal: 0,
+        repairPendingInstruction: '',
         repairHistory: [],
         settings: { values: {}, sources: {}, youtube_cookie_files: [], lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
         settingsDraft: {
@@ -4159,10 +4163,14 @@ function adminV2() {
             } catch (error) { this.showToast(error.message); }
         },
         addRepairEntity(item) {
+            if (this.repairBusy) return;
             if (this.repairSelected.some(x => x.kind === item.kind && Number(x.id) === Number(item.id))) return;
             this.repairSelected.push({kind:item.kind,id:Number(item.id),title:item.title});
             this.repairExpanded = null;
             this.repairPlan = null;
+            this.repairIncomplete = false;
+            this.repairTrackOffset = 0;
+            this.repairPendingInstruction = '';
             this.repairSearch = '';
             this.repairSearchResults = [];
         },
@@ -4174,6 +4182,10 @@ function adminV2() {
             this.repairSnapshot = null;
             this.repairChat = [];
             this.repairDraft = '';
+            this.repairIncomplete = false;
+            this.repairTrackOffset = 0;
+            this.repairTrackTotal = 0;
+            this.repairPendingInstruction = '';
         },
         repairSelection(expanded = false) {
             const selection = {artists:[],releases:[],tracks:[]};
@@ -4196,9 +4208,13 @@ function adminV2() {
             return Object.values(this.repairSelection(true)).reduce((total, ids) => total + ids.length, 0);
         },
         setRepairIncluded(kind,id,checked) {
+            if (this.repairBusy) return;
             this.repairIncluded[kind + ':' + id] = checked;
             this.repairPlan = null;
             this.repairSnapshot = null;
+            this.repairIncomplete = false;
+            this.repairTrackOffset = 0;
+            this.repairPendingInstruction = '';
         },
         async expandRepair() {
             if (this.repairSelected.length === 0) return;
@@ -4211,6 +4227,9 @@ function adminV2() {
                 this.repairPlan = null;
                 this.repairSnapshot = null;
                 this.repairIncluded = {};
+                this.repairIncomplete = false;
+                this.repairTrackOffset = 0;
+                this.repairPendingInstruction = '';
             } catch (error) { this.showToast(error.message); }
             finally { this.repairBusy = false; this.repairStage = ''; }
         },
@@ -4253,21 +4272,38 @@ function adminV2() {
         async sendRepair() {
             const instruction = this.repairDraft.trim();
             if (!instruction || this.repairBusy || !this.repairIncludedCount()) return;
+            const resuming = this.repairIncomplete && this.repairPendingInstruction === instruction;
+            if (!resuming) {
+                this.repairTrackOffset = 0;
+                this.repairTrackTotal = 0;
+            }
             this.repairBusy = true;
             this.repairStage = 'thinking';
+            this.repairIncomplete = true;
+            this.repairPendingInstruction = instruction;
+            this.repairTrackTotal = this.repairSelection(true).tracks.length;
             this.repairDraft = '';
             const previous = this.repairChat.slice(-6);
-            this.repairChat.push({role:'user',content:instruction});
+            if (!resuming) this.repairChat.push({role:'user',content:instruction});
             try {
                 if (!this.repairExpanded) {
                     this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(false)})});
                     this.repairIncluded = {};
                 }
-                const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null})});
-                this.repairPlan = result.plan;
-                this.repairSnapshot = result.snapshot;
+                while (true) {
+                    const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null,track_offset:this.repairTrackOffset})});
+                    this.repairPlan = result.plan;
+                    this.repairSnapshot = result.snapshot;
+                    this.repairTrackTotal = result.total_tracks;
+                    this.repairTrackOffset = result.next_track_offset ?? result.total_tracks;
+                    if (result.next_track_offset == null) {
+                        this.repairChat.push({role:'assistant',content:result.message});
+                        this.repairIncomplete = false;
+                        this.repairPendingInstruction = '';
+                        break;
+                    }
+                }
                 this.repairInstruction = instruction;
-                this.repairChat.push({role:'assistant',content:result.message});
             } catch (error) {
                 this.repairDraft = instruction;
                 this.showToast(error.message);
@@ -4278,7 +4314,7 @@ function adminV2() {
             }
         },
         async applyRepair() {
-            if (!this.repairPlan || !this.repairSnapshot || this.repairBusy || !this.repairChangeCount()) return;
+            if (!this.repairPlan || !this.repairSnapshot || this.repairBusy || this.repairIncomplete || !this.repairChangeCount()) return;
             this.repairBusy = true;
             this.repairStage = 'applying';
             try {
