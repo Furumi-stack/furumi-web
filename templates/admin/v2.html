@@ -183,6 +183,35 @@ button {
     padding: 18px;
 }
 
+.repair-shell { display:grid;grid-template-columns:290px minmax(0,1fr);gap:14px;height:calc(100dvh - 116px);min-height:520px; }
+.repair-side,.repair-work { min-height:0;display:flex;flex-direction:column;gap:12px; }
+.repair-side .panel,.repair-plan,.repair-chat { min-height:0;display:flex;flex-direction:column; }
+.repair-side .panel { flex:1; }
+.repair-scroll { overflow:auto;min-height:0;padding:12px; }
+.repair-work .repair-plan { flex:1; }
+.repair-work .repair-chat { height:220px;flex:none; }
+.repair-group { margin:12px 0 5px;color:var(--text-secondary);font-size:11px;font-weight:800;text-transform:uppercase; }
+.repair-entity { display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:12px; }
+.repair-entity span { overflow-wrap:anywhere; }
+.repair-search-results { max-height:160px;overflow:auto;border:1px solid var(--border-color);border-radius:6px;margin-top:6px; }
+.repair-search-results button { display:block;width:100%;padding:8px;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer; }
+.repair-search-results button:hover { background:var(--bg-hover); }
+.repair-diff { width:100%;border-collapse:collapse;font-size:12px; }
+.repair-diff th,.repair-diff td { text-align:left;border-bottom:1px solid var(--border-color);padding:7px;vertical-align:top; }
+.repair-diff th { color:var(--text-subdued);font-size:10px;text-transform:uppercase; }
+.repair-diff input,.repair-diff select { width:100%;min-width:90px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:5px;padding:6px; }
+.repair-diff .compact { min-width:65px;max-width:90px; }
+.repair-message { padding:7px 9px;border-radius:7px;max-width:86%;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere; }
+.repair-message.user { background:#16452a;align-self:flex-end; }
+.repair-message.assistant { background:var(--bg-elevated);align-self:flex-start; }
+.repair-composer { border-top:1px solid var(--border-color);padding:9px;display:flex;gap:8px;align-items:end; }
+.repair-composer textarea { flex:1;min-width:0;resize:vertical;max-height:100px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:8px; }
+.repair-thinking { display:flex;align-items:center;gap:8px;color:var(--amber);font-size:12px;padding:10px; }
+.repair-thinking::before { content:"";width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:repair-spin .8s linear infinite; }
+@keyframes repair-spin { to { transform:rotate(360deg); } }
+.repair-section-title { margin:16px 0 6px;font-size:12px;font-weight:800;color:var(--text-secondary); }
+.repair-history { font-size:11px;line-height:1.5; }
+
 .stats-strip {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
@@ -2012,7 +2041,7 @@ tbody tr:hover {
             </button>
             <button class="nav-btn" :class="{active: activeView === 'tools'}" @click="openTools()">
                 <i data-lucide="wrench"></i>
-                <span>Future Tools</span>
+                <span>Library Tools</span>
             </button>
             <button class="nav-btn" :class="{active: activeView === 'users'}" @click="openUsers()">
                 <i data-lucide="users"></i>
@@ -2531,28 +2560,55 @@ tbody tr:hover {
         </div>
 
         <div class="content" x-show="activeView === 'tools'">
-            <section class="panel">
-                <div class="panel-head">
-                    <div class="panel-title">
-                        <strong>Future Tools</strong>
-                        <span>Reserved operation slots for complex library maintenance</span>
-                    </div>
+            <div class="repair-shell">
+                <aside class="repair-side">
+                    <section class="panel">
+                        <div class="panel-head"><div class="panel-title"><strong>Metadata Repair</strong><span>Select problematic entities</span></div></div>
+                        <div class="repair-scroll">
+                            <div class="toolbar"><select class="search" x-model="repairSearchKind"><option value="artists">Artists</option><option value="releases">Releases</option><option value="tracks">Tracks</option></select></div>
+                            <input class="search" style="width:100%;margin-top:8px" placeholder="Search library…" x-model="repairSearch" @input.debounce.300ms="searchRepair()" />
+                            <div class="repair-search-results" x-show="repairSearchResults.length">
+                                <template x-for="item in repairSearchResults" :key="item.kind + ':' + item.id"><button type="button" @click="addRepairEntity(item)" x-text="item.title + (item.subtitle ? ' · ' + item.subtitle : '')"></button></template>
+                            </div>
+                            <div class="repair-group">Selected and related · <span x-text="repairIncludedCount()"></span></div>
+                            <div class="muted" x-show="!repairExpanded && repairSelected.length === 0">Search and select an artist, release, or track.</div>
+                            <template x-for="kind in ['artists','releases','tracks']" :key="kind">
+                                <div x-show="repairRows(kind).length">
+                                    <div class="repair-group" x-text="kind"></div>
+                                    <template x-for="item in repairRows(kind)" :key="kind + item.id">
+                                        <label class="repair-entity"><input type="checkbox" :checked="repairIncluded[kind + ':' + item.id] !== false" @change="setRepairIncluded(kind,item.id,$event.target.checked)" /><span x-text="(item.name || item.title) + ' #' + item.id"></span></label>
+                                    </template>
+                                </div>
+                            </template>
+                            <div class="toolbar" style="margin-top:12px"><button class="btn" @click="expandRepair()" :disabled="repairSelected.length === 0 || repairBusy">Show related</button><button class="btn" @click="clearRepair()" :disabled="repairBusy">Clear</button></div>
+                            <div class="muted" style="margin-top:8px">Uncheck any related item to exclude it from the plan. Audio files stay in their current folders.</div>
+                        </div>
+                    </section>
+                    <section class="panel" style="max-height:160px"><div class="panel-head"><div class="panel-title"><strong>History</strong><span>Recent applied plans</span></div></div><div class="repair-scroll repair-history"><template x-for="entry in repairHistory" :key="entry.id"><div class="repair-entity"><span style="flex:1" x-text="'#' + entry.id + ' · ' + entry.instruction.slice(0,55) + (entry.undone_at ? ' · undone' : '')"></span><button class="btn" x-show="!entry.undone_at" @click="undoRepair(entry.id)" :disabled="repairBusy">Undo</button></div></template><div class="muted" x-show="repairHistory.length === 0">No applied plans yet.</div></div></section>
+                </aside>
+                <div class="repair-work">
+                    <section class="panel repair-plan">
+                        <div class="panel-head"><div class="panel-title"><strong>Proposed changes</strong><span x-text="repairPlan ? 'Review and edit before applying' : 'The agent’s plan will appear here'"></span></div><div class="toolbar"><span class="selection-summary" x-show="repairPlan" x-text="repairChangeCount() + ' changes'"></span><button class="btn primary" x-show="repairPlan" @click="applyRepair()" :disabled="repairBusy || !repairChangeCount()">Apply plan</button></div></div>
+                        <div class="repair-scroll">
+                            <div class="repair-thinking" x-show="repairBusy && repairStage === 'thinking'">Agent is reviewing the selected metadata…</div>
+                            <div class="empty" x-show="!repairPlan && !(repairBusy && repairStage === 'thinking')">Select entities and describe the correction in the chat below.</div>
+                            <template x-if="repairPlan"><div>
+                                <div class="repair-section-title" x-show="repairPlan.questions.length">Questions to review</div>
+                                <template x-for="question in repairPlan.questions" :key="question"><div class="repair-entity" style="color:var(--amber)" x-text="question"></div></template>
+                                <div class="repair-section-title" x-show="repairPlan.artists.length">Artists</div>
+                                <table class="repair-diff" x-show="repairPlan.artists.length"><thead><tr><th>Before</th><th>After</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.artists" :key="edit.id"><tr><td x-text="repairBefore('artists',edit.id)?.name || ''"></td><td><input x-model="edit.name" /></td><td><button class="btn" @click="repairPlan.artists.splice(index,1)">Remove</button></td></tr></template></tbody></table>
+                                <div class="repair-section-title" x-show="repairPlan.releases.length">Releases</div>
+                                <table class="repair-diff" x-show="repairPlan.releases.length"><thead><tr><th>Before</th><th>After</th><th>Type</th><th>Year</th><th>Artist IDs</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.releases" :key="edit.id || edit.key"><tr><td><div x-text="edit.id ? (repairBefore('releases',edit.id)?.title || '') : 'New release'"></div><small class="muted" x-show="edit.id" x-text="edit.id ? [repairBefore('releases',edit.id)?.release_type,repairBefore('releases',edit.id)?.year].filter(x => x != null).join(' · ') : ''"></small></td><td><input x-model="edit.title" /></td><td><select x-model="edit.release_type"><template x-for="type in ['album','single','ep','compilation','mixtape','live','soundtrack','remix','demo']" :key="type"><option :value="type" x-text="type"></option></template></select></td><td><input class="compact" type="number" x-model.number="edit.year" /></td><td><input :value="edit.artist_ids.join(', ')" @change="edit.artist_ids = parseRepairIds($event.target.value)" /></td><td><button class="btn" @click="repairPlan.releases.splice(index,1)">Remove</button></td></tr></template></tbody></table>
+                                <div class="toolbar" x-show="repairPlan"><button class="btn" @click="addRepairRelease()">+ New release</button></div>
+                                <div class="repair-section-title" x-show="repairPlan.tracks.length">Tracks</div>
+                                <table class="repair-diff" x-show="repairPlan.tracks.length"><thead><tr><th>Before</th><th>After</th><th>Release</th><th>#</th><th>Disc</th><th>Year</th><th>Artist IDs</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.tracks" :key="edit.id"><tr><td><div x-text="repairBefore('tracks',edit.id)?.title || ''"></div><small class="muted" x-text="'#' + (repairBefore('tracks',edit.id)?.track_number ?? '—') + ' · release #' + (repairBefore('tracks',edit.id)?.release_id || '')"></small></td><td><input x-model="edit.title" /></td><td><select x-model="edit.target_release"><template x-for="release in repairTargetReleases()" :key="release.value"><option :value="release.value" x-text="release.label"></option></template></select></td><td><input class="compact" type="number" x-model.number="edit.track_number" /></td><td><input class="compact" type="number" x-model.number="edit.disc_number" /></td><td><input class="compact" type="number" x-model.number="edit.year" /></td><td><input :value="edit.artist_ids.join(', ')" @change="edit.artist_ids = parseRepairIds($event.target.value)" /></td><td><button class="btn" @click="repairPlan.tracks.splice(index,1)">Remove</button></td></tr></template></tbody></table>
+                                <div class="toolbar"><button class="btn" @click="addRepairTrack()">+ Track edit</button></div>
+                            </div></template>
+                        </div>
+                    </section>
+                    <section class="panel repair-chat"><div class="repair-scroll" style="display:flex;flex-direction:column;gap:7px" x-ref="repairChat"><template x-for="(turn,index) in repairChat" :key="index"><div class="repair-message" :class="turn.role" x-text="turn.content"></div></template><div class="muted" x-show="repairChat.length === 0">Describe what should change. The agent will respond in your language.</div></div><form class="repair-composer" @submit.prevent="sendRepair()"><textarea rows="2" placeholder="Describe the metadata problem…" x-model="repairDraft" @keydown.ctrl.enter.prevent="sendRepair()"></textarea><button class="btn primary" type="submit" :disabled="repairBusy || !repairDraft.trim() || !repairIncludedCount()">Send</button></form></section>
                 </div>
-                <div style="padding:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
-                    <button class="btn" style="height:72px" @click="mockAction('Artist merge wizard placeholder')">
-                        <i data-lucide="git-merge"></i>
-                        Artist merge
-                    </button>
-                    <button class="btn" style="height:72px" @click="mockAction('Release split/move tracks placeholder')">
-                        <i data-lucide="scissors"></i>
-                        Split release
-                    </button>
-                    <button class="btn" style="height:72px" @click="mockAction('Metadata enrichment rerun placeholder')">
-                        <i data-lucide="sparkles"></i>
-                        Enrich metadata
-                    </button>
-                </div>
-            </section>
+            </div>
         </div>
 
         <div class="content" x-show="activeView === 'settings'">
@@ -3847,6 +3903,21 @@ function adminV2() {
         mergeDetails: [],
         mergeArtistSearch: '',
         mergeDraft: { release_ids: [], target_release_id: null, title: '', release_type: 'album', year: '', hidden: 'false', cover_file_id: null, artist_ids: [], tracks: [] },
+        repairSearchKind: 'releases',
+        repairSearch: '',
+        repairSearchResults: [],
+        repairSearchToken: 0,
+        repairSelected: [],
+        repairExpanded: null,
+        repairIncluded: {},
+        repairDraft: '',
+        repairChat: [],
+        repairPlan: null,
+        repairSnapshot: null,
+        repairInstruction: '',
+        repairBusy: false,
+        repairStage: '',
+        repairHistory: [],
         settings: { values: {}, sources: {}, youtube_cookie_files: [], lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
         settingsDraft: {
             auth_password_enabled: false,
@@ -4033,8 +4104,9 @@ function adminV2() {
             } else if (this.activeView === 'users') {
                 if (updateRoute) this.setRoute('#users');
                 await this.loadUsers(false);
-            } else if (this.activeView === 'tools' && updateRoute) {
-                this.setRoute('#tools');
+            } else if (this.activeView === 'tools') {
+                if (updateRoute) this.setRoute('#tools');
+                await this.loadRepairHistory();
             }
         },
 
@@ -4073,6 +4145,167 @@ function adminV2() {
         openTools() {
             this.activeView = 'tools';
             this.setRoute('#tools');
+            this.loadRepairHistory();
+        },
+
+        async searchRepair() {
+            const token = ++this.repairSearchToken;
+            const search = this.repairSearch.trim();
+            if (!search) { this.repairSearchResults = []; return; }
+            try {
+                const params = new URLSearchParams({kind:this.repairSearchKind,search,limit:'25',offset:'0'});
+                const result = await this.request(`${this.apiBase}/library?${params}`);
+                if (token === this.repairSearchToken) this.repairSearchResults = result.items || [];
+            } catch (error) { this.showToast(error.message); }
+        },
+        addRepairEntity(item) {
+            if (this.repairSelected.some(x => x.kind === item.kind && Number(x.id) === Number(item.id))) return;
+            this.repairSelected.push({kind:item.kind,id:Number(item.id),title:item.title});
+            this.repairExpanded = null;
+            this.repairPlan = null;
+            this.repairSearch = '';
+            this.repairSearchResults = [];
+        },
+        clearRepair() {
+            this.repairSelected = [];
+            this.repairExpanded = null;
+            this.repairIncluded = {};
+            this.repairPlan = null;
+            this.repairSnapshot = null;
+            this.repairChat = [];
+            this.repairDraft = '';
+        },
+        repairSelection(expanded = false) {
+            const selection = {artists:[],releases:[],tracks:[]};
+            if (expanded && this.repairExpanded) {
+                for (const kind of Object.keys(selection)) {
+                    for (const item of this.repairExpanded.snapshot[kind] || []) {
+                        if (this.repairIncluded[kind + ':' + item.id] !== false) selection[kind].push(item.id);
+                    }
+                }
+            } else {
+                for (const item of this.repairSelected) if (this.repairIncluded[item.kind + ':' + item.id] !== false) selection[item.kind].push(item.id);
+            }
+            return selection;
+        },
+        repairRows(kind) {
+            if (this.repairExpanded) return this.repairExpanded.snapshot[kind] || [];
+            return this.repairSelected.filter(item => item.kind === kind);
+        },
+        repairIncludedCount() {
+            return Object.values(this.repairSelection(true)).reduce((total, ids) => total + ids.length, 0);
+        },
+        setRepairIncluded(kind,id,checked) {
+            this.repairIncluded[kind + ':' + id] = checked;
+            this.repairPlan = null;
+            this.repairSnapshot = null;
+        },
+        async expandRepair() {
+            if (this.repairSelected.length === 0) return;
+            this.repairBusy = true;
+            this.repairStage = 'expanding';
+            try {
+                this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {
+                    method:'POST',body:JSON.stringify({selection:this.repairSelection(false)})
+                });
+                this.repairPlan = null;
+                this.repairSnapshot = null;
+                this.repairIncluded = {};
+            } catch (error) { this.showToast(error.message); }
+            finally { this.repairBusy = false; this.repairStage = ''; }
+        },
+        repairBefore(kind,id) { return (this.repairSnapshot?.[kind] || []).find(item => Number(item.id) === Number(id)); },
+        repairArtistIds(kind,id) {
+            const relations = this.repairSnapshot?.[kind === 'releases' ? 'release_artists' : 'track_artists'] || [];
+            return relations.filter(row => Number(row.owner_id) === Number(id)).map(row => Number(row.artist_id));
+        },
+        repairTargetReleases() {
+            const existing = (this.repairSnapshot?.releases || []).map(row => ({value:'existing:' + row.id,label:row.title + ' #' + row.id}));
+            for (const track of this.repairSnapshot?.tracks || []) {
+                if (!existing.some(row => row.value === 'existing:' + track.release_id)) existing.push({value:'existing:' + track.release_id,label:'Current release #' + track.release_id});
+            }
+            const created = (this.repairPlan?.releases || []).filter(row => row.key && !row.id).map(row => ({value:'new:' + row.key,label:(row.title || 'New release') + ' · new'}));
+            return existing.concat(created);
+        },
+        parseRepairIds(value) { return [...new Set(String(value).split(',').map(x => Number(x.trim())).filter(x => Number.isInteger(x) && x > 0))]; },
+        addRepairRelease() {
+            if (!this.repairPlan) return;
+            const key = 'manual_' + Date.now();
+            const first = this.repairSnapshot?.releases?.[0];
+            this.repairPlan.releases.push({id:null,key,title:'',release_type:'album',year:first?.year ?? null,artist_ids:first ? this.repairArtistIds('releases',first.id) : []});
+        },
+        addRepairTrack() {
+            if (!this.repairPlan || !this.repairSnapshot) return;
+            const row = this.repairSnapshot.tracks.find(x => !this.repairPlan.tracks.some(edit => edit.id === x.id));
+            if (!row) { this.showToast('All selected tracks are already in the plan'); return; }
+            this.repairPlan.tracks.push({id:row.id,title:row.title,target_release:'existing:' + row.release_id,track_number:row.track_number,disc_number:row.disc_number,year:row.year,artist_ids:this.repairArtistIds('tracks',row.id)});
+        },
+        repairChangeCount() { return this.repairPlan ? this.repairPlan.artists.length + this.repairPlan.releases.length + this.repairPlan.tracks.length : 0; },
+        repairPlanPayload() {
+            const plan = JSON.parse(JSON.stringify(this.repairPlan));
+            for (const edit of [...plan.releases, ...plan.tracks]) {
+                for (const field of ['year','track_number','disc_number']) {
+                    if (field in edit && (edit[field] === '' || edit[field] == null)) edit[field] = null;
+                }
+            }
+            return plan;
+        },
+        async sendRepair() {
+            const instruction = this.repairDraft.trim();
+            if (!instruction || this.repairBusy || !this.repairIncludedCount()) return;
+            this.repairBusy = true;
+            this.repairStage = 'thinking';
+            this.repairDraft = '';
+            const previous = this.repairChat.slice(-6);
+            this.repairChat.push({role:'user',content:instruction});
+            try {
+                if (!this.repairExpanded) {
+                    this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(false)})});
+                    this.repairIncluded = {};
+                }
+                const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null})});
+                this.repairPlan = result.plan;
+                this.repairSnapshot = result.snapshot;
+                this.repairInstruction = instruction;
+                this.repairChat.push({role:'assistant',content:result.message});
+            } catch (error) {
+                this.showToast(error.message);
+            } finally {
+                this.repairBusy = false;
+                this.repairStage = '';
+                this.$nextTick(() => { if (this.$refs.repairChat) this.$refs.repairChat.scrollTop = this.$refs.repairChat.scrollHeight; });
+            }
+        },
+        async applyRepair() {
+            if (!this.repairPlan || !this.repairSnapshot || this.repairBusy || !this.repairChangeCount()) return;
+            this.repairBusy = true;
+            this.repairStage = 'applying';
+            try {
+                const result = await this.request(`${this.apiBase}/metadata-fix/apply`, {method:'POST',body:JSON.stringify({snapshot:this.repairSnapshot,plan:this.repairPlanPayload(),instruction:this.repairInstruction})});
+                this.showToast('Applied · history #' + result.history_id);
+                this.repairPlan = null;
+                this.repairSnapshot = null;
+                this.repairExpanded = null;
+                await this.loadRepairHistory();
+                await this.loadLibrary(false);
+            } catch (error) { this.showToast(error.message); }
+            finally { this.repairBusy = false; this.repairStage = ''; }
+        },
+        async loadRepairHistory() {
+            try { this.repairHistory = await this.request(`${this.apiBase}/metadata-fix/history`); }
+            catch (error) { this.showToast(error.message); }
+        },
+        async undoRepair(historyId) {
+            if (this.repairBusy || !confirm('Undo this metadata repair?')) return;
+            this.repairBusy = true;
+            try {
+                await this.request(`${this.apiBase}/metadata-fix/undo`, {method:'POST',body:JSON.stringify({history_id:historyId})});
+                await this.loadRepairHistory();
+                this.repairExpanded = null;
+                this.repairPlan = null;
+                this.showToast('Metadata repair undone');
+            } catch (error) { this.showToast(error.message); }
+            finally { this.repairBusy = false; }
         },
 
         openUsers() {
@@ -5730,7 +5963,7 @@ function adminV2() {
         pageTitle() {
             if (this.activeView === 'library') return 'Library Workbench';
             if (this.activeView === 'jobs') return 'Tasks';
-            if (this.activeView === 'tools') return 'Future Tools';
+            if (this.activeView === 'tools') return 'Library Tools';
             if (this.activeView === 'settings') return 'Settings';
             if (this.activeView === 'users') return 'Users';
             return 'Review Queue';
@@ -5739,7 +5972,7 @@ function adminV2() {
         pageSubtitle() {
             if (this.activeView === 'library') return 'Fast entity control surface for artists, releases, tracks, and playlists';
             if (this.activeView === 'jobs') return 'Scheduler state, recent runs, and manual controls in one place';
-            if (this.activeView === 'tools') return 'Reserved space for merge, split, enrichment, and destructive workflows';
+            if (this.activeView === 'tools') return 'Guided metadata repair and maintenance history';
             if (this.activeView === 'settings') return 'Application configuration and external API credentials';
             if (this.activeView === 'users') return 'Account status, live presence, and per-user listening statistics';
             return 'Full-screen review triage with filter-aware bulk actions';
@@ -5912,10 +6145,6 @@ function adminV2() {
 
         fmt(value) {
             return new Intl.NumberFormat().format(value || 0);
-        },
-
-        mockAction(message) {
-            this.showToast(message);
         },
 
         showToast(message) {

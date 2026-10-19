@@ -2461,7 +2461,7 @@ pub async fn merge_releases(
     .into_response()
 }
 
-async fn require_admin_json(
+pub(super) async fn require_admin_json(
     session: &Session,
     db: &Database,
 ) -> Result<AuthenticatedUser, cot::response::Response> {
@@ -2474,7 +2474,7 @@ async fn require_admin_json(
     Ok(user)
 }
 
-fn json_error(status: StatusCode, message: &str) -> cot::response::Response {
+pub(super) fn json_error(status: StatusCode, message: &str) -> cot::response::Response {
     let body = serde_json::json!({ "error": message });
     cot::http::Response::builder()
         .status(status)

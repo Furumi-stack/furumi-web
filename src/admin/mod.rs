@@ -1,3 +1,4 @@
+mod metadata_fix;
 mod v2;
 pub mod views;
 
@@ -806,6 +807,86 @@ impl App for AdminApp {
                     )
                 },
                 "admin_v2_library_releases_merge",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/metadata-fix/expand",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    cot::router::method::post(move |session: Session, db: Database, json: Json<metadata_fix::ExpandRequest>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool.get_or_init(|| async { sqlx::postgres::PgPoolOptions::new().max_connections(5).connect(&pool_config.database_url).await.expect("admin pool") }).await;
+                            metadata_fix::expand(session, db, pg_pool, json).await
+                        }
+                    })
+                },
+                "admin_v2_metadata_fix_expand",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/metadata-fix/plan",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    cot::router::method::post(move |session: Session, db: Database, json: Json<metadata_fix::PlanRequest>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool.get_or_init(|| async { sqlx::postgres::PgPoolOptions::new().max_connections(5).connect(&pool_config.database_url).await.expect("admin pool") }).await;
+                            metadata_fix::propose(session, db, pg_pool, json).await
+                        }
+                    })
+                },
+                "admin_v2_metadata_fix_plan",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/metadata-fix/apply",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    cot::router::method::post(move |session: Session, db: Database, json: Json<metadata_fix::ApplyRequest>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool.get_or_init(|| async { sqlx::postgres::PgPoolOptions::new().max_connections(5).connect(&pool_config.database_url).await.expect("admin pool") }).await;
+                            metadata_fix::apply(session, db, pg_pool, json).await
+                        }
+                    })
+                },
+                "admin_v2_metadata_fix_apply",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/metadata-fix/history",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    get(move |session: Session, db: Database| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool.get_or_init(|| async { sqlx::postgres::PgPoolOptions::new().max_connections(5).connect(&pool_config.database_url).await.expect("admin pool") }).await;
+                            metadata_fix::history(session, db, pg_pool).await
+                        }
+                    })
+                },
+                "admin_v2_metadata_fix_history",
+            ),
+            Route::with_handler_and_name(
+                "/v2/api/metadata-fix/undo",
+                {
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    cot::router::method::post(move |session: Session, db: Database, json: Json<metadata_fix::UndoRequest>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool.get_or_init(|| async { sqlx::postgres::PgPoolOptions::new().max_connections(5).connect(&pool_config.database_url).await.expect("admin pool") }).await;
+                            metadata_fix::undo(session, db, pg_pool, json).await
+                        }
+                    })
+                },
+                "admin_v2_metadata_fix_undo",
             ),
             // -- Dashboard ----------------------------------------------------
             Route::with_handler_and_name(

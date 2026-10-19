@@ -2852,6 +2852,29 @@ pub mod db_migrations {
             &[Operation::custom(add_lastfm_lookup_state).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_metadata_fix_history(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db.raw("CREATE TABLE furumusic__metadata_fix_history (id BIGSERIAL PRIMARY KEY, instruction TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_release_ids BIGINT[] NOT NULL DEFAULT '{}', created_by BIGINT NOT NULL, created_at VARCHAR(32) NOT NULL, undone_by BIGINT, undone_at VARCHAR(32))").await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0050CreateMetadataFixHistory;
+
+    impl migrations::Migration for M0050CreateMetadataFixHistory {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0050_create_metadata_fix_history";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0049_add_lastfm_lookup_state",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_metadata_fix_history).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2892,5 +2915,6 @@ pub mod db_migrations {
         &M0047CreateYouTubeImportMediaLinks,
         &M0048AddPlaybackCoordinationColumns,
         &M0049AddLastfmLookupState,
+        &M0050CreateMetadataFixHistory,
     ];
 }
