@@ -399,11 +399,13 @@ async fn call_model(
         .and_then(|x| x.as_str())
         .ok_or_else(|| anyhow::anyhow!("empty model response"))?;
     let parsed: serde_json::Value = serde_json::from_str(content)?;
-    let plan: Plan = serde_json::from_value(
+    let plan = normalize_model_plan(
         parsed
             .get("plan")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("missing plan"))?,
+        snapshot,
+        current_plan,
     )?;
     let message: String = parsed
         .get("message")
@@ -415,6 +417,209 @@ async fn call_model(
         .collect();
     anyhow::ensure!(!message.is_empty(), "model returned no chat message");
     Ok((plan, message))
+}
+
+/// Model output is a patch. Complete existing rows from the current draft or
+/// database snapshot before deserializing the typed plan. Explicit null values
+/// still mean "clear this field"; only absent fields are inherited.
+fn normalize_model_plan(
+    mut value: serde_json::Value,
+    snapshot: &Snapshot,
+    current_plan: Option<&Plan>,
+) -> anyhow::Result<Plan> {
+    let plan = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("plan must be an object"))?;
+
+    if let Some(artists) = plan.get_mut("artists").and_then(|x| x.as_array_mut()) {
+        for row in artists {
+            let object = row
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("artist edit must be an object"))?;
+            if !object.contains_key("name") {
+                if let Some(title) = object.get("title").cloned() {
+                    object.insert("name".into(), title);
+                }
+            }
+            let id = object
+                .get("id")
+                .and_then(|x| x.as_i64())
+                .ok_or_else(|| anyhow::anyhow!("artist edit needs an id"))?;
+            let previous = current_plan
+                .and_then(|draft| {
+                    draft
+                        .artists
+                        .iter()
+                        .find(|item| item.id == id)
+                        .map(|item| item.name.as_str())
+                })
+                .or_else(|| {
+                    snapshot
+                        .artists
+                        .iter()
+                        .find(|item| item.id == id)
+                        .map(|item| item.name.as_str())
+                });
+            if let Some(name) = previous {
+                object
+                    .entry("name")
+                    .or_insert_with(|| serde_json::json!(name));
+            }
+        }
+    }
+
+    if let Some(releases) = plan.get_mut("releases").and_then(|x| x.as_array_mut()) {
+        for row in releases {
+            let object = row
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("release edit must be an object"))?;
+            if !object.contains_key("title") {
+                if let Some(title) = object.get("name").or_else(|| object.get("album")).cloned() {
+                    object.insert("title".into(), title);
+                }
+            }
+            if !object.contains_key("release_type") {
+                if let Some(kind) = object.get("type").cloned() {
+                    object.insert("release_type".into(), kind);
+                }
+            }
+            let id = object.get("id").and_then(|x| x.as_i64());
+            let key = object.get("key").and_then(|x| x.as_str());
+            let draft = current_plan.and_then(|draft| {
+                draft.releases.iter().find(|item| {
+                    item.id == id && id.is_some() || item.key.as_deref() == key && key.is_some()
+                })
+            });
+            let existing = id.and_then(|id| snapshot.releases.iter().find(|item| item.id == id));
+            if let Some(previous) = draft {
+                object
+                    .entry("title")
+                    .or_insert_with(|| serde_json::json!(previous.title));
+                object
+                    .entry("release_type")
+                    .or_insert_with(|| serde_json::json!(previous.release_type));
+                object
+                    .entry("year")
+                    .or_insert_with(|| serde_json::json!(previous.year));
+                object
+                    .entry("artist_ids")
+                    .or_insert_with(|| serde_json::json!(previous.artist_ids));
+            } else if let Some(previous) = existing {
+                object
+                    .entry("title")
+                    .or_insert_with(|| serde_json::json!(previous.title));
+                object
+                    .entry("release_type")
+                    .or_insert_with(|| serde_json::json!(previous.release_type));
+                object
+                    .entry("year")
+                    .or_insert_with(|| serde_json::json!(previous.year));
+                let ids: Vec<_> = snapshot
+                    .release_artists
+                    .iter()
+                    .filter(|link| link.owner_id == previous.id)
+                    .map(|link| link.artist_id)
+                    .collect();
+                object
+                    .entry("artist_ids")
+                    .or_insert_with(|| serde_json::json!(ids));
+            }
+            object.entry("year").or_insert(serde_json::Value::Null);
+            object
+                .entry("artist_ids")
+                .or_insert_with(|| serde_json::json!([]));
+        }
+    }
+
+    if let Some(tracks) = plan.get_mut("tracks").and_then(|x| x.as_array_mut()) {
+        for row in tracks {
+            let object = row
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("track edit must be an object"))?;
+            if !object.contains_key("title") {
+                if let Some(title) = object.get("name").cloned() {
+                    object.insert("title".into(), title);
+                }
+            }
+            let id = object
+                .get("id")
+                .and_then(|x| x.as_i64())
+                .ok_or_else(|| anyhow::anyhow!("track edit needs an id"))?;
+            if !object.contains_key("target_release") {
+                if let Some(target) = object.get("release_id").and_then(|x| x.as_i64()) {
+                    object.insert(
+                        "target_release".into(),
+                        serde_json::json!(format!("existing:{target}")),
+                    );
+                } else if let Some(key) = object
+                    .get("new_release_key")
+                    .or_else(|| object.get("release_key"))
+                    .and_then(|x| x.as_str())
+                {
+                    object.insert(
+                        "target_release".into(),
+                        serde_json::json!(format!("new:{key}")),
+                    );
+                }
+            }
+            if let Some(target) = object.get("target_release").and_then(|x| x.as_i64()) {
+                object.insert(
+                    "target_release".into(),
+                    serde_json::json!(format!("existing:{target}")),
+                );
+            }
+            let draft =
+                current_plan.and_then(|draft| draft.tracks.iter().find(|item| item.id == id));
+            let existing = snapshot.tracks.iter().find(|item| item.id == id);
+            if let Some(previous) = draft {
+                object
+                    .entry("title")
+                    .or_insert_with(|| serde_json::json!(previous.title));
+                object
+                    .entry("target_release")
+                    .or_insert_with(|| serde_json::json!(previous.target_release));
+                object
+                    .entry("track_number")
+                    .or_insert_with(|| serde_json::json!(previous.track_number));
+                object
+                    .entry("disc_number")
+                    .or_insert_with(|| serde_json::json!(previous.disc_number));
+                object
+                    .entry("year")
+                    .or_insert_with(|| serde_json::json!(previous.year));
+                object
+                    .entry("artist_ids")
+                    .or_insert_with(|| serde_json::json!(previous.artist_ids));
+            } else if let Some(previous) = existing {
+                object
+                    .entry("title")
+                    .or_insert_with(|| serde_json::json!(previous.title));
+                object.entry("target_release").or_insert_with(|| {
+                    serde_json::json!(format!("existing:{}", previous.release_id))
+                });
+                object
+                    .entry("track_number")
+                    .or_insert_with(|| serde_json::json!(previous.track_number));
+                object
+                    .entry("disc_number")
+                    .or_insert_with(|| serde_json::json!(previous.disc_number));
+                object
+                    .entry("year")
+                    .or_insert_with(|| serde_json::json!(previous.year));
+                let ids: Vec<_> = snapshot
+                    .track_artists
+                    .iter()
+                    .filter(|link| link.owner_id == previous.id)
+                    .map(|link| link.artist_id)
+                    .collect();
+                object
+                    .entry("artist_ids")
+                    .or_insert_with(|| serde_json::json!(ids));
+            }
+        }
+    }
+
+    serde_json::from_value(value).map_err(Into::into)
 }
 
 pub(super) async fn propose(
@@ -459,7 +664,13 @@ pub(super) async fn propose(
     .await
     {
         Ok(x) => x,
-        Err(error) => return Ok(server(error)),
+        Err(error) => {
+            tracing::warn!(%error, "metadata repair agent response could not be processed");
+            return Ok(json_error(
+                StatusCode::BAD_GATEWAY,
+                "The agent did not return a usable plan. Please retry or clarify the request.",
+            ));
+        }
     };
     if let Err(error) = validate_plan(&snapshot, &plan) {
         return Ok(bad(&format!("agent returned an invalid plan: {error}")));
@@ -865,5 +1076,52 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_plan(&scope, &plan).is_err());
+    }
+
+    #[test]
+    fn model_can_propose_partial_track_move() {
+        let raw = serde_json::json!({
+            "releases": [{"key":"demo","title":"Demos","release_type":"demo","artist_ids":[1]}],
+            "tracks": [{"id":3,"target_release":"new:demo"}]
+        });
+        let plan = normalize_model_plan(raw, &snapshot(), None).unwrap();
+        assert_eq!(plan.tracks[0].title, "Song (Demo)");
+        assert_eq!(plan.tracks[0].track_number, Some(1));
+        assert_eq!(plan.tracks[0].artist_ids, vec![1]);
+        assert_eq!(plan.tracks[0].target_release, "new:demo");
+        assert!(validate_plan(&snapshot(), &plan).is_ok());
+    }
+
+    #[test]
+    fn partial_revision_inherits_draft_and_keeps_explicit_null() {
+        let draft = Plan {
+            tracks: vec![TrackEdit {
+                id: 3,
+                title: "Edited title".into(),
+                target_release: "existing:2".into(),
+                track_number: Some(5),
+                disc_number: Some(2),
+                year: Some(2025),
+                artist_ids: vec![1],
+            }],
+            ..Default::default()
+        };
+        let raw = serde_json::json!({"tracks":[{"id":3,"track_number":null}]});
+        let plan = normalize_model_plan(raw, &snapshot(), Some(&draft)).unwrap();
+        assert_eq!(plan.tracks[0].title, "Edited title");
+        assert_eq!(plan.tracks[0].track_number, None);
+        assert_eq!(plan.tracks[0].disc_number, Some(2));
+    }
+
+    #[test]
+    fn accepts_common_model_field_aliases() {
+        let raw = serde_json::json!({
+            "releases": [{"key":"demo","name":"Demo Sessions","type":"demo","artist_ids":[1]}],
+            "tracks": [{"id":3,"release_key":"demo"}]
+        });
+        let plan = normalize_model_plan(raw, &snapshot(), None).unwrap();
+        assert_eq!(plan.releases[0].title, "Demo Sessions");
+        assert_eq!(plan.tracks[0].target_release, "new:demo");
+        assert!(validate_plan(&snapshot(), &plan).is_ok());
     }
 }

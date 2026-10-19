@@ -4269,6 +4269,7 @@ function adminV2() {
                 this.repairInstruction = instruction;
                 this.repairChat.push({role:'assistant',content:result.message});
             } catch (error) {
+                this.repairDraft = instruction;
                 this.showToast(error.message);
             } finally {
                 this.repairBusy = false;
