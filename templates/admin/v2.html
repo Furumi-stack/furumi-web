@@ -2129,26 +2129,30 @@ tbody tr:hover {
 
                     <div class="action-strip">
                         <div class="toolbar">
-                            <button class="btn" @click="selectVisibleReviews()">
+                            <button class="btn" @click="selectVisibleReviews()" :disabled="reviewBulkBusy">
                                 <i data-lucide="check-square"></i>
                                 Select visible
                             </button>
-                            <button class="btn" @click="selectReviewFilter()" :disabled="reviews.total === 0">
+                            <button class="btn" @click="selectReviewFilter()" :disabled="reviewBulkBusy || reviews.total === 0">
                                 <i data-lucide="list-checks"></i>
                                 <span x-text="`Select all (${fmt(reviews.total)})`"></span>
                             </button>
-                            <button class="btn" @click="clearReviewSelection()" :disabled="selectedReviewCount() === 0">
+                            <button class="btn" @click="clearReviewSelection()" :disabled="reviewBulkBusy || selectedReviewCount() === 0">
                                 <i data-lucide="x"></i>
                                 Clear
                             </button>
                         </div>
                         <div class="toolbar">
                             <span class="selection-summary" x-text="reviewSelectionSummary()"></span>
-                            <button class="btn warn" @click="bulkReviews('requeue')" :disabled="selectedReviewCount() === 0">
+                            <button class="btn primary" @click="bulkReviews('approve')" :disabled="reviewBulkBusy || selectedPendingReviewCount() === 0">
+                                <i data-lucide="check"></i>
+                                <span x-text="reviewBulkBusy && reviewBulkAction === 'approve' ? 'Approving…' : 'Approve selected'"></span>
+                            </button>
+                            <button class="btn warn" @click="bulkReviews('requeue')" :disabled="reviewBulkBusy || selectedReviewCount() === 0">
                                 <i data-lucide="rotate-ccw"></i>
                                 Requeue selected
                             </button>
-                            <button class="btn danger" @click="bulkReviews('delete')" :disabled="selectedReviewCount() === 0">
+                            <button class="btn danger" @click="bulkReviews('delete')" :disabled="reviewBulkBusy || selectedReviewCount() === 0">
                                 <i data-lucide="trash-2"></i>
                                 Delete selected
                             </button>
@@ -2172,7 +2176,7 @@ tbody tr:hover {
                                 <template x-for="row in reviews.items" :key="row.id">
                                     <tr @click="openReview(row)">
                                         <td class="col-check" @click.stop>
-                                            <input class="check" type="checkbox" :checked="isReviewSelected(row.id)" @change="toggleReview(row)" />
+                                            <input class="check" type="checkbox" :checked="isReviewSelected(row.id)" @change="toggleReview(row)" :disabled="reviewBulkBusy" />
                                         </td>
                                         <td><span class="badge" :class="row.status" x-text="row.status"></span></td>
                                         <td>
@@ -3834,6 +3838,8 @@ function adminV2() {
         reviewFilter: { status: null, search: '' },
         selectedReviewIds: {},
         reviewSelectionScope: 'ids',
+        reviewBulkBusy: false,
+        reviewBulkAction: null,
         activeReview: null,
         reviewDraft: {
             title: '',
@@ -4830,6 +4836,11 @@ function adminV2() {
             return Object.keys(this.selectedReviewIds).length;
         },
 
+        selectedPendingReviewCount() {
+            if (this.reviewSelectionScope === 'filter') return this.filterStatusCounts().pending || 0;
+            return Object.values(this.selectedReviewIds).filter(status => status === 'pending').length;
+        },
+
         reviewSelectionSummary() {
             const total = this.selectedReviewCount();
             if (!total) return 'Nothing selected';
@@ -4852,8 +4863,10 @@ function adminV2() {
         },
 
         async bulkReviews(action) {
+            if (this.reviewBulkBusy) return;
             const count = this.selectedReviewCount();
             if (!count) return;
+            if (action === 'approve' && !this.selectedPendingReviewCount()) return;
             if (action === 'delete' && !confirm(`Delete ${count} review row(s)?`)) return;
             const payload = {
                 action,
@@ -4864,16 +4877,24 @@ function adminV2() {
                     search: this.reviewFilter.search || null
                 }
             };
+            this.reviewBulkBusy = true;
+            this.reviewBulkAction = action;
             try {
                 const result = await this.request(`${this.apiBase}/reviews/bulk`, {
                     method: 'POST',
                     body: JSON.stringify(payload)
                 });
-                this.showToast(`${result.affected} review row(s) updated`);
+                this.showToast(action === 'approve'
+                    ? `${result.affected} review(s) approved · ${result.failed || 0} failed · ${result.skipped || 0} skipped`
+                    : `${result.affected} review row(s) updated`);
                 this.clearReviewSelection();
                 await this.loadReviews(false);
+                if (action === 'approve') await this.loadLibrary(false);
             } catch (error) {
                 this.showToast(error.message);
+            } finally {
+                this.reviewBulkBusy = false;
+                this.reviewBulkAction = null;
             }
         },
 

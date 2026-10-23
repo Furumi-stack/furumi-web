@@ -432,6 +432,8 @@ struct JobRunDetailDto {
 struct BulkReviewsResponse {
     ok: bool,
     affected: u64,
+    failed: u64,
+    skipped: u64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -989,8 +991,12 @@ pub async fn bulk_reviews(
     }
 
     let action = body.action.trim();
-    if action != "delete" && action != "requeue" {
+    if action != "delete" && action != "requeue" && action != "approve" {
         return Ok(json_error(StatusCode::BAD_REQUEST, "unknown bulk action"));
+    }
+
+    if action == "approve" {
+        return Json(approve_selected_reviews(&db, pool, &body).await?).into_response();
     }
 
     let mode = body.mode.as_deref().unwrap_or("ids");
@@ -1016,7 +1022,99 @@ pub async fn bulk_reviews(
         }
     };
 
-    Json(BulkReviewsResponse { ok: true, affected }).into_response()
+    Json(BulkReviewsResponse {
+        ok: true,
+        affected,
+        failed: 0,
+        skipped: 0,
+    })
+    .into_response()
+}
+
+fn selected_reviews_query(body: &BulkReviewsRequest) -> QueryBuilder<'static, Postgres> {
+    let mut qb = QueryBuilder::new("SELECT id FROM furumusic__pending_review WHERE 1=1");
+    if body.mode.as_deref() == Some("filter") {
+        let filter = body.filter.clone().unwrap_or_default();
+        push_review_filters(
+            &mut qb,
+            normalize_status(filter.status.as_deref()),
+            clean_search(filter.search.as_deref()).map(|s| format!("%{s}%")),
+        );
+    } else {
+        qb.push(" AND id = ANY(");
+        qb.push_bind(body.ids.clone().unwrap_or_default());
+        qb.push(")");
+    }
+    qb.push(" ORDER BY id");
+    qb
+}
+
+async fn approve_selected_reviews(
+    db: &Database,
+    pool: &PgPool,
+    body: &BulkReviewsRequest,
+) -> cot::Result<BulkReviewsResponse> {
+    let ids = selected_reviews_query(body)
+        .build_query_as::<IdRow>()
+        .fetch_all(pool)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let (config, _) = AppConfig::load_with_db(db).await;
+    let mut result = BulkReviewsResponse {
+        ok: true,
+        affected: 0,
+        failed: 0,
+        skipped: 0,
+    };
+    for row in ids {
+        let Some(mut review) = crate::scheduler::PendingReview::get_by_id(db, row.id)
+            .await
+            .map_err(|e| cot::Error::internal(e.to_string()))?
+        else {
+            result.skipped += 1;
+            continue;
+        };
+        if review.status_str() != "pending" {
+            result.skipped += 1;
+            continue;
+        }
+
+        // Claim one row at a time so overlapping bulk requests cannot import it twice.
+        let claimed = sqlx::query(
+            "UPDATE furumusic__pending_review SET status = 'processing', updated_at = $2 \
+             WHERE id = $1 AND status = 'pending'",
+        )
+        .bind(row.id)
+        .bind(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .execute(pool)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
+        if claimed.rows_affected() == 0 {
+            result.skipped += 1;
+            continue;
+        }
+
+        let approval = async {
+            let normalized = serde_json::from_str::<crate::agent::dto::NormalizedFields>(
+                review.result_json_str(),
+            )?;
+            finalize_review_approval(db, pool, &config, &mut review, &normalized).await
+        }
+        .await;
+        match approval {
+            Ok(()) => result.affected += 1,
+            Err(error) => {
+                tracing::error!(review_id = row.id, ?error, "bulk review approval failed");
+                review
+                    .set_failed(db, &format!("Review approval failed: {error:#}"))
+                    .await
+                    .map_err(|e| cot::Error::internal(e.to_string()))?;
+                result.failed += 1;
+            }
+        }
+    }
+    result.ok = result.failed == 0;
+    Ok(result)
 }
 
 pub async fn approve_review(
@@ -1042,31 +1140,9 @@ pub async fn approve_review(
         .await
         .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let context: serde_json::Value =
-        serde_json::from_str(review.context_json_str()).unwrap_or_default();
-    let input_path = review.input_path_str().to_owned();
     let (live_config, _) = AppConfig::load_with_db(&db).await;
-    let stats = crate::scheduler::ProcessingStats::get_by_review_id(&db, review_id)
-        .await
-        .unwrap_or(None);
-    let model_name = stats.as_ref().map(|s| s.model_name.to_string());
-
-    match crate::jobs::inbox_process::finalize_approved(
-        &db,
-        pool,
-        &live_config,
-        &input_path,
-        &normalized,
-        &context,
-        &live_config.agent_storage_dir,
-        model_name.as_deref(),
-    )
-    .await
-    {
-        Ok(()) => {
-            let _ = review.set_approved(&db).await;
-            Json(serde_json::json!({ "ok": true })).into_response()
-        }
+    match finalize_review_approval(&db, pool, &live_config, &mut review, &normalized).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(error) => {
             tracing::error!(?error, "review approval failed");
             let _ = review.set_rejected(&db).await;
@@ -1076,6 +1152,36 @@ pub async fn approve_review(
             ))
         }
     }
+}
+
+async fn finalize_review_approval(
+    db: &Database,
+    pool: &PgPool,
+    config: &AppConfig,
+    review: &mut crate::scheduler::PendingReview,
+    normalized: &crate::agent::dto::NormalizedFields,
+) -> anyhow::Result<()> {
+    let context: serde_json::Value =
+        serde_json::from_str(review.context_json_str()).unwrap_or_default();
+    let input_path = review.input_path_str().to_owned();
+    let stats = crate::scheduler::ProcessingStats::get_by_review_id(db, review.id_val())
+        .await
+        .unwrap_or(None);
+    let model_name = stats.as_ref().map(|s| s.model_name.to_string());
+
+    crate::jobs::inbox_process::finalize_approved(
+        db,
+        pool,
+        config,
+        &input_path,
+        normalized,
+        &context,
+        &config.agent_storage_dir,
+        model_name.as_deref(),
+    )
+    .await?;
+    review.set_approved(db).await?;
+    Ok(())
 }
 
 pub async fn jobs(
