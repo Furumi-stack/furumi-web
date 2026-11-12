@@ -1271,6 +1271,10 @@ pub async fn finalize_approved(
         }
     }
 
+    if let Err(error) = crate::import_playlists::link_media(pool, sha256, media_file.id_val()).await {
+        tracing::warn!(%error, "could not add imported tracks to destination playlists; will retry");
+    }
+
     if let Err(error) =
         crate::youtube::sync_target_playlists_for_imported_media(pool, media_file.id_val()).await
     {

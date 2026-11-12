@@ -78,10 +78,6 @@ impl Artist {
         Self::objects().all(db).await
     }
 
-    pub async fn get_by_id(db: &Database, artist_id: i64) -> cot::db::Result<Option<Self>> {
-        Self::get_by_primary_key(db, Auto::Fixed(artist_id)).await
-    }
-
     pub async fn create(
         db: &Database,
         name: &str,
@@ -102,40 +98,8 @@ impl Artist {
         Ok(artist)
     }
 
-    pub async fn update_name(&mut self, db: &Database, name: &str) -> cot::db::Result<()> {
-        self.name = LimitedString::new(name).unwrap();
-        self.name_sort = LimitedString::new(&normalize_name(name)).unwrap();
-        self.updated_at = now_iso();
-        self.save(db).await
-    }
-
-    pub async fn set_image_file_id(
-        &mut self,
-        db: &Database,
-        file_id: Option<i64>,
-    ) -> cot::db::Result<()> {
-        self.image_file_id = file_id;
-        self.updated_at = now_iso();
-        self.save(db).await
-    }
-
-    pub async fn delete_by_id(db: &Database, artist_id: i64) -> cot::db::Result<()> {
-        cot::db::query!(Artist, $id == Auto::Fixed(artist_id))
-            .delete(db)
-            .await?;
-        Ok(())
-    }
-
     pub fn id_val(&self) -> i64 {
         self.id.unwrap()
-    }
-
-    pub fn name_str(&self) -> &str {
-        &self.name
-    }
-
-    pub fn is_hidden(&self) -> bool {
-        self.is_hidden
     }
 }
 
@@ -286,46 +250,8 @@ impl ReleaseArtist {
             .await
     }
 
-    pub async fn find_by_artist(db: &Database, artist_id: i64) -> cot::db::Result<Vec<Self>> {
-        cot::db::query!(ReleaseArtist, $artist_id == artist_id)
-            .all(db)
-            .await
-    }
-
-    pub async fn count_by_artist(db: &Database, artist_id: i64) -> cot::db::Result<u64> {
-        cot::db::query!(ReleaseArtist, $artist_id == artist_id)
-            .count(db)
-            .await
-    }
-
-    pub async fn set_artists(
-        db: &Database,
-        release_id: i64,
-        artist_ids: &[i64],
-    ) -> cot::db::Result<()> {
-        // Remove existing links
-        cot::db::query!(ReleaseArtist, $release_id == release_id)
-            .delete(db)
-            .await?;
-        // Insert new links
-        for (pos, &aid) in artist_ids.iter().enumerate() {
-            let mut link = Self {
-                id: Auto::auto(),
-                release_id,
-                artist_id: aid,
-                position: pos as i32,
-            };
-            link.insert(db).await?;
-        }
-        Ok(())
-    }
-
     pub fn artist_id(&self) -> i64 {
         self.artist_id
-    }
-
-    pub fn release_id(&self) -> i64 {
-        self.release_id
     }
 }
 
@@ -377,12 +303,6 @@ pub struct TrackArtist {
 }
 
 impl TrackArtist {
-    pub async fn count_by_artist(db: &Database, artist_id: i64) -> cot::db::Result<u64> {
-        cot::db::query!(TrackArtist, $artist_id == artist_id)
-            .count(db)
-            .await
-    }
-
     pub async fn create(
         db: &Database,
         track_id: i64,
@@ -556,10 +476,6 @@ pub struct PlaybackState {
 }
 
 impl Track {
-    pub async fn list_all(db: &Database) -> cot::db::Result<Vec<Self>> {
-        Self::objects().all(db).await
-    }
-
     pub async fn create(
         db: &Database,
         title: &str,
@@ -2875,6 +2791,53 @@ pub mod db_migrations {
             &[Operation::custom(create_metadata_fix_history).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn add_listen_statistics_indexes(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db.raw("CREATE INDEX IF NOT EXISTS idx_listen_event_time ON furumusic__listen_event (started_at_ms DESC)").await?;
+        ctx.db.raw("CREATE INDEX IF NOT EXISTS idx_listen_event_content_plays ON furumusic__listen_event (content_id) WHERE qualified").await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0051AddListenStatisticsIndexes;
+    impl migrations::Migration for M0051AddListenStatisticsIndexes {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0051_add_listen_statistics_indexes";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0050_create_metadata_fix_history",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(add_listen_statistics_indexes).build()];
+    }
+
+    #[cot::db::migrations::migration_op]
+    async fn add_import_playlist_destinations(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db.raw("ALTER TABLE furumusic__torrent_session ADD COLUMN target_playlist_id BIGINT REFERENCES furumusic__playlist(id) ON DELETE SET NULL").await?;
+        ctx.db.raw("ALTER TABLE furumusic__local_upload ADD COLUMN target_playlist_id BIGINT REFERENCES furumusic__playlist(id) ON DELETE SET NULL").await?;
+        ctx.db.raw("CREATE TABLE furumusic__import_playlist_target (user_id BIGINT NOT NULL, playlist_id BIGINT NOT NULL REFERENCES furumusic__playlist(id) ON DELETE CASCADE, input_path TEXT NOT NULL, source_sha256 TEXT NOT NULL, media_file_id BIGINT REFERENCES furumusic__media_file(id) ON DELETE SET NULL, fulfilled_at TEXT, PRIMARY KEY(user_id,input_path))").await?;
+        ctx.db.raw("CREATE INDEX idx_import_playlist_pending_hash ON furumusic__import_playlist_target(source_sha256) WHERE fulfilled_at IS NULL").await?;
+        Ok(())
+    }
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0052AddImportPlaylistDestinations;
+    impl migrations::Migration for M0052AddImportPlaylistDestinations {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0052_add_import_playlist_destinations";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0051_add_listen_statistics_indexes",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(add_import_playlist_destinations).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2916,5 +2879,7 @@ pub mod db_migrations {
         &M0048AddPlaybackCoordinationColumns,
         &M0049AddLastfmLookupState,
         &M0050CreateMetadataFixHistory,
+        &M0051AddListenStatisticsIndexes,
+        &M0052AddImportPlaylistDestinations,
     ];
 }

@@ -75,6 +75,9 @@ impl Job for InboxDiscoverJob {
             outcome: run_outcome,
         };
 
+        if let Err(error) = crate::import_playlists::reconcile(&ctx.pool, None).await {
+            log.warn(&format!("Could not reconcile import playlists: {error}"));
+        }
         let config = &ctx.config;
 
         if config.agent_inbox_dir.is_empty() {

@@ -408,6 +408,8 @@ translations! {
     player_youtube_select_all: "Select all"                    , "Отметить все";
     player_youtube_clear_selection: "Clear selection"           , "Снять все";
     player_youtube_selected_count: "selected"                  , "выбрано";
+    player_import_destination: "Add downloads to a playlist" , "Добавить загруженное в плейлист";
+    player_import_destination_hint: "Selected audio tracks will be added automatically after processing, including tracks already in the library." , "Выбранные аудиотреки будут добавлены автоматически после обработки, включая уже имеющиеся в библиотеке.";
     player_youtube_destination: "Add imported tracks to playlist" , "Добавить импортированные треки в плейлист";
     player_youtube_no_destination: "Do not add to a playlist"   , "Не добавлять в плейлист";
     player_youtube_create_playlist: "Create a new playlist"     , "Создать новый плейлист";

@@ -232,6 +232,9 @@ struct AdminUserRowDto {
     is_active: bool,
     is_online: bool,
     last_seen_ms: Option<i64>,
+    plays: i64,
+    listened_seconds: i64,
+    last_play_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -257,7 +260,7 @@ struct AdminUserStatsDto {
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct AdminUserPlayDto {
-    history_id: i64,
+    history_id: String,
     played_at: String,
     duration_listened: Option<i32>,
     completed: bool,
@@ -1958,6 +1961,7 @@ pub async fn job_run_detail(
     session: Session,
     db: Database,
     pool: &PgPool,
+    job_name: &str,
     run_id: i64,
 ) -> cot::Result<cot::response::Response> {
     if let Err(response) = require_admin_json(&session, &db).await {
@@ -1967,9 +1971,10 @@ pub async fn job_run_detail(
         "SELECT id, job_name::text AS job_name, status::text AS status, started_at::text AS started_at, \
                 finished_at, duration_ms, trigger::text AS trigger, error_message, \
                 LEFT(COALESCE(log_output, ''), 1600) AS log_excerpt, log_output \
-         FROM furumusic__job_run WHERE id = $1",
+         FROM furumusic__job_run WHERE id = $1 AND job_name = $2",
     )
     .bind(run_id)
+    .bind(job_name)
     .fetch_optional(pool)
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
@@ -2662,6 +2667,9 @@ struct AdminUserSqlRow {
     email: Option<String>,
     role: String,
     is_active: bool,
+    plays: i64,
+    listened_seconds: i64,
+    last_play_ms: Option<i64>,
 }
 
 async fn load_admin_users_page(
@@ -2692,7 +2700,11 @@ async fn load_admin_users_page(
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
     let mut qb = QueryBuilder::<Postgres>::new(
-        "SELECT id, username::text, display_name, email, role::text, is_active FROM furumusic__user WHERE 1=1",
+        "SELECT id, username::text, display_name, email, role::text, is_active, \
+         (SELECT COUNT(*) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS plays, \
+         (SELECT (COALESCE(SUM(listened_ms), 0) / 1000)::bigint FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id) AS listened_seconds, \
+         (SELECT MAX(started_at_ms) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS last_play_ms \
+         FROM furumusic__user WHERE 1=1",
     );
     if let Some(pattern) = pattern.as_ref() {
         qb.push(" AND (username ILIKE ");
@@ -2735,7 +2747,11 @@ async fn load_admin_user_detail(
     user_id: i64,
 ) -> anyhow::Result<Option<AdminUserDetailDto>> {
     let row = sqlx::query_as::<_, AdminUserSqlRow>(
-        "SELECT id, username::text, display_name, email, role::text, is_active FROM furumusic__user WHERE id = $1",
+        "SELECT id, username::text, display_name, email, role::text, is_active, \
+         (SELECT COUNT(*) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS plays, \
+         (SELECT (COALESCE(SUM(listened_ms), 0) / 1000)::bigint FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id) AS listened_seconds, \
+         (SELECT MAX(started_at_ms) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS last_play_ms \
+         FROM furumusic__user WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -2759,17 +2775,17 @@ async fn load_admin_user_detail(
         lastfm_connected,
     ) = tokio::try_join!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM furumusic__play_history WHERE user_id = $1"
+            "SELECT COUNT(*) FROM furumusic__listen_event WHERE user_id = $1 AND qualified"
         )
         .bind(user_id)
         .fetch_one(pool),
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM furumusic__play_history WHERE user_id = $1 AND completed"
+            "SELECT COUNT(*) FROM furumusic__listen_event WHERE user_id = $1 AND qualified AND ended_reason = '\"finished\"'"
         )
         .bind(user_id)
         .fetch_one(pool),
         sqlx::query_scalar::<_, i64>(
-            "SELECT COALESCE(SUM(duration_listened), 0)::bigint FROM furumusic__play_history WHERE user_id = $1"
+            "SELECT (COALESCE(SUM(listened_ms), 0) / 1000)::bigint FROM furumusic__listen_event WHERE user_id = $1"
         )
         .bind(user_id)
         .fetch_one(pool),
@@ -2835,34 +2851,27 @@ async fn load_admin_user_recent_plays(
     limit: i64,
 ) -> anyhow::Result<Vec<AdminUserPlayDto>> {
     let rows = sqlx::query_as::<_, AdminUserPlaySqlRow>(
-        r#"SELECT ph.id AS history_id,
-                  ph.played_at::text AS played_at,
-                  ph.duration_listened,
-                  ph.completed,
-                  t.id AS track_id,
-                  t.title::text AS title,
-                  COALESCE(NULLIF(STRING_AGG(a.name::text, ', ' ORDER BY ta.position), ''), 'Unknown artist') AS artists,
-                  t.release_id,
-                  COALESCE(r.title::text, '') AS release_title,
-                  r.year AS release_year,
-                  t.cover_file_id,
-                  r.cover_file_id AS release_cover_file_id,
-                  t.duration_seconds AS track_duration_seconds,
-                  COALESCE(mf.uploader_name, 'UFO')::text AS uploader_name,
-                  mf.audio_format,
-                  mf.audio_bitrate
-           FROM furumusic__play_history ph
-           JOIN furumusic__track t ON t.id = ph.track_id
+        r#"SELECT le.listen_id AS history_id,
+                  to_timestamp(le.started_at_ms / 1000.0)::text AS played_at,
+                  LEAST(le.listened_ms / 1000, 2147483647)::integer AS duration_listened,
+                  le.ended_reason = '"finished"' AS completed,
+                  COALESCE(t.id, 0) AS track_id,
+                  COALESCE(le.metadata_json->>'title', 'Unknown track') AS title,
+                  COALESCE((SELECT string_agg(name, ', ') FROM jsonb_array_elements_text(
+                      COALESCE(le.metadata_json->'artist_names', '[]'::jsonb)) names(name)), 'Unknown artist') AS artists,
+                  COALESCE(t.release_id, 0) AS release_id,
+                  COALESCE(le.metadata_json->>'release_title', '') AS release_title,
+                  r.year AS release_year, t.cover_file_id, r.cover_file_id AS release_cover_file_id,
+                  COALESCE(le.track_duration_ms / 1000.0, 0)::float8 AS track_duration_seconds,
+                  COALESCE(mf.uploader_name, '')::text AS uploader_name,
+                  mf.audio_format, mf.audio_bitrate
+           FROM furumusic__listen_event le
+           LEFT JOIN furumusic__track_ref tr ON tr.content_id = le.content_id
+           LEFT JOIN furumusic__track t ON t.id = COALESCE(le.local_track_id, tr.local_track_id)
            LEFT JOIN furumusic__release r ON r.id = t.release_id
            LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
-           LEFT JOIN furumusic__track_artist ta ON ta.track_id = t.id AND ta.role = 'main'
-           LEFT JOIN furumusic__artist a ON a.id = ta.artist_id
-           WHERE ph.user_id = $1
-           GROUP BY ph.id, ph.played_at, ph.duration_listened, ph.completed, t.id, t.title,
-                    t.release_id, r.title, r.year, t.cover_file_id, r.cover_file_id,
-                    t.duration_seconds, mf.uploader_name, mf.audio_format, mf.audio_bitrate
-           ORDER BY ph.played_at DESC, ph.id DESC
-           LIMIT $2"#,
+           WHERE le.user_id = $1 AND le.qualified
+           ORDER BY le.started_at_ms DESC, le.listen_id DESC LIMIT $2"#,
     )
     .bind(user_id)
     .bind(limit)
@@ -2893,7 +2902,7 @@ async fn load_admin_user_recent_plays(
 
 #[derive(Debug, sqlx::FromRow)]
 struct AdminUserPlaySqlRow {
-    history_id: i64,
+    history_id: String,
     played_at: String,
     duration_listened: Option<i32>,
     completed: bool,
@@ -2930,6 +2939,9 @@ fn admin_user_row(
         email: row.email,
         role: row.role,
         is_active: row.is_active,
+        plays: row.plays,
+        listened_seconds: row.listened_seconds,
+        last_play_ms: row.last_play_ms,
         is_online: last_seen_ms.is_some_and(|value| value <= online_cutoff_ms),
         last_seen_ms,
     }
@@ -3549,13 +3561,13 @@ async fn fetch_library_item(
                         (COALESCE(NULLIF(STRING_AGG(DISTINCT a.name::text, ', '), ''), 'Unknown artist') || COALESCE(' / ' || r.year::text, '')) AS subtitle, \
                         r.is_hidden, COUNT(DISTINCT t.id)::bigint AS primary_count, \
                         COUNT(DISTINCT ra.artist_id)::bigint AS secondary_count, \
-                        COUNT(DISTINCT ph.id)::bigint AS tertiary_count, \
+                        COUNT(DISTINCT (ph.user_id, ph.listen_id)) FILTER (WHERE ph.listen_id IS NOT NULL)::bigint AS tertiary_count, \
                         r.updated_at::text AS updated_at \
                  FROM furumusic__release r \
                  LEFT JOIN furumusic__track t ON t.release_id = r.id \
                  LEFT JOIN furumusic__release_artist ra ON ra.release_id = r.id \
                  LEFT JOIN furumusic__artist a ON a.id = ra.artist_id \
-                 LEFT JOIN furumusic__play_history ph ON ph.track_id = t.id \
+                 LEFT JOIN furumusic__track_ref playback_ref ON playback_ref.local_track_id = t.id LEFT JOIN furumusic__listen_event ph ON ph.content_id = playback_ref.content_id AND ph.qualified \
                  WHERE r.id = $1 \
                  GROUP BY r.id",
             )
@@ -3585,13 +3597,13 @@ async fn fetch_library_item(
                 "SELECT t.id, t.title::text AS title, \
                         CONCAT(COALESCE(r.title::text, 'No release'), COALESCE(' / #' || t.track_number::text, '')) AS subtitle, \
                         t.is_hidden, COUNT(DISTINCT ta.artist_id)::bigint AS primary_count, \
-                        COUNT(DISTINCT ph.id)::bigint AS secondary_count, \
+                        COUNT(DISTINCT (ph.user_id, ph.listen_id)) FILTER (WHERE ph.listen_id IS NOT NULL)::bigint AS secondary_count, \
                         COUNT(DISTINCT pt.playlist_id)::bigint AS tertiary_count, \
                         t.updated_at::text AS updated_at \
                  FROM furumusic__track t \
                  LEFT JOIN furumusic__release r ON r.id = t.release_id \
                  LEFT JOIN furumusic__track_artist ta ON ta.track_id = t.id \
-                 LEFT JOIN furumusic__play_history ph ON ph.track_id = t.id \
+                 LEFT JOIN furumusic__track_ref playback_ref ON playback_ref.local_track_id = t.id LEFT JOIN furumusic__listen_event ph ON ph.content_id = playback_ref.content_id AND ph.qualified \
                  LEFT JOIN furumusic__playlist_track pt ON pt.track_id = t.id \
                  WHERE t.id = $1 \
                  GROUP BY t.id, r.title",
@@ -4362,13 +4374,13 @@ async fn load_release_items(
                 (COALESCE(NULLIF(STRING_AGG(DISTINCT a.name::text, ', '), ''), 'Unknown artist') || COALESCE(' / ' || r.year::text, '')) AS subtitle, \
                 r.is_hidden, COUNT(DISTINCT t.id)::bigint AS primary_count, \
                 COUNT(DISTINCT ra.artist_id)::bigint AS secondary_count, \
-                COUNT(DISTINCT ph.id)::bigint AS tertiary_count, \
+                COUNT(DISTINCT (ph.user_id, ph.listen_id)) FILTER (WHERE ph.listen_id IS NOT NULL)::bigint AS tertiary_count, \
                 r.updated_at::text AS updated_at \
          FROM furumusic__release r \
          LEFT JOIN furumusic__track t ON t.release_id = r.id \
          LEFT JOIN furumusic__release_artist ra ON ra.release_id = r.id \
          LEFT JOIN furumusic__artist a ON a.id = ra.artist_id \
-         LEFT JOIN furumusic__play_history ph ON ph.track_id = t.id \
+         LEFT JOIN furumusic__track_ref playback_ref ON playback_ref.local_track_id = t.id LEFT JOIN furumusic__listen_event ph ON ph.content_id = playback_ref.content_id AND ph.qualified \
          WHERE 1=1",
     );
     if let Some(pattern) = search_pattern {
@@ -4398,14 +4410,14 @@ async fn load_track_items(
         "SELECT t.id, t.title::text AS title, \
                 CONCAT(COALESCE(r.title::text, 'No release'), COALESCE(' / #' || t.track_number::text, '')) AS subtitle, \
                 t.is_hidden, COUNT(DISTINCT ta.artist_id)::bigint AS primary_count, \
-                COUNT(DISTINCT ph.id)::bigint AS secondary_count, \
+                COUNT(DISTINCT (ph.user_id, ph.listen_id)) FILTER (WHERE ph.listen_id IS NOT NULL)::bigint AS secondary_count, \
                 COUNT(DISTINCT pt.playlist_id)::bigint AS tertiary_count, \
                 t.updated_at::text AS updated_at \
          FROM furumusic__track t \
          LEFT JOIN furumusic__release r ON r.id = t.release_id \
          LEFT JOIN furumusic__track_artist ta ON ta.track_id = t.id \
          LEFT JOIN furumusic__artist a ON a.id = ta.artist_id \
-         LEFT JOIN furumusic__play_history ph ON ph.track_id = t.id \
+         LEFT JOIN furumusic__track_ref playback_ref ON playback_ref.local_track_id = t.id LEFT JOIN furumusic__listen_event ph ON ph.content_id = playback_ref.content_id AND ph.qualified \
          LEFT JOIN furumusic__playlist_track pt ON pt.track_id = t.id \
          WHERE 1=1",
     );

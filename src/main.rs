@@ -5,6 +5,7 @@ mod auth;
 mod config;
 mod federation;
 mod i18n;
+mod import_playlists;
 mod jobs;
 mod lastfm;
 mod library_cleanup;

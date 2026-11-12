@@ -607,7 +607,7 @@ async fn render_db_metrics(out: &mut String, pool: &PgPool) {
         out,
         pool,
         "furumusic_play_history_total",
-        "SELECT COUNT(*) FROM furumusic__play_history",
+        "SELECT COUNT(*) FROM furumusic__listen_event WHERE qualified",
     )
     .await;
 }
@@ -821,6 +821,9 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/admin/setup",
     "/admin/v2",
     "/admin/v2/api/dashboard",
+    "/admin/v2/api/statistics",
+    "/admin/v2/api/users/manage",
+    "/admin/v2/api/jobs/{name}/schedule",
     "/admin/v2/api/reviews",
     "/admin/v2/api/reviews/bulk",
     "/admin/v2/api/users",
@@ -844,40 +847,6 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/admin/v2/api/library/item/upload-image",
     "/admin/v2/api/library/bulk",
     "/admin/v2/api/library/releases/merge",
-    "/admin/debug",
-    "/admin/settings",
-    "/admin/settings/probe",
-    "/admin/users",
-    "/admin/users/new",
-    "/admin/users/{id}/edit",
-    "/admin/users/{id}/delete",
-    "/admin/artists",
-    "/admin/artists/new",
-    "/admin/artists/{id}/edit",
-    "/admin/artists/{id}/delete",
-    "/admin/artists/{id}/available-covers",
-    "/admin/artists/{id}/set-image",
-    "/admin/artists/{id}/upload-image",
-    "/admin/releases",
-    "/admin/releases/new",
-    "/admin/releases/{id}/edit",
-    "/admin/releases/{id}/delete",
-    "/admin/media-files",
-    "/admin/media-files/{id}/delete",
-    "/admin/jobs",
-    "/admin/jobs/metadata_backfill/run-options",
-    "/admin/jobs/{name}/run",
-    "/admin/jobs/{name}/toggle",
-    "/admin/jobs/{name}/cron",
-    "/admin/jobs/{name}/runs/{run_id}",
-    "/admin/jobs/{name}",
-    "/admin/reviews/clear",
-    "/admin/reviews/bulk",
-    "/admin/reviews",
-    "/admin/reviews/{id}",
-    "/admin/reviews/{id}/approve",
-    "/admin/reviews/{id}/reject",
-    "/admin/reviews/{id}/requeue",
     "/api/player/me",
     "/api/player/lastfm/status",
     "/api/player/lastfm/connect",
@@ -946,13 +915,18 @@ mod tests {
 
     #[test]
     fn known_http_route_matches_declared_dynamic_routes() {
+        assert_eq!(known_http_route("/admin/debug"), None);
+        assert_eq!(
+            known_http_route("/admin/v2/api/statistics"),
+            Some("/admin/v2/api/statistics")
+        );
         assert_eq!(
             known_http_route("/api/player/stream/42"),
             Some("/api/player/stream/{track_id}")
         );
         assert_eq!(
-            known_http_route("/admin/jobs/metadata_backfill/runs/123"),
-            Some("/admin/jobs/{name}/runs/{run_id}")
+            known_http_route("/admin/v2/api/jobs/metadata_backfill/runs/123"),
+            Some("/admin/v2/api/jobs/{name}/runs/{run_id}")
         );
         assert_eq!(
             known_http_route("/share/playlist/abcDEF123"),

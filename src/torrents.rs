@@ -58,6 +58,7 @@ pub struct TorrentJobDto {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub completed_at: Option<String>,
+    pub target_playlist_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +94,7 @@ pub struct TorrentPreviewRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct TorrentStartRequest {
+    pub target_playlist_id: Option<i64>,
     pub selected_files: Vec<usize>,
 }
 
@@ -153,6 +155,7 @@ struct TorrentJob {
     created_at: String,
     updated_at: String,
     completed_at: Option<String>,
+    target_playlist_id: Option<i64>,
 }
 
 #[derive(Debug, FromRow)]
@@ -176,6 +179,7 @@ struct TorrentSessionRow {
     created_at: String,
     updated_at: String,
     completed_at: Option<String>,
+    target_playlist_id: Option<i64>,
 }
 
 impl TorrentSessionRow {
@@ -226,6 +230,7 @@ impl TorrentSessionRow {
         let peer_stats = live.map(|l| &l.snapshot.peer_stats);
 
         TorrentJobDto {
+            target_playlist_id: self.target_playlist_id,
             id: self.id.clone(),
             name: self.name.clone(),
             info_hash: self.info_hash.clone(),
@@ -275,6 +280,7 @@ impl TorrentSessionRow {
             status: TorrentJobStatus::from_str(&self.status),
             output_dir: temp_root.join(&id).join("download"),
             selected_files,
+            target_playlist_id: self.target_playlist_id,
             handle: None,
             downloaded_bytes: i64_to_u64(self.downloaded_bytes),
             uploaded_bytes: i64_to_u64(self.uploaded_bytes),
@@ -341,6 +347,7 @@ impl TorrentJob {
         let peer_stats = live.map(|l| &l.snapshot.peer_stats);
 
         TorrentJobDto {
+            target_playlist_id: self.target_playlist_id,
             id: self.id.clone(),
             name: self.name.clone(),
             info_hash: self.info_hash.clone(),
@@ -430,7 +437,7 @@ impl TorrentService {
             r#"SELECT id, user_id, name, info_hash, source_kind, source_label, torrent_bytes,
                       files_json, selected_files_json, status, total_size, selected_size,
                       downloaded_bytes, uploaded_bytes, progress_percent, error,
-                      created_at, updated_at, completed_at
+                      created_at, updated_at, completed_at, target_playlist_id
                  FROM furumusic__torrent_session
                 WHERE user_id = $1
                 ORDER BY created_at DESC, id DESC
@@ -441,6 +448,7 @@ impl TorrentService {
         .fetch_all(pool)
         .await?;
 
+        crate::import_playlists::reconcile(pool, Some(user_id)).await?;
         let handles = {
             let jobs = self.jobs.lock().await;
             jobs.iter()
@@ -604,6 +612,7 @@ impl TorrentService {
             status: TorrentJobStatus::Preview,
             output_dir,
             selected_files,
+            target_playlist_id: None,
             handle: None,
             downloaded_bytes: 0,
             uploaded_bytes: 0,
@@ -727,6 +736,7 @@ impl TorrentService {
             status: TorrentJobStatus::Preview,
             output_dir,
             selected_files,
+            target_playlist_id: None,
             handle: None,
             downloaded_bytes: 0,
             uploaded_bytes: 0,
@@ -794,6 +804,7 @@ impl TorrentService {
         pool: &PgPool,
         id: &str,
         selected_files: Vec<usize>,
+        target_playlist_id: Option<i64>,
         inbox_dir: String,
         uploader_user_id: i64,
         proxy_url: Option<&str>,
@@ -806,6 +817,8 @@ impl TorrentService {
         }
         let inbox_dir = validate_inbox_dir(&inbox_dir)?;
 
+        crate::import_playlists::validate_target(pool, uploader_user_id, target_playlist_id)
+            .await?;
         self.ensure_memory_job(pool, uploader_user_id, id).await?;
 
         let (torrent_bytes, output_dir, selected_size) = {
@@ -823,7 +836,13 @@ impl TorrentService {
                 bail!("torrent job is already running");
             }
             validate_selection(&job.files, &selected_files)?;
+            if job.status != TorrentJobStatus::Preview
+                && job.target_playlist_id != target_playlist_id
+            {
+                bail!("playlist destination cannot change after a torrent has started");
+            }
             job.status = TorrentJobStatus::Downloading;
+            job.target_playlist_id = target_playlist_id;
             job.selected_files = selected_files.clone();
             job.downloaded_bytes = 0;
             job.uploaded_bytes = 0;
@@ -1032,9 +1051,14 @@ impl TorrentService {
         inbox_dir: &Path,
         uploader_user_id: i64,
     ) -> anyhow::Result<()> {
-        let (name, files, selected_files, output_dir) = {
+        // The playlist may have been deleted while this torrent was downloading.
+        let persisted_target = load_row(pool, uploader_user_id, id)
+            .await?
+            .target_playlist_id;
+        let (name, files, selected_files, output_dir, target_playlist_id) = {
             let mut jobs = self.jobs.lock().await;
             let job = jobs.get_mut(id).context("torrent job not found")?;
+            job.target_playlist_id = persisted_target;
             job.refresh_progress();
             job.status = TorrentJobStatus::Moving;
             job.updated_at = now_string();
@@ -1043,6 +1067,7 @@ impl TorrentService {
                 job.files.clone(),
                 job.selected_files.clone(),
                 job.output_dir.clone(),
+                job.target_playlist_id,
             )
         };
 
@@ -1052,6 +1077,7 @@ impl TorrentService {
         let destination_root = inbox_dir
             .join("user_uploads")
             .join(uploader_user_id.to_string())
+            .join(format!("torrent-{id}"))
             .join(sanitize_path_component(&name));
         tokio::fs::create_dir_all(&destination_root).await?;
 
@@ -1063,6 +1089,22 @@ impl TorrentService {
             let destination = safe_join(&destination_root, &file.components)?;
             if let Some(parent) = destination.parent() {
                 tokio::fs::create_dir_all(parent).await?;
+            }
+            if let Some(playlist_id) = target_playlist_id
+                && crate::jobs::inbox_discover::is_audio_file(&file.name)
+            {
+                let input_path =
+                    crate::media_paths::path_for_root(&inbox_dir.to_string_lossy(), &destination)
+                        .context("torrent destination escaped inbox")?;
+                let sha = crate::agent::mover::sha256_file(&source).await?;
+                crate::import_playlists::register(
+                    pool,
+                    uploader_user_id,
+                    playlist_id,
+                    &input_path,
+                    &sha,
+                )
+                .await?;
             }
             move_file(&source, &destination).await?;
         }
@@ -1103,7 +1145,7 @@ async fn load_row(pool: &PgPool, user_id: i64, id: &str) -> anyhow::Result<Torre
         r#"SELECT id, user_id, name, info_hash, source_kind, source_label, torrent_bytes,
                   files_json, selected_files_json, status, total_size, selected_size,
                   downloaded_bytes, uploaded_bytes, progress_percent, error,
-                  created_at, updated_at, completed_at
+                  created_at, updated_at, completed_at, target_playlist_id
              FROM furumusic__torrent_session
             WHERE id = $1 AND user_id = $2"#,
     )
@@ -1244,13 +1286,15 @@ async fn mark_job_started(
                   progress_percent = 0,
                   error = NULL,
                   updated_at = $4,
-                  completed_at = NULL
+                  completed_at = NULL,
+                  target_playlist_id = $5
             WHERE id = $1"#,
     )
     .bind(id)
     .bind(serde_json::to_string(selected_files)?)
     .bind(u64_to_i64(dto.selected_size))
     .bind(now_string())
+    .bind(dto.target_playlist_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -1432,5 +1476,135 @@ async fn move_file(source: &Path, destination: &Path) -> anyhow::Result<()> {
             Ok(())
         }
         Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(test)]
+mod playlist_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL in FURU_IMPORT_TEST_DATABASE_URL"]
+    async fn torrent_playlist_survives_restore_and_registers_selected_audio() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&std::env::var("FURU_IMPORT_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        sqlx::raw_sql(r#"
+            CREATE TEMP TABLE furumusic__playlist(id bigint PRIMARY KEY,owner_id bigint);
+            INSERT INTO furumusic__playlist VALUES (10,1);
+            CREATE TEMP TABLE furumusic__import_playlist_target(user_id bigint,playlist_id bigint,input_path text,source_sha256 text,media_file_id bigint,fulfilled_at text,PRIMARY KEY(user_id,input_path));
+            CREATE TEMP TABLE furumusic__torrent_session(
+                id text PRIMARY KEY,user_id bigint,name text,info_hash text,source_kind text,source_label text,torrent_bytes bytea,
+                files_json text,selected_files_json text,status text,total_size bigint DEFAULT 0,selected_size bigint DEFAULT 0,
+                downloaded_bytes bigint DEFAULT 0,uploaded_bytes bigint DEFAULT 0,progress_percent float8 DEFAULT 0,
+                error text,created_at text,updated_at text,completed_at text,target_playlist_id bigint);
+        "#).execute(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!("furumi-torrent-test-{}", Uuid::new_v4()));
+        let mut service = TorrentService::new(Arc::new(OnceCell::new()));
+        service.temp_root = root.join("torrents");
+        let output = service.temp_root.join("job/download");
+        tokio::fs::create_dir_all(&output).await.unwrap();
+        let files: Vec<_> = ["a.flac", "b.mp3", "cover.jpg"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| TorrentFileDto {
+                index,
+                name: name.to_string(),
+                components: vec![name.to_string()],
+                length: 3,
+                selected: index != 1,
+            })
+            .collect();
+        for file in &files {
+            tokio::fs::write(output.join(&file.name), b"abc")
+                .await
+                .unwrap();
+        }
+        let mut job = TorrentJob {
+            id: "job".into(),
+            user_id: 1,
+            name: "Soundtrack".into(),
+            info_hash: "hash".into(),
+            source_kind: "torrent_file".into(),
+            source_label: None,
+            torrent_bytes: vec![],
+            files,
+            selected_files: vec![0, 2],
+            target_playlist_id: None,
+            output_dir: output,
+            status: TorrentJobStatus::Preview,
+            handle: None,
+            downloaded_bytes: 0,
+            uploaded_bytes: 0,
+            progress_percent: 0.0,
+            error: None,
+            created_at: now_string(),
+            updated_at: now_string(),
+            completed_at: None,
+        };
+        sqlx::query("INSERT INTO furumusic__torrent_session (id,user_id,name,info_hash,source_kind,torrent_bytes,files_json,selected_files_json,status,created_at,updated_at) VALUES ('job',1,'Soundtrack','hash','torrent_file',$1,$2,'[0,2]','resolving',$3,$3)")
+            .bind(Vec::<u8>::new()).bind(serde_json::to_string(&job.files).unwrap()).bind(now_string()).execute(&pool).await.unwrap();
+        update_resolved_job(&pool, &job).await.unwrap();
+        job.target_playlist_id = Some(10);
+        mark_job_started(&pool, "job", &[0, 2], &job.dto())
+            .await
+            .unwrap();
+        let restored = load_row(&pool, 1, "job")
+            .await
+            .unwrap()
+            .into_job(&service.temp_root)
+            .unwrap();
+        assert_eq!(restored.target_playlist_id, Some(10));
+        assert_eq!(restored.dto().target_playlist_id, Some(10));
+        service.jobs.lock().await.insert("job".into(), restored);
+        let inbox = root.join("inbox");
+        service
+            .finalize_completed(&pool, "job", &inbox, 1)
+            .await
+            .unwrap();
+        let paths: Vec<String> =
+            sqlx::query_scalar("SELECT input_path FROM furumusic__import_playlist_target")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(paths, vec!["user_uploads/1/torrent-job/Soundtrack/a.flac"]);
+        assert!(inbox.join(&paths[0]).exists());
+        assert!(
+            !inbox
+                .join("user_uploads/1/torrent-job/Soundtrack/b.mp3")
+                .exists()
+        );
+        assert_eq!(load_row(&pool, 1, "job").await.unwrap().status, "complete");
+        // Deleting the destination while downloading clears its persisted FK;
+        // an older in-memory choice must not prevent the audio from being imported.
+        sqlx::query("UPDATE furumusic__torrent_session SET target_playlist_id=NULL WHERE id='job'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM furumusic__playlist WHERE id=10")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let source = service.temp_root.join("job/download");
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::write(source.join("a.flac"), b"abc")
+            .await
+            .unwrap();
+        service
+            .finalize_completed(&pool, "job", &inbox, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .memory_job_dto("job")
+                .await
+                .unwrap()
+                .target_playlist_id,
+            None
+        );
+        tokio::fs::remove_dir_all(root).await.unwrap();
+        pool.close().await;
     }
 }

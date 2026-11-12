@@ -2089,91 +2089,15 @@ async fn sync_target_playlist_tracks_for_user(pool: &PgPool, user_id: i64) -> an
     .await?;
 
     for (playlist_id, owner_id, track_id, _, _) in candidates {
-        append_track_to_target_playlist(pool, owner_id, playlist_id, track_id).await?;
-    }
-    Ok(())
-}
-
-async fn append_track_to_target_playlist(
-    pool: &PgPool,
-    user_id: i64,
-    playlist_id: i64,
-    track_id: i64,
-) -> anyhow::Result<bool> {
-    let mut transaction = pool.begin().await?;
-    let playlist: Option<i64> = sqlx::query_scalar(
-        r#"SELECT id FROM furumusic__playlist
-           WHERE id = $1 AND owner_id = $2
-           FOR UPDATE"#,
-    )
-    .bind(playlist_id)
-    .bind(user_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if playlist.is_none() {
-        transaction.rollback().await?;
-        return Ok(false);
-    }
-
-    let already_present: bool = sqlx::query_scalar(
-        r#"SELECT EXISTS (
-               SELECT 1 FROM furumusic__playlist_track
-               WHERE playlist_id = $1 AND track_id = $2
-           )"#,
-    )
-    .bind(playlist_id)
-    .bind(track_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if already_present {
-        transaction.commit().await?;
-        return Ok(false);
-    }
-
-    let position: i64 = sqlx::query_scalar(
-        r#"SELECT COALESCE(MAX(position), -1)::bigint + 1
-           FROM furumusic__playlist_track WHERE playlist_id = $1"#,
-    )
-    .bind(playlist_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    let position = i32::try_from(position).context("target playlist has too many tracks")?;
-    let now = now_string();
-    sqlx::query(
-        r#"INSERT INTO furumusic__playlist_track
-              (playlist_id, track_id, position, added_at, added_by_user_id)
-           VALUES ($1, $2, $3, $4, $5)"#,
-    )
-    .bind(playlist_id)
-    .bind(track_id)
-    .bind(position)
-    .bind(&now)
-    .bind(user_id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query("UPDATE furumusic__playlist SET updated_at = $1 WHERE id = $2")
-        .bind(&now)
-        .bind(playlist_id)
-        .execute(&mut *transaction)
-        .await?;
-    transaction.commit().await?;
-
-    if let Err(error) = crate::federation::devices::record_playlist_tracks_added(
-        pool,
-        user_id,
-        playlist_id,
-        &[track_id],
-    )
-    .await
-    {
-        tracing::warn!(
+        crate::import_playlists::append_track_to_target_playlist(
+            pool,
+            owner_id,
             playlist_id,
             track_id,
-            %error,
-            "federation operation for an automatic YouTube playlist addition was not recorded"
-        );
+        )
+        .await?;
     }
-    Ok(true)
+    Ok(())
 }
 
 async fn refresh_parent(pool: &PgPool, job_id: &str) -> anyhow::Result<()> {

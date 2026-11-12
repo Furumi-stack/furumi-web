@@ -785,6 +785,7 @@ document.addEventListener('alpine:init', () => {
         progress: 0,
         _saveTimer: null,
         _historyRecorded: false,
+        _historyTrack: null,
         _nowPlayingSent: false,
         _playbackStartedAt: null,
         _listenId: null,
@@ -836,6 +837,7 @@ document.addEventListener('alpine:init', () => {
                 this._sendNowPlaying();
             });
             audio.addEventListener('pause', () => {
+                this._trackListenedDelta();
                 this.isPlaying = false;
                 this._lastAudioTime = audio.currentTime || 0;
             });
@@ -858,8 +860,19 @@ document.addEventListener('alpine:init', () => {
             }
 
             // Save state on page unload
-            window.addEventListener('beforeunload', () => {
-                if (this._isLocalPlaybackDevice()) this._saveStateSync();
+            window.addEventListener('pagehide', () => {
+                if (this._isLocalPlaybackDevice()) {
+                    this._saveStateSync();
+                    this._recordHistory('stopped', true);
+                }
+            });
+            window.addEventListener('pageshow', (event) => {
+                if (event.persisted && this._historyRecorded) {
+                    this._historyRecorded = false;
+                    this._resetPlaybackTracking();
+                    this._lastAudioTime = audio.currentTime || 0;
+                    if (this.isPlaying) this._playbackStartedAt = Math.floor(Date.now() / 1000);
+                }
             });
         },
 
@@ -928,7 +941,9 @@ document.addEventListener('alpine:init', () => {
         },
 
         _playLocal(track, options = {}) {
+            this._recordHistory('replaced');
             this.currentTrack = track;
+            this._historyTrack = track;
             this._prefetchedQueueKey = null;
             Alpine.store('queue')?.syncCurrentIndexToTrack(track);
             this._localSourceTrackId = track.id;
@@ -1060,7 +1075,7 @@ document.addEventListener('alpine:init', () => {
             const queue = Alpine.store('queue');
             if (queue.tracks.length === 0) return;
 
-            this._recordHistoryIfListenThresholdReached();
+            this._recordHistory('skipped');
 
             let nextIdx;
             if (this.repeatMode === 'one') {
@@ -1481,6 +1496,7 @@ document.addEventListener('alpine:init', () => {
                                     : tracks[idx];
                                 if (currentTrack) {
                                     this.currentTrack = currentTrack;
+                                    this._historyTrack = currentTrack;
                                     queue.syncCurrentIndexToTrack(currentTrack);
                                     this._localSourceTrackId = currentTrack.id;
                                     this._historyRecorded = false;
@@ -1504,38 +1520,40 @@ document.addEventListener('alpine:init', () => {
             } catch {}
         },
 
-        _recordHistory(endedReason) {
-            if (this._historyRecorded || !this.currentTrack) return;
-            if (!Number.isInteger(Number(this.currentTrack.id)) || this.currentTrack.federated_cache) {
-                return;
-            }
-            this._historyRecorded = true;
+        _recordHistory(endedReason, unloading = false) {
+            const track = this._historyTrack;
+            if (this._historyRecorded || !track || !this._playbackStartedAt) return;
+            if (!Number.isInteger(Number(track.id)) || track.federated_cache) return;
+            this._trackListenedDelta();
             const completed = endedReason === 'finished';
             const listenedSeconds = this._historyListenedSeconds(completed);
-            fetch('/api/player/history', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    track_id: this.currentTrack.id,
-                    listen_id: this._listenId,
-                    started_at: this._playbackStartedAt,
-                    duration_listened: listenedSeconds,
-                    completed: completed,
-                    ended_reason: endedReason,
-                }),
-            }).catch(() => {});
-        },
-
-        _recordHistoryIfListenThresholdReached() {
-            if (this._historyRecorded || !this.currentTrack) return false;
-            this._trackListenedDelta();
-            const duration = this._trackDuration();
-            if (duration <= 0) return false;
-            const listened = Math.floor(Number(this._listenedSeconds || 0));
-            const threshold = Math.ceil(duration / 2);
-            if (threshold <= 0 || listened < threshold) return false;
-            this._recordHistory('unknown');
-            return true;
+            if (!completed && listenedSeconds < 5) return;
+            const listenId = this._listenId;
+            const body = JSON.stringify({
+                track_id: track.id,
+                listen_id: listenId,
+                started_at: this._playbackStartedAt,
+                duration_listened: listenedSeconds,
+                completed,
+                ended_reason: endedReason,
+            });
+            this._historyRecorded = true;
+            if (unloading && navigator.sendBeacon('/api/player/history', new Blob([body], {type:'application/json'}))) return;
+            // Retry the captured event, never the next track. The server deduplicates by listen_id.
+            const send = async () => {
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    try {
+                        const response = await fetch('/api/player/history', {
+                            method: 'POST', headers: {'Content-Type':'application/json'}, body, keepalive: true,
+                        });
+                        if (response.ok) return;
+                        if (response.status >= 400 && response.status < 500) break;
+                    } catch (_) {}
+                    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+                if (this._listenId === listenId) this._historyRecorded = false;
+            };
+            send();
         },
 
         _resetPlaybackTracking() {
@@ -1580,16 +1598,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         _historyListenedSeconds(completed) {
-            const duration = this._trackDuration();
-            const listened = Number(this._listenedSeconds || 0);
-            const finalGrace = completed ? 1 : 0;
-            const precise = Math.floor(listened + finalGrace);
-            if (precise > 0) return precise;
-            const current = Number(audio.currentTime || this.currentTime || 0);
-            if (duration > 0 && Number.isFinite(current)) {
-                return Math.floor(Math.min(current, duration));
-            }
-            return Math.floor(current || 0);
+            // Seeking is not listening time. Allow rounding grace only at a natural finish.
+            return Math.max(0, Math.floor(Number(this._listenedSeconds || 0) + (completed ? 1 : 0)));
         },
 
         _sendNowPlaying() {
@@ -4632,6 +4642,12 @@ document.addEventListener('alpine:init', () => {
         youtubeUrl: '',
         youtubePreview: null,
         youtubePreviewSelected: new Set(),
+        torrentPlaylistChoice: '',
+        torrentNewPlaylistTitle: '',
+        localPlaylistChoice: '',
+        localNewPlaylistTitle: '',
+        localPlaylistLocked: false,
+        localTargetPlaylistId: null,
         youtubePlaylistChoice: '',
         youtubeNewPlaylistTitle: '',
         youtubePlaylistSyncKey: '',
@@ -4704,6 +4720,7 @@ document.addEventListener('alpine:init', () => {
         open() {
             if (!this.downloadsEnabled) return;
             this.modal = true;
+            Alpine.store('playlists')?.reload?.();
             this.message = '';
             this.error = false;
             if (this.sourceTab === 'youtube') this.loadYoutubeJobs();
@@ -4874,34 +4891,41 @@ document.addEventListener('alpine:init', () => {
             return this.youtubeOwnedPlaylists().find(playlist => Number(playlist.id) === wanted)?.title || '';
         },
 
-        async resolveYoutubeTargetPlaylist() {
-            if (this.youtubePlaylistChoice !== '__new__') {
-                const playlistId = Number(this.youtubePlaylistChoice || 0);
+        importPlaylistChoiceChanged(kind) {
+            const choice = kind + 'PlaylistChoice';
+            const title = kind + 'NewPlaylistTitle';
+            if (this[choice] !== '__new__' || String(this[title] || '').trim()) return;
+            const file = this.localFiles[0];
+            const suggestion = kind === 'torrent' ? this.previewData?.name
+                : (file?.webkitRelativePath?.split('/').slice(0, -1).join('/') || (this.localFiles.length === 1 ? file?.name?.replace(/\.[^.]+$/, '') : ''));
+            this[title] = String(suggestion || '').slice(0,255);
+        },
+        importDestinationValid(kind) {
+            return this[kind + 'PlaylistChoice'] !== '__new__' || String(this[kind + 'NewPlaylistTitle'] || '').trim().length > 0;
+        },
+        torrentDestinationLocked() {
+            return this.loading || (this.currentJob && !['preview', 'resolving'].includes(this.currentJob.status));
+        },
+        async resolveYoutubeTargetPlaylist() { return this.resolveImportTargetPlaylist('youtube'); },
+        async resolveImportTargetPlaylist(kind) {
+            const choice = kind + 'PlaylistChoice';
+            const titleKey = kind + 'NewPlaylistTitle';
+            if (this[choice] !== '__new__') {
+                const playlistId = Number(this[choice] || 0);
                 return playlistId > 0 ? playlistId : null;
             }
-
-            const title = String(this.youtubeNewPlaylistTitle || '').trim();
+            const title = String(this[titleKey] || '').trim();
             if (!title) throw new Error(T.youtubePlaylistCreateFailed);
             const res = await fetch('/api/player/playlists', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title }),
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({title}),
             });
             const playlist = await res.json().catch(() => null);
-            if (!res.ok || Number(playlist?.id || 0) <= 0) {
-                throw new Error(playlist?.error || T.youtubePlaylistCreateFailed);
-            }
-
-            // Switch to the created playlist before starting the job. If the
-            // YouTube request fails, retrying will reuse it instead of creating
-            // another playlist with the same name.
-            this.youtubePlaylistChoice = String(playlist.id);
+            if (!res.ok || Number(playlist?.id || 0) <= 0) throw new Error(playlist?.error || T.youtubePlaylistCreateFailed);
+            // Retrying an upload reuses this playlist, including after a failed start request.
+            this[choice] = String(playlist.id);
             const playlists = Alpine.store('playlists');
             if (playlists) {
-                playlists.list = [
-                    ...(playlists.list || []).filter(item => Number(item.id) !== Number(playlist.id)),
-                    playlist,
-                ];
+                playlists.list = [...(playlists.list || []).filter(item => Number(item.id) !== Number(playlist.id)), playlist];
                 await playlists.reload();
             }
             return Number(playlist.id);
@@ -5325,6 +5349,7 @@ document.addEventListener('alpine:init', () => {
 
         actionButtonDisabled() {
             return this.loading
+                || (!this.isCurrentDownloading() && !this.importDestinationValid('torrent'))
                 || this.isCurrentCompletedLocked()
                 || this.normalizedStatus(this.currentJob) === 'resolving'
                 || !this.previewData
@@ -5341,7 +5366,8 @@ document.addEventListener('alpine:init', () => {
         sessionMeta(job) {
             if (!job) return '';
             const size = this.bytes(job.selected_size || job.total_size);
-            return this.progressValue(job).toFixed(1) + '% - ' + size;
+            const title = this.youtubePlaylistTitle(job.target_playlist_id);
+            return this.progressValue(job).toFixed(1) + '% - ' + size + (title ? ' · ' + T.youtubePlaylist + ': ' + title : '');
         },
 
         async loadAgentStatus() {
@@ -5878,6 +5904,8 @@ document.addEventListener('alpine:init', () => {
             this.uploadProgressText = '';
             this.previewData = preview;
             this.currentJob = job;
+            this.torrentPlaylistChoice = job?.target_playlist_id ? String(job.target_playlist_id) : '';
+            this.torrentNewPlaylistTitle = '';
             const selected = Array.isArray(data.selected_files) && data.selected_files.length
                 ? data.selected_files
                 : (preview.files || []).filter(f => f.selected).map(f => f.index);
@@ -5893,6 +5921,7 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.loadTorrentsFailed);
                 this.sessions = Array.isArray(data) ? data : [];
+                if (this.sessions.some(job => job.target_playlist_id)) Alpine.store('playlists')?.reload?.();
                 this._syncCurrentJobFromSessions();
                 await this._refreshResolvedSelection();
             } catch (err) {
@@ -5982,6 +6011,10 @@ document.addEventListener('alpine:init', () => {
             this.localFiles = selected;
             this.localFilesBatchId = selected.length ? crypto.randomUUID() : null;
             this.localFileUploadIds = new WeakMap();
+            this.localPlaylistLocked = false;
+            this.localTargetPlaylistId = null;
+            this.localPlaylistChoice = '';
+            this.localNewPlaylistTitle = '';
             this.localFilesDragging = false;
             this.uploadProgress = 0;
             this.uploadProgressText = '';
@@ -5997,6 +6030,10 @@ document.addEventListener('alpine:init', () => {
             this.localFiles = [];
             this.localFilesBatchId = null;
             this.localFileUploadIds = new WeakMap();
+            this.localPlaylistLocked = false;
+            this.localTargetPlaylistId = null;
+            this.localPlaylistChoice = '';
+            this.localNewPlaylistTitle = '';
             this.uploadProgress = 0;
             this.uploadProgressText = '';
         },
@@ -6033,6 +6070,7 @@ document.addEventListener('alpine:init', () => {
                 }
                 xhr.setRequestHeader('X-Furumusic-Upload-Id', uploadId);
                 xhr.setRequestHeader('X-Furumusic-Upload-Batch-Id', this.localFilesBatchId);
+                if (this.localTargetPlaylistId) xhr.setRequestHeader('X-Furumusic-Target-Playlist-Id', String(this.localTargetPlaylistId));
                 if (file.webkitRelativePath) {
                     xhr.setRequestHeader('X-Furumusic-Relative-Path', encodeURIComponent(file.webkitRelativePath));
                 }
@@ -6055,7 +6093,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async uploadLocalFiles() {
-            if (this.localFilesUploading || this.localFiles.length === 0) return;
+            if (this.localFilesUploading || this.localFiles.length === 0 || !this.importDestinationValid('local')) return;
             const batchId = this.localFilesBatchId;
             this.localFilesUploading = true;
             this.uploadProgress = 0;
@@ -6063,7 +6101,13 @@ document.addEventListener('alpine:init', () => {
             this._setMessage(T.uploadingFiles);
             const totalBytes = this.localUploadBytes();
             let loadedBefore = 0;
+            let batchStarted = false;
             try {
+                if (!this.localPlaylistLocked) {
+                    this.localTargetPlaylistId = await this.resolveImportTargetPlaylist('local');
+                    this.localPlaylistLocked = true;
+                }
+                batchStarted = true;
                 for (const file of [...this.localFiles]) {
                     const data = await this.uploadLocalFile(file, loadedBefore, totalBytes);
                     if (data?.upload) {
@@ -6085,7 +6129,7 @@ document.addEventListener('alpine:init', () => {
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
-                try {
+                if (batchStarted) try {
                     const response = await fetch('/api/player/uploads/local', {
                         method: 'POST',
                         headers: {
@@ -6111,6 +6155,7 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json().catch(() => null);
                 if (!res.ok) throw new Error(data?.error || T.fileUploadLoadFailed);
                 this.localUploadHistory = Array.isArray(data) ? data : [];
+                if (this.localUploadHistory.some(item => item.target_playlist_id)) Alpine.store('playlists')?.reload?.();
             } catch (err) {
                 if (!silent) this._setMessage(err.message || T.fileUploadLoadFailed, true);
             } finally {
@@ -6361,6 +6406,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async start() {
+            if (!this.importDestinationValid('torrent')) return;
             if (!this.previewData || this.loading) return;
             const selected = this.selectedArray();
             if (selected.length === 0) {
@@ -6371,10 +6417,11 @@ document.addEventListener('alpine:init', () => {
             this.loading = true;
             this._setMessage(T.startingDownload);
             try {
+                const targetPlaylistId = await this.resolveImportTargetPlaylist('torrent');
                 const res = await fetch(`/api/player/torrents/${this.previewData.id}/start`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ selected_files: selected }),
+                    body: JSON.stringify({ selected_files: selected, target_playlist_id: targetPlaylistId }),
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.startFailed);

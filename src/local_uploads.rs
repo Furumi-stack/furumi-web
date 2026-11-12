@@ -103,6 +103,7 @@ pub struct LocalUploadDto {
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,
+    pub target_playlist_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -117,6 +118,7 @@ struct LocalUploadRow {
     created_at: String,
     updated_at: String,
     completed_at: Option<String>,
+    target_playlist_id: Option<i64>,
 }
 
 impl LocalUploadRow {
@@ -130,6 +132,7 @@ impl LocalUploadRow {
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
             completed_at: self.completed_at.clone(),
+            target_playlist_id: self.target_playlist_id,
         }
     }
 }
@@ -141,18 +144,20 @@ pub async fn create(
     filename: &str,
     size_bytes: u64,
     inbox_path: &str,
+    target_playlist_id: Option<i64>,
 ) -> anyhow::Result<()> {
     let now = now_string();
     let created = sqlx::query(
         r#"INSERT INTO furumusic__local_upload
               (id, user_id, filename, size_bytes, status, inbox_path, error,
-               created_at, updated_at, completed_at)
-           VALUES ($1, $2, $3, $4, 'uploading', $5, NULL, $6, $6, NULL)
+               created_at, updated_at, completed_at, target_playlist_id)
+           VALUES ($1, $2, $3, $4, 'uploading', $5, NULL, $6, $6, NULL, $7)
            ON CONFLICT (id) DO UPDATE SET status='uploading', error=NULL, updated_at=$6
            WHERE furumusic__local_upload.user_id=$2
              AND furumusic__local_upload.inbox_path=$5
              AND furumusic__local_upload.size_bytes=$4
-             AND furumusic__local_upload.status IN ('uploading', 'failed')"#,
+             AND furumusic__local_upload.status IN ('uploading', 'failed')
+             AND furumusic__local_upload.target_playlist_id IS NOT DISTINCT FROM $7"#,
     )
     .bind(id)
     .bind(user_id)
@@ -160,6 +165,7 @@ pub async fn create(
     .bind(i64::try_from(size_bytes).unwrap_or(i64::MAX))
     .bind(inbox_path)
     .bind(now)
+    .bind(target_playlist_id)
     .execute(pool)
     .await?;
     if created.rows_affected() == 0 {
@@ -178,7 +184,7 @@ pub async fn successful_receipt(
 ) -> anyhow::Result<Option<LocalUploadDto>> {
     let row = sqlx::query_as::<_, LocalUploadRow>(
         r#"SELECT id, user_id, filename, size_bytes, status, inbox_path, error,
-                  created_at, updated_at, completed_at
+                  created_at, updated_at, completed_at, target_playlist_id
            FROM furumusic__local_upload WHERE id=$1 AND user_id=$2 AND inbox_path=$3
              AND status NOT IN ('uploading','failed')"#,
     )
@@ -205,9 +211,10 @@ pub async fn list(
     inbox_dir: &str,
 ) -> anyhow::Result<Vec<LocalUploadDto>> {
     sync_statuses(pool, user_id, inbox_dir).await?;
+    crate::import_playlists::reconcile(pool, Some(user_id)).await?;
     let rows: Vec<LocalUploadRow> = sqlx::query_as(
         r#"SELECT id, user_id, filename, size_bytes, status, inbox_path, error,
-                  created_at, updated_at, completed_at
+                  created_at, updated_at, completed_at, target_playlist_id
            FROM furumusic__local_upload
            WHERE user_id = $1
            ORDER BY created_at DESC, id DESC
@@ -244,7 +251,7 @@ async fn sync_statuses(pool: &PgPool, user_id: i64, inbox_dir: &str) -> anyhow::
 
     let rows: Vec<LocalUploadRow> = sqlx::query_as(
         r#"SELECT id, user_id, filename, size_bytes, status, inbox_path, error,
-                  created_at, updated_at, completed_at
+                  created_at, updated_at, completed_at, target_playlist_id
            FROM furumusic__local_upload
            WHERE user_id = $1 AND status <> 'complete'"#,
     )
@@ -353,7 +360,7 @@ async fn update_status(
 async fn load(pool: &PgPool, user_id: i64, id: &str) -> anyhow::Result<LocalUploadRow> {
     sqlx::query_as(
         r#"SELECT id, user_id, filename, size_bytes, status, inbox_path, error,
-                  created_at, updated_at, completed_at
+                  created_at, updated_at, completed_at, target_playlist_id
            FROM furumusic__local_upload WHERE id = $1 AND user_id = $2"#,
     )
     .bind(id)

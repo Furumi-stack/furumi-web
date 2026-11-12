@@ -80,19 +80,8 @@ impl ScheduledJob {
         cron_expression: &str,
     ) -> cot::db::Result<Self> {
         if let Some(mut existing) = Self::get_by_name(db, name).await? {
-            // Update cron expression and description if they changed
+            // The registered schedule is a default for new jobs; retain admin overrides.
             let mut changed = false;
-            if existing.cron_expression.as_str() != cron_expression {
-                tracing::info!(
-                    job = name,
-                    old = existing.cron_expression.as_str(),
-                    new = cron_expression,
-                    "Updating cron expression"
-                );
-                existing.cron_expression = LimitedString::new(cron_expression).unwrap();
-                existing.next_run_at = compute_next_run(cron_expression);
-                changed = true;
-            }
             if existing.description != description {
                 existing.description = description.to_owned();
                 changed = true;
@@ -129,10 +118,6 @@ impl ScheduledJob {
 
     pub fn cron_expression_str(&self) -> &str {
         &self.cron_expression
-    }
-
-    pub fn enabled(&self) -> bool {
-        self.enabled
     }
 
     pub fn last_run_at_str(&self) -> &str {
@@ -683,69 +668,6 @@ impl ProcessingStats {
             .await?;
         Ok(all.into_iter().next())
     }
-
-    pub async fn list_by_review_ids(
-        pool: &sqlx::PgPool,
-        ids: &[i64],
-    ) -> anyhow::Result<HashMap<i64, ProcessingStatsRow>> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        // Build comma-separated ID list
-        let id_list: String = ids
-            .iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let query = format!(
-            "SELECT pending_review_id, model_name, llm_duration_ms, prompt_tokens, completion_tokens \
-             FROM furumusic__processing_stats WHERE pending_review_id IN ({id_list})"
-        );
-        let rows = sqlx::query_as::<_, ProcessingStatsRow>(&query)
-            .fetch_all(pool)
-            .await?;
-        let map = rows.into_iter().map(|r| (r.pending_review_id, r)).collect();
-        Ok(map)
-    }
-
-    pub fn model_name_str(&self) -> &str {
-        &self.model_name
-    }
-
-    pub fn duration_display(&self) -> String {
-        if self.llm_duration_ms >= 1000 {
-            format!("{:.1}s", self.llm_duration_ms as f64 / 1000.0)
-        } else {
-            format!("{}ms", self.llm_duration_ms)
-        }
-    }
-
-    pub fn tokens_display(&self) -> String {
-        format!("{}/{}", self.prompt_tokens, self.completion_tokens)
-    }
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct ProcessingStatsRow {
-    pub pending_review_id: i64,
-    pub model_name: String,
-    pub llm_duration_ms: i64,
-    pub prompt_tokens: i64,
-    pub completion_tokens: i64,
-}
-
-impl ProcessingStatsRow {
-    pub fn duration_display(&self) -> String {
-        if self.llm_duration_ms >= 1000 {
-            format!("{:.1}s", self.llm_duration_ms as f64 / 1000.0)
-        } else {
-            format!("{}ms", self.llm_duration_ms)
-        }
-    }
-
-    pub fn tokens_display(&self) -> String {
-        format!("{}/{}", self.prompt_tokens, self.completion_tokens)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,8 +1210,13 @@ impl SchedulerHandle {
             }
         }
 
-        // Add new cron job
-        self.add_cron_job(job_name, new_cron).await?;
+        // Editing a disabled job must not start it.
+        let job = ScheduledJob::get_by_name(&self.shared_db, job_name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("job not found: {job_name}"))?;
+        if job.enabled {
+            self.add_cron_job(job_name, new_cron).await?;
+        }
 
         // Update DB
         if let Ok(Some(mut sched_job)) = ScheduledJob::get_by_name(&self.shared_db, job_name).await
@@ -1297,7 +1224,7 @@ impl SchedulerHandle {
             sched_job.cron_expression = LimitedString::new(new_cron).unwrap();
             sched_job.next_run_at = compute_next_run(new_cron);
             sched_job.updated_at = now_iso();
-            let _ = sched_job.save(&self.shared_db).await;
+            sched_job.save(&self.shared_db).await?;
         }
 
         Ok(())

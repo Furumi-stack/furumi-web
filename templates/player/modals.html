@@ -495,6 +495,18 @@
                                 </button>
                             </div>
                         </div>
+                        <div class="youtube-preview-destination">
+                            <label for="torrent-target-playlist">{{ t.player_import_destination }}</label>
+                            <div class="youtube-preview-destination-fields" :class="{ creating: $store.torrents.torrentPlaylistChoice === '__new__' }">
+                                <select id="torrent-target-playlist" x-model="$store.torrents.torrentPlaylistChoice" @change="$store.torrents.importPlaylistChoiceChanged('torrent')" :disabled="$store.torrents.torrentDestinationLocked()">
+                                    <option value="">{{ t.player_youtube_no_destination }}</option>
+                                    <template x-for="playlist in $store.torrents.youtubeOwnedPlaylists()" :key="playlist.id"><option :value="String(playlist.id)" x-text="playlist.title"></option></template>
+                                    <option value="__new__">{{ t.player_youtube_create_playlist }}</option>
+                                </select>
+                                <template x-if="$store.torrents.torrentPlaylistChoice === '__new__'"><input type="text" maxlength="255" autocomplete="off" x-model="$store.torrents.torrentNewPlaylistTitle" placeholder="{{ t.player_youtube_new_playlist_name }}" :disabled="$store.torrents.torrentDestinationLocked()"></template>
+                            </div>
+                            <p>{{ t.player_import_destination_hint }}</p>
+                        </div>
                         <div class="torrent-tree-toolbar">
                             <div class="torrent-selected-summary"
                                  x-text="$store.torrents.selected.size + ' {{ t.player_selected }} - ' + $store.torrents.bytes($store.torrents.selectedBytes())"></div>
@@ -594,6 +606,18 @@
                         <small>{{ t.player_audio_folder_hint }}</small>
                     </div>
 
+                    <div class="youtube-preview-destination" x-show="$store.torrents.localFiles.length > 0">
+                            <label for="local-target-playlist">{{ t.player_import_destination }}</label>
+                            <div class="youtube-preview-destination-fields" :class="{ creating: $store.torrents.localPlaylistChoice === '__new__' }">
+                                <select id="local-target-playlist" x-model="$store.torrents.localPlaylistChoice" @change="$store.torrents.importPlaylistChoiceChanged('local')" :disabled="$store.torrents.localFilesUploading || $store.torrents.localPlaylistLocked">
+                                    <option value="">{{ t.player_youtube_no_destination }}</option>
+                                    <template x-for="playlist in $store.torrents.youtubeOwnedPlaylists()" :key="playlist.id"><option :value="String(playlist.id)" x-text="playlist.title"></option></template>
+                                    <option value="__new__">{{ t.player_youtube_create_playlist }}</option>
+                                </select>
+                                <template x-if="$store.torrents.localPlaylistChoice === '__new__'"><input type="text" maxlength="255" autocomplete="off" x-model="$store.torrents.localNewPlaylistTitle" placeholder="{{ t.player_youtube_new_playlist_name }}" :disabled="$store.torrents.localFilesUploading || $store.torrents.localPlaylistLocked"></template>
+                            </div>
+                            <p>{{ t.player_import_destination_hint }}</p>
+                        </div>
                     <div class="file-upload-selection" x-show="$store.torrents.localFiles.length > 0">
                         <span x-text="$store.torrents.localUploadSummary()"></span>
                         <div>
@@ -602,7 +626,7 @@
                                     :disabled="$store.torrents.localFilesUploading">{{ t.player_cancel }}</button>
                             <button type="button" class="modal-btn modal-btn-primary"
                                     @click="$store.torrents.uploadLocalFiles()"
-                                    :disabled="$store.torrents.localFilesUploading">{{ t.player_upload_selected_files }}</button>
+                                    :disabled="$store.torrents.localFilesUploading || !$store.torrents.importDestinationValid('local')">{{ t.player_upload_selected_files }}</button>
                         </div>
                     </div>
 
@@ -635,6 +659,7 @@
                                     <div class="file-upload-history-title" x-text="item.filename"></div>
                                     <div class="file-upload-history-meta"
                                          x-text="$store.torrents.bytes(item.size_bytes) + ' · ' + $store.torrents.formatUploadDate(item.created_at)"></div>
+                                    <div class="file-upload-history-meta" x-show="item.target_playlist_id" x-text="T.youtubePlaylist + ': ' + ($store.torrents.youtubePlaylistTitle(item.target_playlist_id) || '#' + item.target_playlist_id)"></div>
                                     <p class="youtube-item-error" x-show="item.error" x-text="item.error"></p>
                                 </div>
                                 <span class="torrent-status-badge"

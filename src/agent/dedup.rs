@@ -443,6 +443,9 @@ pub async fn merge_existing(
     }
     // A repeated YouTube import must still resolve to this existing media ID.
     if let Some(sha) = context["sha256"].as_str() {
+        if let Err(error) = crate::import_playlists::link_media(pool, sha, candidate.media_id).await {
+            tracing::warn!(%error, "could not link deduplicated import to destination playlists");
+        }
         if let Err(error) = sqlx::query(
             r#"INSERT INTO furumusic__youtube_import_media (item_id, media_file_id)
                SELECT DISTINCT item.id, $1
@@ -794,7 +797,7 @@ mod tests {
             CREATE TABLE furumusic__track_embedding (track_id bigint);
             CREATE TABLE test_likes (track_id bigint REFERENCES furumusic__track(id));
             CREATE TABLE test_playlist_tracks (track_id bigint REFERENCES furumusic__track(id));
-            CREATE TABLE furumusic__local_upload (id text PRIMARY KEY, user_id bigint,
+            CREATE TABLE furumusic__local_upload (target_playlist_id bigint, id text PRIMARY KEY, user_id bigint,
                 filename text, size_bytes bigint, status text, inbox_path text, error text,
                 created_at text, updated_at text, completed_at text);
             INSERT INTO furumusic__artist VALUES (1, 'Artist', 'artist');
@@ -969,6 +972,7 @@ mod tests {
             "song.mp3",
             3,
             "user_uploads/6/batch/song.mp3",
+            None,
         )
         .await
         .unwrap();
@@ -979,6 +983,7 @@ mod tests {
             "song.mp3",
             3,
             "user_uploads/6/batch/song.mp3",
+            None,
         )
         .await
         .unwrap();
@@ -1014,7 +1019,8 @@ mod tests {
                 7,
                 "song.mp3",
                 3,
-                "user_uploads/7/song.mp3"
+                "user_uploads/7/song.mp3",
+                None,
             )
             .await
             .is_err()

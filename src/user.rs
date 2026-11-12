@@ -26,11 +26,6 @@ pub struct User {
 // ---------------------------------------------------------------------------
 
 impl User {
-    /// List all users.
-    pub async fn list_all(db: &Database) -> cot::db::Result<Vec<Self>> {
-        Self::objects().all(db).await
-    }
-
     /// Get a user by primary key.
     pub async fn get_by_id(db: &Database, user_id: i64) -> cot::db::Result<Option<Self>> {
         Self::get_by_primary_key(db, Auto::Fixed(user_id)).await
@@ -121,20 +116,11 @@ impl User {
     pub fn username_str(&self) -> &str {
         &self.username
     }
-    pub fn email_str(&self) -> String {
-        self.email
-            .as_ref()
-            .map(|e| e.to_string())
-            .unwrap_or_default()
-    }
     pub fn display_name_str(&self) -> String {
         self.display_name
             .as_ref()
             .map(|d| d.to_string())
             .unwrap_or_default()
-    }
-    pub fn role_str(&self) -> &str {
-        &self.role
     }
     pub fn is_active(&self) -> bool {
         self.is_active

@@ -96,6 +96,70 @@ The repository also contains a multi-stage `Dockerfile` for building a small
 runtime image. A deployment must provide PostgreSQL plus persistent, writable
 volumes for the inbox and music library.
 
+## Admin statistics
+
+The only admin interface is `/admin/v2`, also reachable from `/admin/`.
+**Statistics** shows listening totals, a timeline, artist/track/release rankings,
+and paginated history. Select an artist or track to see its listeners, then a
+listener to see their history within the same filters. The **Users** list links
+to each user's full statistics.
+
+Periods use UTC. Counts come from the synchronized `listen_event` history: a
+natural finish, half of a track, or four minutes qualifies as a play. Interrupted
+sessions under five seconds are not retained. Short retained sessions contribute
+to listened time but not play counts. The source filter separates this instance
+from synchronized devices. Artist rankings use recorded artist names, including
+featured credits; the same artist is counted once per event. Existing history
+remains available when its local audio file is deleted. Library and service
+cards show current instance totals, independently of the listening filters.
+
+Migration `m_0051_add_listen_statistics_indexes` adds time and content indexes.
+The old admin pages and `/admin/debug` are removed; first-run setup remains at
+`/admin/setup`.
+
+Regression checks:
+
+```bash
+node --test tests/*.test.cjs
+cargo test admin:: -- --skip postgres_statistics_drilldown_and_pagination
+# Use a disposable PostgreSQL; this test creates connection-local temporary tables.
+FURU_STATISTICS_TEST_DATABASE_URL=postgresql://... cargo test postgres_statistics_drilldown_and_pagination -- --ignored
+```
+
+`tests/browser-statistics.cjs` additionally exercises a fresh disposable instance
+at `FURU_TEST_URL` (default `http://127.0.0.1:3018`) and seeds the disposable Docker
+container `furumi-statistics-test-pg`. It requires Playwright (or
+`PLAYWRIGHT_MODULE`) and Chrome (or `CHROME_PATH`). Never point this test at a
+live service.
+
+## Importing into playlists
+
+The player's download manager offers **Add downloads to a playlist** for file
+and folder uploads and torrents, as well as YouTube. Choose an existing owned
+playlist or create one before starting; leaving the choice empty imports only
+into the library. Selected audio tracks are appended after processing or manual
+approval, including files resolved to tracks already in the library.
+
+Migration `m_0052_add_import_playlist_destinations` persists the destination and
+completion receipts. Retries and restarts retain the choice, avoid duplicates,
+and do not re-add tracks subsequently removed by the user. A started batch keeps
+its destination for its remaining files.
+
+```bash
+node --test tests/import_playlists.test.cjs
+# Disposable PostgreSQL; both tests use temporary tables.
+FURU_IMPORT_TEST_DATABASE_URL=postgresql://... cargo test import_destinations -- --ignored
+FURU_IMPORT_TEST_DATABASE_URL=postgresql://... cargo test torrent_playlist -- --ignored
+```
+
+`tests/browser-import-playlists.cjs` checks the file upload flow, database
+reconciliation and the torrent picker on desktop and mobile. It requires a fresh
+migrated instance with the import agent disabled at `FURU_TEST_URL` (default
+`http://127.0.0.1:3019`), the disposable PostgreSQL container
+`furumi-import-playlist-test-pg` with database `furumi_import_test`, and Playwright
+and Chrome configured as above. It uses a local torrent preview fixture and
+simulated imported tracks, without downloading external torrents.
+
 ## Configuration
 
 Most settings can be changed from the administration interface. Every setting

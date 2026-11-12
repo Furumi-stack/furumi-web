@@ -5157,6 +5157,26 @@ async fn local_upload_handler(
         ));
     }
 
+    let target_playlist_id = match request.headers().get("x-furumusic-target-playlist-id") {
+        None => None,
+        Some(header) => match header
+            .to_str()
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|id| *id > 0)
+        {
+            Some(id) => Some(id),
+            None => {
+                return Ok(json_error(StatusCode::BAD_REQUEST, "invalid target playlist ID"));
+            }
+        },
+    };
+    if let Err(error) =
+        crate::import_playlists::validate_target(pool, user.id, target_playlist_id).await
+    {
+        return Ok(json_error(StatusCode::BAD_REQUEST, &error.to_string()));
+    }
+
     let batch_header_id = request
         .headers()
         .get("x-furumusic-upload-batch-id")
@@ -5273,6 +5293,12 @@ async fn local_upload_handler(
             .await
             .map_err(|err| cot::Error::internal(err.to_string()))?
     {
+        if upload.target_playlist_id != target_playlist_id {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "upload playlist destination cannot change on retry",
+            ));
+        }
         return Json(LocalUploadResponse { ok: true, upload }).into_response();
     }
     if let Err(err) = crate::local_uploads::create(
@@ -5282,10 +5308,21 @@ async fn local_upload_handler(
         &display_name,
         bytes.len() as u64,
         &inbox_path,
+        target_playlist_id,
     )
     .await
     {
         return Ok(json_error(StatusCode::BAD_REQUEST, &err.to_string()));
+    }
+
+    if let Some(playlist_id) = target_playlist_id {
+        use sha2::{Digest, Sha256};
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        if let Err(error) =
+            crate::import_playlists::register(pool, user.id, playlist_id, &inbox_path, &sha256).await
+        {
+            return Ok(json_error(StatusCode::BAD_REQUEST, &error.to_string()));
+        }
     }
 
     let write_result = crate::local_uploads::save_file(&destination, &upload_id, &bytes).await;
@@ -9772,6 +9809,7 @@ impl App for PlayerApp {
                                         pg_pool,
                                         &path.0.id,
                                         json.0.selected_files,
+                                        json.0.target_playlist_id,
                                         live_config.agent_inbox_dir,
                                         user.id,
                                         proxy_url.as_deref(),

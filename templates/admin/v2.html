@@ -446,6 +446,7 @@ tbody tr:hover {
 .col-tags { width: 250px; }
 .col-time { width: 132px; }
 
+.users-table { min-width: 1080px; table-layout: auto; }
 .users-table-wrap {
     max-height: calc(100vh - 300px);
 }
@@ -2008,11 +2009,58 @@ tbody tr:hover {
     color: var(--text-primary);
     font-size: 12px;
 }
+
+.statistics-filters { padding: 20px; }
+.statistics-toolbar { align-items: end; flex-wrap: wrap; margin-top: 18px; }
+.statistics-toolbar label { display: grid; gap: 7px; color: var(--text-subdued); font-size: 12px; }
+.statistics-toolbar .search { width: 200px; }
+.statistics-chips { flex-wrap: wrap; margin-top: 12px; }
+.statistics-note { font-size: 12px; line-height: 1.7; margin: 14px 0 0; }
+.statistics-error { color: #fca5a5; margin-top: 12px; }
+.statistics-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 18px 0; }
+.statistics-panel { margin-top: 20px; overflow: hidden; }
+.statistics-chart { display: flex; align-items: end; gap: 12px; overflow-x: auto; padding: 24px; min-height: 190px; }
+.statistics-bar-column { min-width: 58px; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 11px; }
+.statistics-bar-column small { white-space: nowrap; color: var(--text-subdued); font-size: 10px; }
+.statistics-bar { width: 100%; max-width: 60px; background: #6bd6a0; border-radius: 4px 4px 0 0; }
+.statistics-table { table-layout: auto; min-width: 720px; }
+.statistics-table td { vertical-align: top; }
+.statistics-link { border: 0; padding: 0; background: none; color: #8ee4b4; cursor: pointer; text-align: left; font: inherit; }
+.statistics-link:hover { text-decoration: underline; }
+.statistics-link:disabled { color: inherit; cursor: default; text-decoration: none; }
+.artist-stat-link { margin-right: 10px; font-size: 12px; }
+.statistics-service-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 24px; padding: 20px; }
+.statistics-service-row { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; font-size: 13px; }
+@media (max-width: 800px) { .statistics-ranking-head { align-items: stretch; flex-direction: column; gap: 12px; } .statistics-toolbar .search { width: 160px; } }
+
+
+@media (max-width: 800px) {
+    html:has(.statistics-view), body:has(.statistics-view) { min-width: 0; }
+    .statistics-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .statistics-view .sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }
+    .statistics-view .sidebar .brand, .statistics-view .sidebar .nav-label, .statistics-view .sidebar .nav-group:last-child { display: none; }
+    .statistics-view .sidebar .nav-group { display: flex; overflow-x: auto; gap: 4px; padding: 8px; }
+    .statistics-view .sidebar .nav-btn { width: auto; flex: none; white-space: nowrap; padding: 10px; }
+    .statistics-view .sidebar .nav-count { display: none; }
+    .statistics-view .topbar { height: auto; padding: 12px; flex-wrap: wrap; }
+    .statistics-view .page-title p { line-height: 1.5; }
+    .statistics-view .content { padding: 12px; }
+    .statistics-view .panel-head { flex-wrap: wrap; gap: 12px; }
+    .statistics-view .statistics-filters { padding: 14px; }
+    .statistics-view .statistics-toolbar { gap: 12px; }
+    .statistics-view .statistics-toolbar label { flex: 1; min-width: 135px; }
+    .statistics-view .statistics-toolbar .search { width: 100%; }
+    .statistics-view .statistics-ranking-head .toolbar { flex-wrap: wrap; }
+    .statistics-view .statistics-ranking-head .search { width: 100%; }
+    .statistics-view .statistics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .statistics-view .action-strip { flex-wrap: wrap; gap: 10px; }
+}
+
 </style>
 {% endblock head_extra %}
 
 {% block content %}
-<div class="admin-shell" x-data="adminV2()" x-init="init()" x-cloak>
+<div class="admin-shell" :class="{'statistics-view': activeView === 'statistics'}" x-data="adminV2()" x-cloak>
     <aside class="sidebar">
         <div class="brand">
             <div class="brand-title">
@@ -2043,6 +2091,7 @@ tbody tr:hover {
                 <i data-lucide="wrench"></i>
                 <span>Library Tools</span>
             </button>
+            <button class="nav-btn" :class="{active: activeView === 'statistics'}" @click="openStatistics()"><i data-lucide="chart-no-axes-combined"></i><span>Statistics</span></button>
             <button class="nav-btn" :class="{active: activeView === 'users'}" @click="openUsers()">
                 <i data-lucide="users"></i>
                 <span>Users</span>
@@ -2086,10 +2135,6 @@ tbody tr:hover {
                     <i data-lucide="refresh-cw"></i>
                     Refresh
                 </button>
-                <a class="btn" href="/admin/debug">
-                    <i data-lucide="bug"></i>
-                    Debug
-                </a>
                 <a class="btn" href="/">
                     <i data-lucide="music-2"></i>
                     Player
@@ -2293,7 +2338,7 @@ tbody tr:hover {
                         <div class="job-facts">
                             <div class="job-fact">
                                 <span>Cron</span>
-                                <span :title="activeJob?.cron_expression || ''" x-text="cronLabel(activeJob)"></span>
+                                <span :title="activeJob?.cron_expression || ''" x-text="cronLabel(activeJob)"></span><button class="btn" @click="scheduleDraft = activeJob.cron_expression; scheduleEditing = true">Edit schedule</button><form x-show="scheduleEditing" @submit.prevent="saveSchedule()" class="toolbar"><input class="search" aria-label="Cron schedule" x-model="scheduleDraft" required><button class="btn" type="submit">Save schedule</button><button class="btn" type="button" @click="scheduleEditing = false">Cancel</button></form>
                             </div>
                             <div class="job-fact">
                                 <span>Next</span>
@@ -2490,6 +2535,59 @@ tbody tr:hover {
             </div>
         </div>
 
+        <div class="content" x-show="activeView === 'statistics'">
+            <section class="panel statistics-filters">
+                <div class="panel-title"><strong>Listening statistics</strong><span>Explore an artist or track to see exactly who listened. Dates and charts use UTC.</span></div>
+                <div class="toolbar statistics-toolbar">
+                    <label>Period<select class="search" x-model="statisticsPeriod" @change="statisticsSetPeriod()"><option value="today">Today</option><option value="7">7 days</option><option value="30">30 days</option><option value="all">All time</option><option value="custom">Custom dates</option></select></label>
+                    <label x-show="statisticsPeriod === 'custom'">From<input class="search" type="date" x-model="statisticsFilter.from" @change="statisticsReload()"></label>
+                    <label x-show="statisticsPeriod === 'custom'">Through<input class="search" type="date" x-model="statisticsFilter.to" @change="statisticsReload()"></label>
+                    <label>Playback source<select class="search" x-model="statisticsFilter.source" @change="statisticsReload()"><option value="all">All devices</option><option value="instance">This instance</option><option value="synced">Synced devices</option></select></label>
+                    <label>Find a user<input class="search" placeholder="Name, username or email" x-model="statisticsUserSearch" @input.debounce.300ms="statisticsFindUsers()"></label>
+                </div>
+                <div class="toolbar" x-show="statisticsUserSearch"><template x-for="user in statisticsUserOptions" :key="user.id"><button class="btn" @click="statisticsSelectUser(user.id, user.display_name || user.username)" x-text="user.display_name || user.username"></button></template><span class="muted" x-show="!statisticsUserOptions.length">No matching users</span></div>
+                <div class="toolbar statistics-chips">
+                    <button class="btn" x-show="statisticsFilter.user_id" @click="statisticsClearFilter('user_id')" x-text="'User: ' + statisticsUserLabel + ' ×'"></button>
+                    <button class="btn" x-show="statisticsFilter.artist" @click="statisticsClearFilter('artist')" x-text="'Artist: ' + statisticsFilter.artist + ' ×'"></button>
+                    <button class="btn" x-show="statisticsFilter.content_id" @click="statisticsClearFilter('content_id')" x-text="'Track: ' + statisticsTrackLabel + ' ×'"></button>
+                    <button class="btn" x-show="statisticsFilter.user_id || statisticsFilter.artist || statisticsFilter.content_id" @click="statisticsClearSelection()">All listeners and music</button>
+                </div>
+                <p class="muted statistics-note">A play counts after a natural finish, half the track, or four minutes. Short listens are recorded from five seconds. Synced device history is shown separately from this instance.</p>
+                <p class="statistics-error" role="alert" x-show="statisticsError" x-text="statisticsError"></p>
+                <span class="muted" role="status" x-show="statisticsLoading">Loading statistics…</span>
+            </section>
+            <div x-show="statisticsData && !statisticsError" :aria-busy="statisticsLoading" :style="statisticsLoading ? 'opacity: .55; pointer-events: none' : ''">
+                <section class="stats-strip statistics-summary">
+                    <template x-for="cell in statisticsCards()" :key="cell.label"><div class="stat-cell"><div class="stat-value" x-text="cell.value"></div><div class="stat-label" x-text="cell.label"></div></div></template>
+                </section>
+                <section class="panel statistics-panel">
+                    <div class="panel-head"><div class="panel-title"><strong>Listening over time</strong><span x-text="statisticsData?.daily.unit === 'month' ? 'Monthly totals · UTC' : 'Daily totals · UTC'"></span></div></div>
+                    <div class="statistics-chart" role="img" aria-label="Plays over time; each bar is labelled with its date and number of plays">
+                        <template x-for="day in (statisticsData?.daily.items || [])" :key="day.bucket"><div class="statistics-bar-column" :title="day.bucket.slice(0,10) + ': ' + day.plays + ' plays, ' + day.listeners + ' listeners'"><span x-text="fmt(day.plays)"></span><div class="statistics-bar" :style="'height:' + Math.max(2, 120 * day.plays / statisticsChartMax()) + 'px'"></div><small x-text="day.bucket.slice(0,10)"></small></div></template>
+                        <div class="empty" x-show="!(statisticsData?.daily.items || []).length">No listening activity in this period</div>
+                    </div>
+                </section>
+                <section class="panel statistics-panel">
+                    <div class="panel-head statistics-ranking-head"><div class="panel-title"><strong x-text="statisticsFilter.artist || statisticsFilter.content_id ? 'Popularity and listeners for this selection' : 'Popularity and listeners'"></strong><span>Click an artist or track to see its listeners; click a listener for their history.</span></div>
+                        <div class="toolbar"><select class="search" x-model="statisticsKind" @change="statisticsRankPage = 1; loadStatistics()"><option value="artists">Artists</option><option value="tracks">Tracks</option><option value="releases">Releases</option><option value="users">Listeners</option></select><input class="search" placeholder="Search this ranking" x-model="statisticsSearch" @input.debounce.300ms="statisticsRankPage = 1; loadStatistics()"></div>
+                    </div>
+                    <div class="table-wrap"><table class="statistics-table"><thead><tr><th x-text="statisticsKind === 'users' ? 'Listener' : 'Name'"></th><th>Plays</th><th>Listeners</th><th>Listened time</th><th>Last play</th></tr></thead><tbody><template x-for="item in (statisticsData?.ranking.items || [])" :key="item.key"><tr><td><button class="statistics-link" :disabled="statisticsKind === 'releases'" @click="statisticsExplore(item)" x-text="item.label"></button><div class="secondary-line" x-text="item.detail"></div></td><td x-text="fmt(item.plays)"></td><td x-text="fmt(item.listeners)"></td><td x-text="durationApprox(item.listened_seconds)"></td><td x-text="statisticsDate(item.last_play_ms)"></td></tr></template></tbody></table><div class="empty" x-show="!(statisticsData?.ranking.items || []).length">No plays match this selection</div></div>
+                    <div class="action-strip"><span x-text="statisticsRange('ranking')"></span><div class="toolbar"><button class="btn" @click="statisticsRankPage--; loadStatistics()" :disabled="statisticsRankPage <= 1">Previous</button><button class="btn" @click="statisticsRankPage++; loadStatistics()" :disabled="!statisticsHasNext('ranking')">Next</button></div></div>
+                </section>
+                <section class="panel statistics-panel">
+                    <div class="panel-head"><div class="panel-title"><strong>Listening history</strong><span>All matching events, including tracks no longer in the library. Artist names reflect the metadata recorded at the time.</span></div><select class="search" x-model="statisticsHistoryKind" @change="statisticsHistoryPage = 1; loadStatistics()"><option value="all">All events</option><option value="plays">Counted plays</option><option value="short">Short listens</option></select></div>
+                    <div class="table-wrap"><table class="statistics-table"><thead><tr><th>When</th><th>Listener</th><th>Track / artist</th><th>Listened</th><th>Result</th><th>Device</th></tr></thead><tbody><template x-for="play in (statisticsData?.history.items || [])" :key="play.user_id + ':' + play.listen_id"><tr><td x-text="statisticsDate(play.started_at_ms)"></td><td><button class="statistics-link" @click="statisticsSelectUser(play.user_id, play.user_name)" x-text="play.user_name"></button></td><td><button class="statistics-link" @click="statisticsSelectTrack(play.content_id, play.title)" x-text="play.title"></button><div class="secondary-line"><template x-for="name in play.artist_names" :key="name"><button class="statistics-link artist-stat-link" @click="statisticsSelectArtist(name)" x-text="name"></button></template></div><div class="secondary-line" x-text="play.release_title"></div></td><td x-text="durationApprox(play.listened_ms / 1000) + (play.track_duration_ms ? ' / ' + durationApprox(play.track_duration_ms / 1000) : '')"></td><td><span class="badge" :class="play.qualified ? 'ok' : 'disabled'" x-text="play.qualified ? 'play' : 'short'"></span><div class="secondary-line" x-text="play.ended_reason"></div></td><td><span x-text="play.device_name"></span><div class="secondary-line" x-text="play.source === 'instance' ? 'This instance' : 'Synced device'"></div></td></tr></template></tbody></table><div class="empty" x-show="!(statisticsData?.history.items || []).length">No listening events match this selection</div></div>
+                    <div class="action-strip"><span x-text="statisticsRange('history')"></span><div class="toolbar"><button class="btn" @click="statisticsHistoryPage--; loadStatistics()" :disabled="statisticsHistoryPage <= 1">Previous</button><button class="btn" @click="statisticsHistoryPage++; loadStatistics()" :disabled="!statisticsHasNext('history')">Next</button></div></div>
+                </section>
+                <section class="panel statistics-panel">
+                    <div class="panel-head"><div class="panel-title"><strong>Instance overview</strong><span>Current library and service totals, independent of the listening filters above.</span></div></div>
+                    <section class="stats-strip statistics-summary"><template x-for="cell in statisticsInstanceCards()" :key="cell.label"><div class="stat-cell"><div class="stat-value" x-text="cell.value"></div><div class="stat-label" x-text="cell.label"></div></div></template></section>
+                    <div class="statistics-service-grid"><template x-for="group in ['formats', 'reviews', 'jobs', 'scrobbles']" :key="group"><div><strong x-text="({formats:'Audio formats', reviews:'Processing queue', jobs:'Job runs', scrobbles:'Last.fm outbox'})[group]"></strong><template x-for="row in (statisticsData?.instance[group] || [])" :key="row.label"><div class="statistics-service-row"><span x-text="row.label"></span><strong x-text="fmt(row.count)"></strong></div></template><div class="muted" x-show="!(statisticsData?.instance[group] || []).length">No records</div></div></template></div>
+                    <div class="statistics-service-grid"><template x-for="disk in runtime.storage || []" :key="disk.label"><div><strong x-text="disk.label"></strong><p class="muted" x-text="disk.free_bytes == null ? 'Storage unavailable' : formatBytes(disk.free_bytes) + ' free of ' + formatBytes(disk.total_bytes)"></p></div></template></div>
+                </section>
+            </div>
+        </div>
+
         <div class="content" x-show="activeView === 'users'">
             <section class="stats-strip">
                 <div class="stat-cell">
@@ -2508,6 +2606,7 @@ tbody tr:hover {
                         <span x-text="usersSubtitle()"></span>
                     </div>
                     <div class="toolbar">
+                        <button class="btn primary" @click="editUser()">Add user</button>
                         <input class="search" placeholder="Search users" x-model="userSearch" @input.debounce.350ms="loadUsers()" />
                         <button class="btn" @click="loadUsers(false)">
                             <i data-lucide="refresh-cw"></i>
@@ -2521,7 +2620,7 @@ tbody tr:hover {
                             <tr>
                                 <th class="user-status-column">Status</th>
                                 <th>User</th>
-                                <th class="user-role-column">Role</th>
+                                <th>Plays</th><th>Listened time</th><th>Last play</th><th class="user-role-column">Role</th>
                                 <th class="user-active-column">Account</th>
                                 <th class="user-seen-column">Last activity</th>
                             </tr>
@@ -2536,7 +2635,7 @@ tbody tr:hover {
                                         <div class="primary-line" x-text="user.display_name || user.username"></div>
                                         <div class="secondary-line" x-text="user.email ? user.username + ' · ' + user.email : user.username"></div>
                                     </td>
-                                    <td><span x-text="user.role"></span></td>
+                                    <td x-text="fmt(user.plays)"></td><td x-text="durationApprox(user.listened_seconds)"></td><td x-text="user.last_play_ms ? statisticsDate(user.last_play_ms) : '—'"></td><td><span x-text="user.role"></span></td>
                                     <td>
                                         <span class="badge" :class="user.is_active ? 'ok' : 'disabled'" x-text="user.is_active ? 'active' : 'disabled'"></span>
                                     </td>
@@ -3231,12 +3330,21 @@ tbody tr:hover {
         </div>
     </main>
 
+    <div class="modal-backdrop" x-show="userEditorOpen" x-transition @click.self="userEditorOpen = false">
+        <section class="modal user-modal"><div class="modal-head"><strong x-text="userDraft.id ? 'Edit user' : 'Add user'"></strong><button class="btn" @click="userEditorOpen = false">Close</button></div>
+        <form class="modal-body" @submit.prevent="saveUser()">
+            <template x-for="field in ['username', 'email', 'display_name', 'password']" :key="field"><label class="field"><span x-text="field === 'password' && userDraft.id ? 'Password (leave blank to keep)' : field.replace('_', ' ')"></span><input class="search" :type="field === 'password' ? 'password' : (field === 'email' ? 'email' : 'text')" :autocomplete="field === 'password' ? 'new-password' : 'off'" :required="field === 'username' || (field === 'password' && !userDraft.id)" maxlength="255" x-model="userDraft[field]"></label></template>
+            <label class="field">Role<select class="search" x-model="userDraft.role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
+            <button class="btn primary" type="submit" :disabled="userSaving">Save user</button>
+        </form></section>
+    </div>
+
     <div class="modal-backdrop" x-show="userModalOpen && activeUserDetail" x-transition @click.self="userModalOpen = false">
         <section class="modal user-modal">
             <div class="modal-head">
                 <div class="panel-title">
-                    <strong x-text="activeUserDetail ? (activeUserDetail.user.display_name || activeUserDetail.user.username) : 'User'"></strong>
-                    <span x-text="activeUserDetail ? userStatusLabel(activeUserDetail.user) + ' · ' + activeUserDetail.user.role : ''"></span>
+                    <strong x-text="activeUserDetail ? (activeUserDetail?.user.display_name || activeUserDetail?.user.username) : 'User'"></strong>
+                    <span x-text="activeUserDetail ? userStatusLabel(activeUserDetail?.user) + ' · ' + activeUserDetail?.user.role : ''"></span>
                 </div>
                 <button class="icon-btn" @click="userModalOpen = false">
                     <i data-lucide="x"></i>
@@ -3252,19 +3360,19 @@ tbody tr:hover {
                     <section class="user-summary-grid">
                         <div class="user-summary-card">
                             <span>Status</span>
-                            <strong x-text="userStatusLabel(activeUserDetail.user)"></strong>
+                            <strong x-text="userStatusLabel(activeUserDetail?.user)"></strong>
                         </div>
                         <div class="user-summary-card">
                             <span>Last activity</span>
-                            <strong x-text="userLastSeenLabel(activeUserDetail.user)"></strong>
+                            <strong x-text="userLastSeenLabel(activeUserDetail?.user)"></strong>
                         </div>
                         <div class="user-summary-card">
                             <span>Account</span>
-                            <strong x-text="activeUserDetail.user.is_active ? 'active' : 'disabled'"></strong>
+                            <strong x-text="activeUserDetail?.user.is_active ? 'active' : 'disabled'"></strong>
                         </div>
                         <div class="user-summary-card">
                             <span>Last.fm</span>
-                            <strong x-text="activeUserDetail.stats.lastfm_connected ? 'connected' : 'not connected'"></strong>
+                            <strong x-text="activeUserDetail?.stats.lastfm_connected ? 'connected' : 'not connected'"></strong>
                         </div>
                     </section>
                     <section class="stats-strip user-stats-grid">
@@ -3278,13 +3386,14 @@ tbody tr:hover {
                     <div class="field">
                         <label>Profile</label>
                         <div class="user-profile-facts">
-                            <div><span>Username</span><strong x-text="activeUserDetail.user.username"></strong></div>
-                            <div><span>Email</span><strong x-text="activeUserDetail.user.email || 'not set'"></strong></div>
-                            <div><span>Display name</span><strong x-text="activeUserDetail.user.display_name || 'not set'"></strong></div>
-                            <div><span>Role</span><strong x-text="activeUserDetail.user.role"></strong></div>
+                            <div><span>Username</span><strong x-text="activeUserDetail?.user.username"></strong></div>
+                            <div><span>Email</span><strong x-text="activeUserDetail?.user.email || 'not set'"></strong></div>
+                            <div><span>Display name</span><strong x-text="activeUserDetail?.user.display_name || 'not set'"></strong></div>
+                            <div><span>Role</span><strong x-text="activeUserDetail?.user.role"></strong></div>
                         </div>
                     </div>
                 </div>
+                <div class="toolbar" style="margin:16px 0"><button class="btn primary" @click="openStatistics(activeUserDetail?.user)">Full history and statistics</button><button class="btn" @click="editUser(activeUserDetail?.user)">Edit user</button><button class="btn" @click="deleteUser(activeUserDetail?.user)">Delete user</button></div>
                 <div x-show="userModalTab === 'activity'">
                     <div class="user-activity-list">
                         <template x-for="play in (activeUserDetail?.recent_plays || [])" :key="play.history_id">
@@ -3783,7 +3892,7 @@ tbody tr:hover {
                                 <label>Available release images</label>
                             </div>
                             <div class="cover-grid" x-show="editorDetail && editorDetail.available_covers && editorDetail.available_covers.length">
-                                <template x-for="cover in editorDetail.available_covers" :key="cover.media_file_id">
+                                <template x-for="cover in (editorDetail?.available_covers || [])" :key="cover.media_file_id">
                                     <button class="cover-option" type="button" :class="{active: editorDetail.current_image_url && editorDetail.current_image_url.includes('/cover/' + cover.media_file_id + '/')}" @click="setLibraryImage(cover.media_file_id)">
                                         <img :src="cover.cover_url" alt="" />
                                         <span x-text="cover.release_title"></span>
@@ -3829,6 +3938,192 @@ function adminV2() {
         runtime: { agent: {}, storage: [], node: {} },
         libraryOverview: {},
         reviews: { items: [], total: 0, total_all: 0, limit: 80, offset: 0, status_counts: [] },
+        statisticsData: null,
+        statisticsLoading: false,
+        statisticsError: '',
+        statisticsRequest: 0,
+        statisticsPeriod: '30',
+        statisticsFilter: { from: '', to: '', source: 'all', user_id: '', artist: '', content_id: '' },
+        statisticsKind: 'artists',
+        statisticsSearch: '',
+        statisticsRankPage: 1,
+        statisticsHistoryPage: 1,
+        statisticsHistoryKind: 'all',
+        statisticsUserSearch: '',
+        statisticsUserOptions: [],
+        statisticsUserLabel: '',
+        statisticsTrackLabel: '',
+
+        openStatistics(user = null) {
+            this.activeView = 'statistics';
+            this.userModalOpen = false;
+            this.setRoute('#statistics');
+            if (user) {
+                this.statisticsFilter.user_id = user.id;
+                this.statisticsUserLabel = user.display_name || user.username;
+                this.statisticsFilter.artist = '';
+                this.statisticsFilter.content_id = '';
+                this.statisticsPeriod = 'all';
+                this.statisticsKind = 'artists';
+                this.statisticsFilter.source = 'all';
+                this.statisticsSearch = '';
+                this.statisticsHistoryKind = 'all';
+                this.statisticsUserSearch = '';
+            }
+            this.statisticsSetPeriod();
+        },
+        statisticsSetPeriod() {
+            if (this.statisticsPeriod === 'all') {
+                this.statisticsFilter.from = 'all';
+                this.statisticsFilter.to = '';
+            } else if (this.statisticsPeriod !== 'custom') {
+                const now = new Date();
+                this.statisticsFilter.to = now.toISOString().slice(0,10);
+                now.setUTCDate(now.getUTCDate() - (this.statisticsPeriod === 'today' ? 0 : Number(this.statisticsPeriod) - 1));
+                this.statisticsFilter.from = now.toISOString().slice(0,10);
+            } else if (this.statisticsFilter.from === 'all') {
+                this.statisticsFilter.from = '';
+            }
+            this.statisticsReload();
+        },
+        statisticsReload() {
+            this.statisticsRankPage = 1;
+            this.statisticsHistoryPage = 1;
+            return this.loadStatistics();
+        },
+        async loadStatistics() {
+            const requestId = ++this.statisticsRequest;
+            this.statisticsLoading = true;
+            this.statisticsError = '';
+            const params = new URLSearchParams();
+            for (const [key, value] of Object.entries(this.statisticsFilter)) {
+                if (value !== '' && value != null) params.set(key, value);
+            }
+            params.set('kind', this.statisticsKind);
+            params.set('search', this.statisticsSearch);
+            params.set('rank_page', this.statisticsRankPage);
+            params.set('history_page', this.statisticsHistoryPage);
+            params.set('history_kind', this.statisticsHistoryKind);
+            try {
+                const data = await this.request(`${this.apiBase}/statistics?${params}`);
+                if (requestId === this.statisticsRequest) this.statisticsData = data;
+            } catch (error) {
+                if (requestId === this.statisticsRequest) this.statisticsError = error.message;
+            } finally {
+                if (requestId === this.statisticsRequest) this.statisticsLoading = false;
+                this.icons();
+            }
+        },
+        async statisticsFindUsers() {
+            const search = this.statisticsUserSearch.trim();
+            if (!search) { this.statisticsUserOptions = []; return; }
+            try {
+                const data = await this.request(`${this.apiBase}/users?limit=20&search=${encodeURIComponent(search)}`);
+                if (search === this.statisticsUserSearch.trim()) this.statisticsUserOptions = data.items;
+            } catch (error) { this.showToast(error.message); }
+        },
+        statisticsSelectUser(id, name) {
+            this.statisticsFilter.user_id = id;
+            this.statisticsUserLabel = name;
+            this.statisticsUserSearch = '';
+            this.statisticsUserOptions = [];
+            this.statisticsSearch = '';
+            this.statisticsKind = 'artists';
+            return this.statisticsReload();
+        },
+        statisticsSelectArtist(name) {
+            this.statisticsFilter.artist = name;
+            this.statisticsKind = 'users';
+            this.statisticsSearch = '';
+            return this.statisticsReload();
+        },
+        statisticsSelectTrack(id, name) {
+            this.statisticsFilter.content_id = id;
+            this.statisticsTrackLabel = name;
+            this.statisticsKind = 'users';
+            this.statisticsSearch = '';
+            return this.statisticsReload();
+        },
+        statisticsExplore(item) {
+            if (this.statisticsKind === 'users') return this.statisticsSelectUser(Number(item.key), item.label);
+            if (this.statisticsKind === 'artists') return this.statisticsSelectArtist(item.label);
+            if (this.statisticsKind === 'tracks') return this.statisticsSelectTrack(item.key, item.label);
+        },
+        statisticsClearFilter(key) {
+            this.statisticsFilter[key] = '';
+            this.statisticsSearch = '';
+            return this.statisticsReload();
+        },
+        statisticsClearSelection() {
+            for (const key of ['user_id', 'artist', 'content_id']) this.statisticsFilter[key] = '';
+            this.statisticsSearch = '';
+            return this.statisticsReload();
+        },
+        statisticsCards() {
+            const s = this.statisticsData?.summary || {};
+            return [
+                { label: 'Counted plays', value: this.fmt(s.plays || 0) },
+                { label: 'Unique listeners', value: this.fmt(s.listeners || 0) },
+                { label: 'Listened time · all events', value: this.durationApprox(s.listened_seconds || 0) },
+                { label: 'Unique tracks played', value: this.fmt(s.tracks || 0) },
+                { label: 'Finished tracks', value: this.fmt(s.completed || 0) },
+                { label: 'Short listens', value: this.fmt(s.short_listens || 0) },
+                { label: 'Plays on this instance', value: this.fmt(s.instance_plays || 0) },
+                { label: 'Plays on synced devices', value: this.fmt(s.synced_plays || 0) }
+            ];
+        },
+        statisticsInstanceCards() {
+            const s = this.statisticsData?.instance || {};
+            return ['users', 'tracks', 'releases', 'artists', 'playlists'].map(key => ({ label: key, value: this.fmt(s[key] || 0) }))
+                .concat([{ label: 'Media files', value: this.formatBytes(s.media_bytes || 0) }]);
+        },
+        statisticsChartMax() { return Math.max(1, ...(this.statisticsData?.daily.items || []).map(d => Number(d.plays))); },
+        statisticsDate(ms) { return new Date(ms).toISOString().replace('T', ' ').slice(0, 19) + ' UTC'; },
+        statisticsRange(key) {
+            const page = this.statisticsData?.[key];
+            if (!page?.total) return '0 results';
+            return `${(page.page - 1) * page.limit + 1}–${Math.min(page.page * page.limit, page.total)} of ${this.fmt(page.total)}`;
+        },
+        statisticsHasNext(key) { const p = this.statisticsData?.[key]; return p && p.page * p.limit < p.total; },
+
+        userEditorOpen: false,
+        userSaving: false,
+        userDraft: {id:null, username:'', email:'', display_name:'', password:'', role:'user'},
+        scheduleEditing: false,
+        scheduleDraft: '',
+        editUser(user = null) {
+            this.userModalOpen = false;
+            this.userDraft = {id:user?.id || null, username:user?.username || '', email:user?.email || '', display_name:user?.display_name || '', password:'', role:user?.role || 'user'};
+            this.userEditorOpen = true;
+        },
+        async saveUser() {
+            if (this.userSaving) return;
+            this.userSaving = true;
+            try {
+                await this.request(`${this.apiBase}/users/manage`, {method:'POST', body:JSON.stringify({...this.userDraft, action:this.userDraft.id ? 'update' : 'create'})});
+                this.userDraft.password = '';
+                this.userEditorOpen = false;
+                await this.loadUsers(false);
+                this.showToast('User saved');
+            } catch (error) { this.showToast(error.message); }
+            finally { this.userSaving = false; }
+        },
+        async deleteUser(user) {
+            if (!confirm(`Delete user ${user.username}?`)) return;
+            try {
+                await this.request(`${this.apiBase}/users/manage`, {method:'POST', body:JSON.stringify({action:'delete', id:user.id})});
+                this.userModalOpen = false;
+                await this.loadUsers(false);
+            } catch (error) { this.showToast(error.message); }
+        },
+        async saveSchedule() {
+            try {
+                await this.request(`${this.apiBase}/jobs/${encodeURIComponent(this.activeJobName)}/schedule`, {method:'POST', body:JSON.stringify({cron:this.scheduleDraft})});
+                this.scheduleEditing = false;
+                await this.loadJobs();
+            } catch (error) { this.showToast(error.message); }
+        },
+
         users: { items: [], total: 0, limit: 40, offset: 0, online_count: 0 },
         usersLoading: false,
         userSearch: '',
@@ -4009,6 +4304,7 @@ function adminV2() {
         },
 
         async refreshAll() {
+            if (this.routeReady && this.activeView === 'statistics') await this.loadStatistics();
             this.loading = true;
             try {
                 const data = await this.request(`${this.apiBase}/dashboard`);
@@ -4039,6 +4335,8 @@ function adminV2() {
                 ]);
             } else if (this.activeView === 'users') {
                 await Promise.allSettled([this.loadUsers(false)]);
+            } else if (this.activeView === 'statistics') {
+                return;
             } else if (this.activeView === 'settings') {
                 await Promise.allSettled([
                     this.loadFederation(false),
@@ -4076,6 +4374,8 @@ function adminV2() {
                 this.libraryKind = nextKind;
             } else if (view === 'settings') {
                 this.activeView = 'settings';
+            } else if (view === 'statistics') {
+                this.activeView = 'statistics';
             } else if (view === 'users') {
                 this.activeView = 'users';
             } else if (view === 'tools') {
@@ -4113,6 +4413,9 @@ function adminV2() {
                 if (!this.settingsProbe.status || this.settingsProbe.status === 'idle') {
                     await this.loadSettingsProbe(false);
                 }
+            } else if (this.activeView === 'statistics') {
+                if (updateRoute) this.setRoute('#statistics');
+                this.statisticsSetPeriod();
             } else if (this.activeView === 'users') {
                 if (updateRoute) this.setRoute('#users');
                 await this.loadUsers(false);
@@ -6037,6 +6340,7 @@ function adminV2() {
             if (this.activeView === 'jobs') return 'Tasks';
             if (this.activeView === 'tools') return 'Library Tools';
             if (this.activeView === 'settings') return 'Settings';
+            if (this.activeView === 'statistics') return 'Statistics';
             if (this.activeView === 'users') return 'Users';
             return 'Review Queue';
         },
@@ -6046,6 +6350,7 @@ function adminV2() {
             if (this.activeView === 'jobs') return 'Scheduler state, recent runs, and manual controls in one place';
             if (this.activeView === 'tools') return 'Guided metadata repair and maintenance history';
             if (this.activeView === 'settings') return 'Application configuration and external API credentials';
+            if (this.activeView === 'statistics') return 'Listening, popularity, individual histories and instance health';
             if (this.activeView === 'users') return 'Account status, live presence, and per-user listening statistics';
             return 'Full-screen review triage with filter-aware bulk actions';
         },
