@@ -38,6 +38,38 @@ test('deselect all retains related rows and allows selecting only the needed res
     assert.equal(app.repairIncludedCount(),3);
 });
 
+test('checking only releases includes their contents without selecting the artist', () => {
+    const app = createApp();
+    app.setAllRepairIncluded(false);
+    app.setRepairIncluded('releases',2,true);
+    assert.deepEqual(JSON.parse(JSON.stringify(app.repairSelection(true))),{artists:[],releases:[2],tracks:[3]});
+    assert.equal(app.repairIsIncluded('tracks',3),true);
+    assert.equal(app.repairIsIncluded('artists',1),false);
+    app.setRepairIncluded('tracks',3,false);
+    assert.equal(app.repairIsIncluded('tracks',3),false);
+    assert.deepEqual(JSON.parse(JSON.stringify(app.repairSelection(true))).tracks,[]);
+    assert.deepEqual(JSON.parse(JSON.stringify(app.repairExcludedTracks)),[3]);
+    app.setAllRepairIncluded(false);
+    app.setRepairIncluded('releases',2,true);
+    assert.equal(app.repairIsIncluded('tracks',3),true);
+});
+
+test('explicit track exclusions are sent to planning without re-expanding them', async () => {
+    const app=createApp();
+    app.setAllRepairIncluded(false);
+    app.setRepairIncluded('releases',2,true);
+    app.setRepairIncluded('tracks',3,false);
+    app.repairDraft='Edit release only';
+    app.request=async(url,options)=>{
+        assert.ok(url.endsWith('/plan'));
+        const body=JSON.parse(options.body);
+        assert.deepEqual(body.selection,{artists:[],releases:[2],tracks:[]});
+        assert.deepEqual(body.excluded_track_ids,[3]);
+        return {plan:emptyPlan(),snapshot:app.repairExpanded.snapshot,message:'Done'};
+    };
+    await app.sendRepair();
+});
+
 test('clarification replaces the single plan including removed changes and questions', async () => {
     const app = createApp();
     app.repairPlan = {...emptyPlan(),delete:{artists:[],releases:[],tracks:[3]},questions:['Which release?']};

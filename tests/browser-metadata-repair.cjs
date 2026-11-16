@@ -41,13 +41,56 @@ const emptyPlan=()=>({artists:[],releases:[],tracks:[],questions:[],delete:{arti
         }
         if (!process.env.FURU_REPAIR_SKIP_SEED) sql(readFileSync(__dirname+'/metadata_repair_fixture.sql','utf8'));
         const post=async(path,data,status=200)=>{
-            const response=await api.post(base+'/admin/v2/api/metadata-fix/'+path,{data});
+            const response=await api.post(base+'/admin/v2/api/metadata-fix/'+path,{data,timeout:240000});
             assert.equal(response.status(),status,await response.text());
             return response.json();
         };
         const expanded=await post('expand',{selection:{artists:[2719],releases:[],tracks:[]}});
         const before=expanded.snapshot;
         assert.equal(before.releases.length,4); assert.equal(before.tracks.length,10);
+        // Reproduce the reported request using ONLY the four release checkboxes.
+        if (process.env.FURU_REPAIR_TEST_MODEL) {
+            const selection={artists:[],releases:before.releases.map(r=>r.id),tracks:[]};
+            const instruction=`релизы #ИЗИРОК на самом деле один релиз типа компиляция 2021 года. тебе нужно сделать план по объединению в один релиз. вот полный треклист по порядку 01. Старик и братья
+02. Потрошитель
+03. Последняя песня
+04. Песня для твоей подруги
+05. Просто я сегодня... (feat. Перегаз)
+06. Отзвуки тьмы
+07. Битва за Москву
+08. Настроение лето
+09. Пробил час
+10. Цусима`;
+            const proposed=await post('plan',{selection,instruction});
+            assert.equal(proposed.snapshot.artists.length,0);
+            assert.equal(proposed.snapshot.tracks.length,10);
+            assert.deepEqual(proposed.plan.artists,[]);
+            assert.deepEqual(proposed.plan.delete.artists,[]);
+            assert.deepEqual(proposed.plan.delete.tracks,[]);
+            const destination=proposed.plan.releases.find(r=>r.release_type==='compilation' && r.year===2021);
+            assert.ok(destination,JSON.stringify(proposed.plan));
+            const target=destination.id ? 'existing:'+destination.id : 'new:'+destination.key;
+            for (const [index,track] of before.tracks.entries()) {
+                const edit=proposed.plan.tracks.find(t=>t.id===track.id);
+                assert.equal(edit?.target_release || 'existing:'+track.release_id,target);
+                assert.equal(edit?.track_number ?? track.track_number,index+1);
+                assert.deepEqual(edit?.artist_ids || [2719],[2719]);
+            }
+            const result=await post('apply',{snapshot:proposed.snapshot,plan:proposed.plan,instruction});
+            assert.equal(sql('SELECT count(*) FROM furumusic__track'),'10');
+            assert.equal(sql('SELECT count(*) FROM furumusic__release'),'1');
+            assert.equal(sql('SELECT name FROM furumusic__artist'),'Radio Tapok');
+            await post('undo',{history_id:result.history_id});
+            assert.deepEqual((await post('expand',{selection:expanded.selection})).snapshot,before);
+            const excluded=await post('plan',{selection,excluded_track_ids:[33683],instruction:'Ничего не меняй. Верни пустой план.'});
+            assert.equal(excluded.snapshot.tracks.length,9);
+            assert.equal(excluded.snapshot.tracks.some(t=>t.id===33683),false);
+            assert.deepEqual(excluded.plan.tracks,[]);
+            const recovered=await post('plan',{selection,instruction:'__TEST_INVALID_ARTIST__ Объедини четыре релиза в компиляцию 2021 года.'});
+            assert.deepEqual(recovered.plan.artists,[]);
+            assert.equal(recovered.plan.releases[0].year,2021);
+            console.log('Release-only scope, exact ordered tracklist, model correction and exclusions passed.');
+        }
         const artistIds=track=>before.track_artists.filter(link=>link.owner_id===track.id).map(link=>link.artist_id);
         const merge={...emptyPlan(),releases:[{id:null,key:'collection',title:'#ИЗИРОК Сборник',release_type:'compilation',year:2021,artist_ids:[2719]}],tracks:before.tracks.map(track=>({id:track.id,title:track.title,target_release:'new:collection',track_number:track.track_number,disc_number:track.disc_number,year:track.year,artist_ids:artistIds(track)})),delete:{artists:[],releases:before.releases.map(release=>release.id),tracks:[]}};
         await page.getByRole('button',{name:'Library Tools',exact:true}).click();
@@ -60,11 +103,15 @@ const emptyPlan=()=>({artists:[],releases:[],tracks:[],questions:[],delete:{arti
         await tools.getByRole('button',{name:'Deselect all',exact:true}).click();
         assert.equal(await tools.locator('.repair-entity input:checked').count(),0);
         assert.equal(await tools.locator('.repair-entity input[type=checkbox]').count(),15);
-        await tools.getByRole('button',{name:'Select all',exact:true}).click();
+        for (const release of before.releases) {
+            await tools.getByRole('checkbox',{name:new RegExp('^#ИЗИРОК #' + release.id + ' ')}).check();
+        }
+        assert.equal(await tools.locator('.repair-entity input:checked').count(),14);
+        assert.equal(await tools.getByRole('checkbox',{name:'Radio Tapok #2719',exact:true}).isChecked(),false);
         let calls=0;
         await page.route('**/metadata-fix/plan',async route=>{
             const body=route.request().postDataJSON(); calls++;
-            assert.deepEqual(body.selection,expanded.selection);
+            assert.deepEqual(body.selection,{...expanded.selection,artists:[]});
             if (calls===1) await route.fulfill({json:{snapshot:before,plan:merge,message:'Объединю все 10 треков в сборник 2021 года.'}});
             else {
                 assert.equal(body.current_plan.releases[0].year,2021);

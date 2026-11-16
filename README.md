@@ -136,7 +136,10 @@ live service.
 
 Admin → Library Tools provides a chat for editing the selected library resources.
 Use **Show related**, then **Deselect all** to choose only the resources needed
-for the task. Releases show their years; tracks show their source release.
+for the task. Selecting a release includes its tracks; individual tracks can
+then be unchecked to exclude them. Unselected artists remain read-only context
+and their IDs can still be used in credits. Releases show their years; tracks
+show their source release.
 
 The assistant sees the complete selected scope and replaces the proposed plan
 after every clarification. Expand **Proposed changes** in the chat to review or
@@ -161,6 +164,9 @@ PostgreSQL container named `furumi-repair-test-pg`, with database
 `furumi_repair_test`. Set `FURU_TEST_URL`, `FURU_REPAIR_TEST_PG`, `CHROME_PATH`, and
 `PLAYWRIGHT_MODULE` as needed. It seeds `tests/metadata_repair_fixture.sql` after
 creating the test administrator. Set `FURU_REPAIR_SKIP_SEED=1` for a seeded database.
+With `FURU_REPAIR_TEST_MODEL=1`, it additionally checks the reported release-only
+selection and full ordered tracklist against the configured model, applies and
+undoes that plan, and verifies individual track exclusions.
 
 ## Importing into playlists
 

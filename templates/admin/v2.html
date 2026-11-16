@@ -2710,12 +2710,12 @@ tbody tr:hover {
                                 <div x-show="repairRows(kind).length">
                                     <div class="repair-group" x-text="kind"></div>
                                     <template x-for="item in repairRows(kind)" :key="kind + item.id">
-                                        <label class="repair-entity"><input type="checkbox" :checked="repairIncluded[kind + ':' + item.id] !== false" @change="setRepairIncluded(kind,item.id,$event.target.checked)" :disabled="repairBusy" /><span><span x-text="(item.name || item.title) + ' #' + item.id"></span><small class="repair-context" x-text="repairEntityContext(kind,item)"></small></span></label>
+                                        <label class="repair-entity"><input type="checkbox" :checked="repairIsIncluded(kind,item.id)" @change="setRepairIncluded(kind,item.id,$event.target.checked)" :disabled="repairBusy" /><span><span x-text="(item.name || item.title) + ' #' + item.id"></span><small class="repair-context" x-text="repairEntityContext(kind,item)"></small></span></label>
                                     </template>
                                 </div>
                             </template>
                             <div class="toolbar" style="margin-top:12px"><button class="btn" @click="expandRepair()" :disabled="repairSelected.length === 0 || repairBusy">Show related</button><button class="btn" @click="clearRepair()" :disabled="repairBusy">Clear</button></div>
-                            <div class="muted" style="margin-top:8px">Uncheck any related item to exclude it from the plan. Audio files stay in their current folders.</div>
+                            <div class="muted" style="margin-top:8px">Selecting a release includes its tracks. Uncheck individual tracks to exclude them. Artist names are read-only unless the artist is checked. Audio files stay in their current folders.</div>
                         </div>
                     </section>
                     <section class="panel" style="max-height:160px"><div class="panel-head"><div class="panel-title"><strong>History</strong><span>Recent applied plans</span></div></div><div class="repair-scroll repair-history"><template x-for="entry in repairHistory" :key="entry.id"><div class="repair-entity"><span style="flex:1" x-text="'#' + entry.id + ' · ' + entry.instruction.slice(0,55) + (entry.undone_at ? ' · undone' : '')"></span><button class="btn" x-show="!entry.undone_at" @click="undoRepair(entry.id)" :disabled="repairBusy">Undo</button></div></template><div class="muted" x-show="repairHistory.length === 0">No applied plans yet.</div></div></section>
@@ -4255,6 +4255,7 @@ function adminV2() {
         repairSelected: [],
         repairExpanded: null,
         repairIncluded: {},
+        repairExcludedTracks: [],
         repairDraft: '',
         repairChat: [],
         repairPlan: null,
@@ -4532,6 +4533,7 @@ function adminV2() {
             this.repairSelected = [];
             this.repairExpanded = null;
             this.repairIncluded = {};
+            this.repairExcludedTracks = [];
             this.repairPlan = null;
             this.repairSnapshot = null;
             this.repairChat = [];
@@ -4551,8 +4553,15 @@ function adminV2() {
             } else {
                 for (const item of this.repairSelected) if (this.repairIncluded[item.kind + ':' + item.id] !== false) selection[item.kind].push(item.id);
             }
+            if (expanded && this.repairExpanded) {
+                for (const track of this.repairExpanded.snapshot.tracks || []) {
+                    if (selection.releases.includes(track.release_id) && !this.repairExcludedTracks.includes(track.id) && !selection.tracks.includes(track.id)) selection.tracks.push(track.id);
+                }
+                selection.tracks = selection.tracks.filter(id => !this.repairExcludedTracks.includes(id)).sort((a,b) => a-b);
+            }
             return selection;
         },
+        repairIsIncluded(kind,id) { return this.repairSelection(true)[kind].includes(Number(id)); },
         repairRows(kind) {
             if (this.repairExpanded) return this.repairExpanded.snapshot[kind] || [];
             return this.repairSelected.filter(item => item.kind === kind);
@@ -4569,6 +4578,7 @@ function adminV2() {
         },
         setAllRepairIncluded(checked) {
             if (this.repairBusy) return;
+            this.repairExcludedTracks = [];
             for (const kind of ['artists','releases','tracks']) {
                 for (const item of this.repairRows(kind)) this.repairIncluded[kind + ':' + item.id] = checked;
             }
@@ -4577,6 +4587,14 @@ function adminV2() {
         setRepairIncluded(kind,id,checked) {
             if (this.repairBusy) return;
             this.repairIncluded[kind + ':' + id] = checked;
+            if (kind === 'tracks') {
+                this.repairExcludedTracks = this.repairExcludedTracks.filter(value => value !== id);
+                if (!checked) this.repairExcludedTracks.push(id);
+            }
+            if (kind === 'releases' && checked) {
+                const tracks = this.repairRows('tracks').filter(track => track.release_id === id).map(track => track.id);
+                this.repairExcludedTracks = this.repairExcludedTracks.filter(id => !tracks.includes(id));
+            }
             this.invalidateRepairPlan();
         },
         repairEntityLabel(kind,id) {
@@ -4607,6 +4625,7 @@ function adminV2() {
                 this.repairPlan = null;
                 this.repairSnapshot = null;
                 this.repairIncluded = {};
+                this.repairExcludedTracks = [];
                 this.repairIncomplete = false;
                 this.repairPendingInstruction = '';
             } catch (error) { this.showToast(error.message); }
@@ -4687,7 +4706,7 @@ function adminV2() {
                 if (!this.repairExpanded) {
                     await this.expandRepairForChat();
                 }
-                const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,reference:this.repairReference || null,primary_artist_ids:this.repairSelected.filter(item => item.kind === 'artists').map(item => item.id),conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null})});
+                const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),excluded_track_ids:this.repairExcludedTracks,instruction,reference:this.repairReference || null,primary_artist_ids:this.repairSelected.filter(item => item.kind === 'artists').map(item => item.id),conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null})});
                 this.repairPlan = result.plan;
                 this.repairSnapshot = result.snapshot;
                 this.repairChat.push({role:'assistant',content:result.message});
@@ -4719,6 +4738,7 @@ function adminV2() {
                 this.repairChat.push({role:'assistant',content:'Plan applied · history #' + result.history_id + '. You can undo it from History.'});
                 this.repairSelected = [];
                 this.repairIncluded = {};
+                this.repairExcludedTracks = [];
                 this.repairIncomplete = false;
                 this.repairPlan = null;
                 this.repairSnapshot = null;
@@ -4742,6 +4762,7 @@ function adminV2() {
                 this.invalidateRepairPlan();
                 this.repairSelected = [];
                 this.repairIncluded = {};
+                this.repairExcludedTracks = [];
                 this.repairChat.push({role:'assistant',content:'Metadata repair #' + historyId + ' undone.'});
                 this.showToast('Metadata repair undone');
                 await this.loadLibrary(false);
