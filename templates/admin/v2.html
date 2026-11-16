@@ -184,28 +184,58 @@ button {
 }
 
 .repair-shell { display:grid;grid-template-columns:290px minmax(0,1fr);gap:14px;height:calc(100dvh - 116px);min-height:520px; }
-.repair-side,.repair-work { min-height:0;display:flex;flex-direction:column;gap:12px; }
+.repair-side,.repair-work { min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px; }
 .repair-side .panel,.repair-plan,.repair-chat { min-height:0;display:flex;flex-direction:column; }
 .repair-side .panel { flex:1; }
 .repair-scroll { overflow:auto;min-height:0;padding:12px; }
-.repair-work .repair-plan { flex:1; }
-.repair-work .repair-chat { height:220px;flex:none; }
+.repair-work .repair-chat { flex:1; }
+.repair-chat > .repair-scroll { flex:1;display:flex;flex-direction:column;gap:12px; }
+.repair-plan { border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary);flex:none; }
+.repair-plan summary { cursor:pointer;padding:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+.repair-plan summary::before { content:'▸'; }
+.repair-plan[open] summary::before { content:'▾'; }
+.repair-plan-body { padding:0 12px 14px;overflow:auto; }
+.repair-preview { display:grid;gap:8px;margin:10px 0; }
+.repair-preview-row { padding:10px 12px;border:1px solid var(--border-color);border-radius:6px; }
+.repair-preview-row strong { display:block;font-size:13px;margin:4px 0;overflow-wrap:anywhere; }
+.repair-preview-row p { margin:0;font-size:12px;line-height:1.5;color:var(--text-secondary);white-space:pre-line;overflow-wrap:anywhere; }
+.repair-manual > summary { font-size:12px;color:var(--text-secondary); }
+.repair-plan-actions { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border-top:1px solid var(--border-color); }
+.repair-delete { color:var(--red); }
+.repair-context { display:block;color:var(--text-subdued);font-size:11px;margin-top:3px; }
+@media (max-width:800px) {
+    html:has(.repair-view),body:has(.repair-view) { min-width:0; }
+    .repair-view { grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr); }
+    .repair-view .sidebar { border-right:0;border-bottom:1px solid var(--border-color); }
+    .repair-view .sidebar .brand,.repair-view .sidebar .nav-label,.repair-view .sidebar .nav-group:last-child { display:none; }
+    .repair-view .sidebar .nav-group { display:flex;overflow-x:auto;gap:4px;padding:8px; }
+    .repair-view .sidebar .nav-btn { width:auto;flex:none;white-space:nowrap;padding:10px; }
+    .repair-view .sidebar .nav-count { display:none; }
+    .repair-view .topbar { height:auto;padding:12px;flex-wrap:wrap; }
+    .repair-view .content { padding:12px; }
+    .repair-view .panel-head { flex-wrap:wrap;gap:12px; }
+    .repair-plan-actions { align-items:stretch;flex-direction:column; }
+    .repair-shell { grid-template-columns:1fr;height:auto;min-height:0; }
+    .repair-side .panel:first-child .repair-scroll { max-height:280px; }
+    .repair-work .repair-chat { min-height:65dvh;max-height:90dvh; }
+}
+
 .repair-group { margin:12px 0 5px;color:var(--text-secondary);font-size:11px;font-weight:800;text-transform:uppercase; }
 .repair-entity { display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:12px; }
 .repair-entity span { overflow-wrap:anywhere; }
 .repair-search-results { max-height:160px;overflow:auto;border:1px solid var(--border-color);border-radius:6px;margin-top:6px; }
 .repair-search-results button { display:block;width:100%;padding:8px;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer; }
 .repair-search-results button:hover { background:var(--bg-hover); }
-.repair-diff { width:100%;border-collapse:collapse;font-size:12px; }
+.repair-diff { min-width:850px;width:100%;border-collapse:collapse;font-size:12px; }
 .repair-diff th,.repair-diff td { text-align:left;border-bottom:1px solid var(--border-color);padding:7px;vertical-align:top; }
 .repair-diff th { color:var(--text-subdued);font-size:10px;text-transform:uppercase; }
 .repair-diff input,.repair-diff select { width:100%;min-width:90px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:5px;padding:6px; }
 .repair-diff .compact { min-width:65px;max-width:90px; }
-.repair-message { padding:7px 9px;border-radius:7px;max-width:86%;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere; }
+.repair-message { padding:12px 14px;border-radius:9px;max-width:90%;font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere; }
 .repair-message.user { background:#16452a;align-self:flex-end; }
 .repair-message.assistant { background:var(--bg-elevated);align-self:flex-start; }
 .repair-composer { border-top:1px solid var(--border-color);padding:9px;display:flex;gap:8px;align-items:end; }
-.repair-composer textarea { flex:1;min-width:0;resize:vertical;max-height:100px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:8px; }
+.repair-composer textarea { flex:1;min-width:0;resize:vertical;max-height:180px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:8px; }
 .repair-thinking { display:flex;align-items:center;gap:8px;color:var(--amber);font-size:12px;padding:10px; }
 .repair-thinking::before { content:"";width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:repair-spin .8s linear infinite; }
 @keyframes repair-spin { to { transform:rotate(360deg); } }
@@ -2060,7 +2090,7 @@ tbody tr:hover {
 {% endblock head_extra %}
 
 {% block content %}
-<div class="admin-shell" :class="{'statistics-view': activeView === 'statistics'}" x-data="adminV2()" x-cloak>
+<div class="admin-shell" :class="{'statistics-view': activeView === 'statistics', 'repair-view': activeView === 'tools'}" x-data="adminV2()" x-cloak>
     <aside class="sidebar">
         <div class="brand">
             <div class="brand-title">
@@ -2674,12 +2704,13 @@ tbody tr:hover {
                                 <template x-for="item in repairSearchResults" :key="item.kind + ':' + item.id"><button type="button" @click="addRepairEntity(item)" x-text="item.title + (item.subtitle ? ' · ' + item.subtitle : '')"></button></template>
                             </div>
                             <div class="repair-group">Selected and related · <span x-text="repairIncludedCount()"></span></div>
+                            <div class="toolbar"><button class="btn" @click="setAllRepairIncluded(true)" :disabled="repairBusy || !repairRowsCount()">Select all</button><button class="btn" @click="setAllRepairIncluded(false)" :disabled="repairBusy || !repairIncludedCount()">Deselect all</button></div>
                             <div class="muted" x-show="!repairExpanded && repairSelected.length === 0">Search and select an artist, release, or track.</div>
                             <template x-for="kind in ['artists','releases','tracks']" :key="kind">
                                 <div x-show="repairRows(kind).length">
                                     <div class="repair-group" x-text="kind"></div>
                                     <template x-for="item in repairRows(kind)" :key="kind + item.id">
-                                        <label class="repair-entity"><input type="checkbox" :checked="repairIncluded[kind + ':' + item.id] !== false" @change="setRepairIncluded(kind,item.id,$event.target.checked)" :disabled="repairBusy" /><span x-text="(item.name || item.title) + ' #' + item.id"></span></label>
+                                        <label class="repair-entity"><input type="checkbox" :checked="repairIncluded[kind + ':' + item.id] !== false" @change="setRepairIncluded(kind,item.id,$event.target.checked)" :disabled="repairBusy" /><span><span x-text="(item.name || item.title) + ' #' + item.id"></span><small class="repair-context" x-text="repairEntityContext(kind,item)"></small></span></label>
                                     </template>
                                 </div>
                             </template>
@@ -2690,26 +2721,39 @@ tbody tr:hover {
                     <section class="panel" style="max-height:160px"><div class="panel-head"><div class="panel-title"><strong>History</strong><span>Recent applied plans</span></div></div><div class="repair-scroll repair-history"><template x-for="entry in repairHistory" :key="entry.id"><div class="repair-entity"><span style="flex:1" x-text="'#' + entry.id + ' · ' + entry.instruction.slice(0,55) + (entry.undone_at ? ' · undone' : '')"></span><button class="btn" x-show="!entry.undone_at" @click="undoRepair(entry.id)" :disabled="repairBusy">Undo</button></div></template><div class="muted" x-show="repairHistory.length === 0">No applied plans yet.</div></div></section>
                 </aside>
                 <div class="repair-work">
-                    <section class="panel repair-plan">
-                        <div class="panel-head"><div class="panel-title"><strong>Proposed changes</strong><span x-text="repairIncomplete ? (repairBusy ? 'Processing tracks: ' : 'Paused at track: ') + repairTrackOffset + ' / ' + repairTrackTotal : (repairPlan ? 'Review and edit before applying' : 'The agent’s plan will appear here')"></span></div><div class="toolbar"><span class="selection-summary" x-show="repairPlan" x-text="repairChangeCount() + ' changes'"></span><button class="btn primary" x-show="repairPlan" @click="applyRepair()" :disabled="repairBusy || repairIncomplete || !repairChangeCount()">Apply plan</button></div></div>
-                        <div class="repair-scroll" :style="repairBusy ? 'pointer-events:none' : ''">
-                            <div class="repair-thinking" x-show="repairBusy && repairStage === 'thinking'">Agent is reviewing the selected metadata…</div>
-                            <div class="empty" x-show="!repairPlan && !(repairBusy && repairStage === 'thinking')">Select entities and describe the correction in the chat below.</div>
+                    <section class="panel repair-chat">
+                        <div class="panel-head"><div class="panel-title"><strong>Metadata assistant</strong><span>Discuss the task. The proposed plan updates with each reply.</span></div></div>
+                        <div class="repair-scroll" x-ref="repairChat">
+                            <div class="muted" x-show="repairChat.length === 0">Select resources and describe what should change. You can ask to combine releases, move tracks, edit metadata, or delete resources.</div>
+                            <template x-for="(turn,index) in repairChat" :key="index"><div class="repair-message" :class="turn.role" x-text="turn.content"></div></template>
+                            <div class="repair-thinking" x-show="repairBusy" x-text="repairStage === 'applying' ? 'Applying changes…' : 'Agent is reviewing the selected metadata and updating the plan…'" role="status"></div>
+                            <details class="repair-plan" x-show="repairPlan" :open="repairPlanOpen" @toggle="repairPlanOpen = $el.open">
+                                <summary><strong>Proposed changes</strong><span class="selection-summary" x-text="repairChangeCount() + ' changes' + (repairDeleteCount() ? ' · ' + repairDeleteCount() + ' deletions' : '')"></span><span class="muted" x-text="repairIncomplete ? 'Update incomplete · retry your message' : 'Expand to review the current plan'"></span></summary>
+                                <div class="repair-plan-body"><fieldset :disabled="repairBusy || repairIncomplete" style="border:0;padding:0;margin:0;min-width:0">
                             <template x-if="repairPlan"><div>
                                 <div class="repair-section-title" x-show="repairPlan.questions.length">Questions to review</div>
                                 <template x-for="question in repairPlan.questions" :key="question"><div class="repair-entity" style="color:var(--amber)" x-text="question"></div></template>
+                                <div class="repair-preview"><template x-for="row in repairPreview()" :key="row.key"><div class="repair-preview-row"><small class="muted" x-text="row.action"></small><strong x-text="row.title"></strong><p x-text="row.detail"></p></div></template></div>
+                                <details class="repair-manual"><summary>Edit fields manually</summary>
                                 <div class="repair-section-title" x-show="repairPlan.artists.length">Artists</div>
-                                <table class="repair-diff" x-show="repairPlan.artists.length"><thead><tr><th>Before</th><th>After</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.artists" :key="edit.id"><tr><td x-text="repairBefore('artists',edit.id)?.name || ''"></td><td><input x-model="edit.name" /></td><td><button class="btn" @click="repairPlan.artists.splice(index,1)">Remove</button></td></tr></template></tbody></table>
+                                <table class="repair-diff" x-show="repairPlan.artists.length"><thead><tr><th>Before</th><th>After</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.artists" :key="edit.id"><tr><td x-text="repairEntityLabel('artists',edit.id)"></td><td><input x-model="edit.name" /></td><td><button class="btn" @click="repairPlan.artists.splice(index,1)">Remove edit</button></td></tr></template></tbody></table>
                                 <div class="repair-section-title" x-show="repairPlan.releases.length">Releases</div>
-                                <table class="repair-diff" x-show="repairPlan.releases.length"><thead><tr><th>Before</th><th>After</th><th>Type</th><th>Year</th><th>Artist IDs</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.releases" :key="edit.id || edit.key"><tr><td><div x-text="edit.id ? (repairBefore('releases',edit.id)?.title || '') : 'New release'"></div><small class="muted" x-show="edit.id" x-text="edit.id ? [repairBefore('releases',edit.id)?.release_type,repairBefore('releases',edit.id)?.year].filter(x => x != null).join(' · ') : ''"></small></td><td><input x-model="edit.title" /></td><td><select x-model="edit.release_type"><template x-for="type in ['album','single','ep','compilation','mixtape','live','soundtrack','remix','demo']" :key="type"><option :value="type" x-text="type"></option></template></select></td><td><input class="compact" type="number" x-model.number="edit.year" /></td><td><input :value="edit.artist_ids.join(', ')" @change="edit.artist_ids = parseRepairIds($event.target.value)" /></td><td><button class="btn" @click="repairPlan.releases.splice(index,1)">Remove</button></td></tr></template></tbody></table>
+                                <table class="repair-diff" x-show="repairPlan.releases.length"><thead><tr><th>Before</th><th>After</th><th>Type</th><th>Year</th><th>Artist IDs</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.releases" :key="edit.id || edit.key"><tr><td><div x-text="edit.id ? repairEntityLabel('releases',edit.id) : 'New release'"></div><small class="muted" x-show="edit.id" x-text="edit.id ? [repairBefore('releases',edit.id)?.release_type,repairBefore('releases',edit.id)?.year].filter(x => x != null).join(' · ') : ''"></small></td><td><input x-model="edit.title" /></td><td><select x-model="edit.release_type"><template x-for="type in ['album','single','ep','compilation','mixtape','live','soundtrack','remix','demo']" :key="type"><option :value="type" x-text="type"></option></template></select></td><td><input class="compact" type="number" x-model.number="edit.year" /></td><td><input :value="edit.artist_ids.join(', ')" @change="edit.artist_ids = parseRepairIds($event.target.value)" /><small class="repair-context" x-text="repairArtistNames(edit.artist_ids)"></small></td><td><button class="btn" @click="repairPlan.releases.splice(index,1)">Remove edit</button></td></tr></template></tbody></table>
                                 <div class="toolbar" x-show="repairPlan"><button class="btn" @click="addRepairRelease()">+ New release</button></div>
                                 <div class="repair-section-title" x-show="repairPlan.tracks.length">Tracks</div>
-                                <table class="repair-diff" x-show="repairPlan.tracks.length"><thead><tr><th>Before</th><th>After</th><th>Release</th><th>#</th><th>Disc</th><th>Year</th><th>Artist IDs</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.tracks" :key="edit.id"><tr><td><div x-text="repairBefore('tracks',edit.id)?.title || ''"></div><small class="muted" x-text="'#' + (repairBefore('tracks',edit.id)?.track_number ?? '—') + ' · release #' + (repairBefore('tracks',edit.id)?.release_id || '')"></small></td><td><input x-model="edit.title" /></td><td><select x-model="edit.target_release"><template x-for="release in repairTargetReleases()" :key="release.value"><option :value="release.value" x-text="release.label"></option></template></select></td><td><input class="compact" type="number" x-model.number="edit.track_number" /></td><td><input class="compact" type="number" x-model.number="edit.disc_number" /></td><td><input class="compact" type="number" x-model.number="edit.year" /></td><td><input :value="edit.artist_ids.join(', ')" @change="edit.artist_ids = parseRepairIds($event.target.value)" /></td><td><button class="btn" @click="repairPlan.tracks.splice(index,1)">Remove</button></td></tr></template></tbody></table>
+                                <table class="repair-diff" x-show="repairPlan.tracks.length"><thead><tr><th>Before</th><th>After</th><th>Release</th><th>#</th><th>Disc</th><th>Year</th><th>Artist IDs</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.tracks" :key="edit.id"><tr><td><div x-text="repairEntityLabel('tracks',edit.id)"></div><small class="muted" x-text="repairEntityContext('tracks',repairBefore('tracks',edit.id))"></small></td><td><input x-model="edit.title" /></td><td><select x-model="edit.target_release"><template x-for="release in repairTargetReleases()" :key="release.value"><option :value="release.value" x-text="release.label"></option></template></select></td><td><input class="compact" type="number" x-model.number="edit.track_number" /></td><td><input class="compact" type="number" x-model.number="edit.disc_number" /></td><td><input class="compact" type="number" x-model.number="edit.year" /></td><td><input :value="edit.artist_ids.join(', ')" @change="edit.artist_ids = parseRepairIds($event.target.value)" /><small class="repair-context" x-text="repairArtistNames(edit.artist_ids)"></small></td><td><button class="btn" @click="repairPlan.tracks.splice(index,1)">Remove edit</button></td></tr></template></tbody></table>
                                 <div class="toolbar"><button class="btn" @click="addRepairTrack()">+ Track edit</button></div>
+                                </details>
+                                <div class="repair-section-title repair-delete" x-show="repairDeleteCount()">Delete resources · <span x-text="repairDeleteCount()"></span></div>
+                                <p class="muted" x-show="repairDeleteCount()">These resources will be removed from the library. Audio files are retained for Undo. Release tracks must be moved or explicitly deleted; artist credits are detached.</p>
+                                <template x-for="kind in ['artists','releases','tracks']" :key="kind"><div><template x-for="id in (repairPlan.delete?.[kind] || [])" :key="id"><div class="repair-entity repair-delete"><span style="flex:1" x-text="kind + ' · ' + repairEntityLabel(kind,id) + (kind === 'releases' ? ' · ' + repairEntityContext(kind,repairBefore(kind,id)) : '')"></span><button class="btn" @click="repairPlan.delete[kind] = repairPlan.delete[kind].filter(value => value !== id)">Keep resource</button></div></template></div></template>
                             </div></template>
+                                </fieldset></div>
+                                <div class="repair-plan-actions"><span class="muted">Review the plan before applying.</span><button class="btn primary" @click="applyRepair()" :disabled="repairBusy || repairIncomplete || !repairChangeCount()">Apply plan</button></div>
+                            </details>
                         </div>
+                        <form class="repair-composer" @submit.prevent="sendRepair()"><textarea rows="3" placeholder="Describe the task or clarify the current plan…" aria-label="Message to metadata assistant" x-model="repairDraft" :disabled="repairBusy" @keydown.ctrl.enter.prevent="sendRepair()"></textarea><button class="btn primary" type="submit" :disabled="repairBusy || !repairDraft.trim() || !repairIncludedCount()" x-text="repairIncomplete && repairDraft.trim() === repairPendingInstruction ? 'Retry' : 'Send'"></button></form>
                     </section>
-                    <section class="panel repair-chat"><div class="repair-scroll" style="display:flex;flex-direction:column;gap:7px" x-ref="repairChat"><template x-for="(turn,index) in repairChat" :key="index"><div class="repair-message" :class="turn.role" x-text="turn.content"></div></template><div class="muted" x-show="repairChat.length === 0">Describe what should change. The agent will respond in your language.</div></div><form class="repair-composer" @submit.prevent="sendRepair()"><textarea rows="2" placeholder="Describe the metadata problem…" x-model="repairDraft" @keydown.ctrl.enter.prevent="sendRepair()"></textarea><button class="btn primary" type="submit" :disabled="repairBusy || !repairDraft.trim() || !repairIncludedCount()" x-text="repairIncomplete && repairDraft.trim() === repairPendingInstruction ? 'Retry' : 'Send'"></button></form></section>
                 </div>
             </div>
         </div>
@@ -4214,16 +4258,14 @@ function adminV2() {
         repairDraft: '',
         repairChat: [],
         repairPlan: null,
+        repairPlanOpen: false,
         repairSnapshot: null,
         repairInstruction: '',
         repairBusy: false,
         repairStage: '',
         repairIncomplete: false,
-        repairTrackOffset: 0,
-        repairTrackTotal: 0,
         repairPendingInstruction: '',
         repairReference: '',
-        repairExpandedReference: '',
         repairHistory: [],
         settings: { values: {}, sources: {}, youtube_cookie_files: [], lastfm_api_key_configured: false, lastfm_shared_secret_configured: false, lastfm_scrobbling_configured: false },
         settingsDraft: {
@@ -4479,11 +4521,10 @@ function adminV2() {
             this.repairSelected.push({kind:item.kind,id:Number(item.id),title:item.title});
             this.repairExpanded = null;
             this.repairPlan = null;
+            this.repairSnapshot = null;
             this.repairIncomplete = false;
-            this.repairTrackOffset = 0;
             this.repairPendingInstruction = '';
             this.repairReference = '';
-            this.repairExpandedReference = '';
             this.repairSearch = '';
             this.repairSearchResults = [];
         },
@@ -4496,11 +4537,8 @@ function adminV2() {
             this.repairChat = [];
             this.repairDraft = '';
             this.repairIncomplete = false;
-            this.repairTrackOffset = 0;
-            this.repairTrackTotal = 0;
             this.repairPendingInstruction = '';
             this.repairReference = '';
-            this.repairExpandedReference = '';
         },
         repairSelection(expanded = false) {
             const selection = {artists:[],releases:[],tracks:[]};
@@ -4522,16 +4560,41 @@ function adminV2() {
         repairIncludedCount() {
             return Object.values(this.repairSelection(true)).reduce((total, ids) => total + ids.length, 0);
         },
-        setRepairIncluded(kind,id,checked) {
-            if (this.repairBusy) return;
-            this.repairIncluded[kind + ':' + id] = checked;
+        repairRowsCount() { return ['artists','releases','tracks'].reduce((count,kind) => count + this.repairRows(kind).length,0); },
+        invalidateRepairPlan() {
             this.repairPlan = null;
             this.repairSnapshot = null;
             this.repairIncomplete = false;
-            this.repairTrackOffset = 0;
             this.repairPendingInstruction = '';
-            this.repairReference = '';
-            this.repairExpandedReference = '';
+        },
+        setAllRepairIncluded(checked) {
+            if (this.repairBusy) return;
+            for (const kind of ['artists','releases','tracks']) {
+                for (const item of this.repairRows(kind)) this.repairIncluded[kind + ':' + item.id] = checked;
+            }
+            this.invalidateRepairPlan();
+        },
+        setRepairIncluded(kind,id,checked) {
+            if (this.repairBusy) return;
+            this.repairIncluded[kind + ':' + id] = checked;
+            this.invalidateRepairPlan();
+        },
+        repairEntityLabel(kind,id) {
+            const row = this.repairBefore(kind,id) || this.repairRows(kind).find(row => Number(row.id) === Number(id));
+            return (row?.name || row?.title || kind) + ' #' + id;
+        },
+        repairArtistNames(ids) {
+            return ids.map(id => this.repairEntityLabel('artists',id)).join(', ');
+        },
+        repairEntityContext(kind,item) {
+            if (!item) return '';
+            const scope = this.repairSnapshot || this.repairExpanded?.snapshot;
+            if (kind === 'releases') return [item.year, item.release_type, (scope?.release_artists || []).filter(link => link.owner_id === item.id).map(link => this.repairEntityLabel('artists',link.artist_id)).join(', ')].filter(Boolean).join(' · ');
+            if (kind === 'tracks') {
+                const release = (scope?.releases || []).find(row => row.id === item.release_id);
+                return [release ? release.title + ' #' + release.id : 'Release #' + item.release_id, release?.year, item.track_number ? 'Track ' + item.track_number : ''].filter(Boolean).join(' · ');
+            }
+            return '';
         },
         async expandRepair() {
             if (this.repairSelected.length === 0) return;
@@ -4541,12 +4604,10 @@ function adminV2() {
                 this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {
                     method:'POST',body:JSON.stringify({selection:this.repairSelection(false),reference:this.repairReference || null})
                 });
-                this.repairExpandedReference = this.repairReference;
                 this.repairPlan = null;
                 this.repairSnapshot = null;
                 this.repairIncluded = {};
                 this.repairIncomplete = false;
-                this.repairTrackOffset = 0;
                 this.repairPendingInstruction = '';
             } catch (error) { this.showToast(error.message); }
             finally { this.repairBusy = false; this.repairStage = ''; }
@@ -4557,9 +4618,9 @@ function adminV2() {
             return relations.filter(row => Number(row.owner_id) === Number(id)).map(row => Number(row.artist_id));
         },
         repairTargetReleases() {
-            const existing = (this.repairSnapshot?.releases || []).map(row => ({value:'existing:' + row.id,label:row.title + ' #' + row.id}));
+            const existing = (this.repairSnapshot?.releases || []).filter(row => !this.repairPlan?.delete?.releases?.includes(row.id)).map(row => ({value:'existing:' + row.id,label:row.title + (row.year ? ' (' + row.year + ')' : '') + ' #' + row.id}));
             for (const track of this.repairSnapshot?.tracks || []) {
-                if (!existing.some(row => row.value === 'existing:' + track.release_id)) existing.push({value:'existing:' + track.release_id,label:'Current release #' + track.release_id});
+                if (!this.repairPlan?.delete?.releases?.includes(track.release_id) && !existing.some(row => row.value === 'existing:' + track.release_id)) existing.push({value:'existing:' + track.release_id,label:'Current release #' + track.release_id});
             }
             const created = (this.repairPlan?.releases || []).filter(row => row.key && !row.id).map(row => ({value:'new:' + row.key,label:(row.title || 'New release') + ' · new'}));
             return existing.concat(created);
@@ -4573,11 +4634,32 @@ function adminV2() {
         },
         addRepairTrack() {
             if (!this.repairPlan || !this.repairSnapshot) return;
-            const row = this.repairSnapshot.tracks.find(x => !this.repairPlan.tracks.some(edit => edit.id === x.id));
+            const row = this.repairSnapshot.tracks.find(x => !this.repairPlan.tracks.some(edit => edit.id === x.id) && !this.repairPlan.delete?.tracks?.includes(x.id));
             if (!row) { this.showToast('All selected tracks are already in the plan'); return; }
             this.repairPlan.tracks.push({id:row.id,title:row.title,target_release:'existing:' + row.release_id,track_number:row.track_number,disc_number:row.disc_number,year:row.year,artist_ids:this.repairArtistIds('tracks',row.id)});
         },
-        repairChangeCount() { return this.repairPlan ? this.repairPlan.artists.length + this.repairPlan.releases.length + this.repairPlan.tracks.length : 0; },
+        repairPreview() {
+            if (!this.repairPlan) return [];
+            const rows = [];
+            for (const edit of this.repairPlan.artists) rows.push({key:'artist:' + edit.id,action:'Rename artist',title:this.repairEntityLabel('artists',edit.id),detail:'→ ' + edit.name});
+            for (const edit of this.repairPlan.releases) {
+                const old = edit.id ? this.repairBefore('releases',edit.id) : null;
+                rows.push({key:'release:' + (edit.id || edit.key),action:old ? 'Edit release' : 'Create release',title:edit.title + (edit.year != null ? ' (' + edit.year + ')' : ''),detail:[old ? 'Before: ' + this.repairEntityLabel('releases',edit.id) + (old.year != null ? ' (' + old.year + ')' : '') : '',edit.release_type,this.repairArtistNames(edit.artist_ids)].filter(Boolean).join(' · ')});
+            }
+            for (const edit of this.repairPlan.tracks) {
+                const old = this.repairBefore('tracks',edit.id);
+                const moved = old && edit.target_release !== 'existing:' + old.release_id;
+                const details = [];
+                if (moved) details.push(this.repairEntityLabel('releases',old.release_id) + ' → ' + (this.repairTargetReleases().find(row => row.value === edit.target_release)?.label || edit.target_release));
+                if (old && old.title !== edit.title) details.push('Title: ' + old.title + ' → ' + edit.title);
+                for (const [field,label] of [['track_number','Track number'],['disc_number','Disc'],['year','Year']]) if (old && old[field] !== edit[field]) details.push(label + ': ' + (old[field] ?? '—') + ' → ' + (edit[field] ?? '—'));
+                if (JSON.stringify(this.repairArtistIds('tracks',edit.id)) !== JSON.stringify(edit.artist_ids)) details.push('Artists: ' + this.repairArtistNames(edit.artist_ids));
+                rows.push({key:'track:' + edit.id,action:moved ? 'Move track' : 'Edit track',title:edit.title + ' #' + edit.id,detail:details.join('\n')});
+            }
+            return rows;
+        },
+        repairDeleteCount() { return Object.values(this.repairPlan?.delete || {}).reduce((count,ids) => count + ids.length,0); },
+        repairChangeCount() { return this.repairPlan ? this.repairPlan.artists.length + this.repairPlan.releases.length + this.repairPlan.tracks.length + this.repairDeleteCount() : 0; },
         repairPlanPayload() {
             const plan = JSON.parse(JSON.stringify(this.repairPlan));
             for (const edit of [...plan.releases, ...plan.tracks]) {
@@ -4590,51 +4672,42 @@ function adminV2() {
         async sendRepair() {
             const instruction = this.repairDraft.trim();
             if (!instruction || this.repairBusy || !this.repairIncludedCount()) return;
-            if (!this.repairReference) {
-                const source = this.repairChat.find(turn => turn.role === 'user' && turn.content.includes('### ') && /^\s*\d+\.\s+\S/m.test(turn.content));
-                if (source) this.repairReference = source.content;
-            }
-            const resuming = this.repairIncomplete && this.repairPendingInstruction === instruction;
             if (instruction.includes('### ') && /^\s*\d+\.\s+\S/m.test(instruction)) this.repairReference = instruction;
-            if (!resuming) {
-                this.repairTrackOffset = 0;
-                this.repairTrackTotal = 0;
-            }
+            const resuming = this.repairIncomplete && this.repairPendingInstruction === instruction;
             this.repairBusy = true;
             this.repairStage = 'thinking';
             this.repairIncomplete = true;
             this.repairPendingInstruction = instruction;
-            this.repairTrackTotal = this.repairSelection(true).tracks.length;
             this.repairDraft = '';
-            const previous = this.repairChat.slice(-6);
+            const previous = this.repairChat.slice(-20);
+            if (resuming && previous.at(-1)?.role === 'user' && previous.at(-1).content === instruction) previous.pop();
             if (!resuming) this.repairChat.push({role:'user',content:instruction});
+            this.scrollRepairChat();
             try {
-                if (!this.repairExpanded || this.repairExpandedReference !== this.repairReference) {
-                    this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(false),reference:this.repairReference || null})});
-                    this.repairExpandedReference = this.repairReference;
+                if (!this.repairExpanded) {
+                    await this.expandRepairForChat();
                 }
-                while (true) {
-                    const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,reference:this.repairReference || null,primary_artist_ids:this.repairSelected.filter(item => item.kind === 'artists').map(item => item.id),conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null,track_offset:this.repairTrackOffset})});
-                    this.repairPlan = result.plan;
-                    this.repairSnapshot = result.snapshot;
-                    this.repairTrackTotal = result.total_tracks;
-                    this.repairTrackOffset = result.next_track_offset ?? result.total_tracks;
-                    if (result.next_track_offset == null) {
-                        this.repairChat.push({role:'assistant',content:result.message});
-                        this.repairIncomplete = false;
-                        this.repairPendingInstruction = '';
-                        break;
-                    }
-                }
-                this.repairInstruction = instruction;
+                const result = await this.request(`${this.apiBase}/metadata-fix/plan`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(true),instruction,reference:this.repairReference || null,primary_artist_ids:this.repairSelected.filter(item => item.kind === 'artists').map(item => item.id),conversation:previous,current_plan:this.repairPlan ? this.repairPlanPayload() : null})});
+                this.repairPlan = result.plan;
+                this.repairSnapshot = result.snapshot;
+                this.repairChat.push({role:'assistant',content:result.message});
+                this.repairIncomplete = false;
+                this.repairPendingInstruction = '';
+                this.repairInstruction = this.repairChat.filter(turn => turn.role === 'user').map(turn => turn.content).join('\n\n').slice(-8000);
             } catch (error) {
                 this.repairDraft = instruction;
                 this.showToast(error.message);
             } finally {
                 this.repairBusy = false;
                 this.repairStage = '';
-                this.$nextTick(() => { if (this.$refs.repairChat) this.$refs.repairChat.scrollTop = this.$refs.repairChat.scrollHeight; });
+                this.scrollRepairChat();
             }
+        },
+        async expandRepairForChat() {
+            this.repairExpanded = await this.request(`${this.apiBase}/metadata-fix/expand`, {method:'POST',body:JSON.stringify({selection:this.repairSelection(false),reference:this.repairReference || null})});
+        },
+        scrollRepairChat() {
+            this.$nextTick(() => { if (this.$refs.repairChat) this.$refs.repairChat.scrollTop = this.$refs.repairChat.scrollHeight; });
         },
         async applyRepair() {
             if (!this.repairPlan || !this.repairSnapshot || this.repairBusy || this.repairIncomplete || !this.repairChangeCount()) return;
@@ -4643,6 +4716,10 @@ function adminV2() {
             try {
                 const result = await this.request(`${this.apiBase}/metadata-fix/apply`, {method:'POST',body:JSON.stringify({snapshot:this.repairSnapshot,plan:this.repairPlanPayload(),instruction:this.repairInstruction})});
                 this.showToast('Applied · history #' + result.history_id);
+                this.repairChat.push({role:'assistant',content:'Plan applied · history #' + result.history_id + '. You can undo it from History.'});
+                this.repairSelected = [];
+                this.repairIncluded = {};
+                this.repairIncomplete = false;
                 this.repairPlan = null;
                 this.repairSnapshot = null;
                 this.repairExpanded = null;
@@ -4662,8 +4739,12 @@ function adminV2() {
                 await this.request(`${this.apiBase}/metadata-fix/undo`, {method:'POST',body:JSON.stringify({history_id:historyId})});
                 await this.loadRepairHistory();
                 this.repairExpanded = null;
-                this.repairPlan = null;
+                this.invalidateRepairPlan();
+                this.repairSelected = [];
+                this.repairIncluded = {};
+                this.repairChat.push({role:'assistant',content:'Metadata repair #' + historyId + ' undone.'});
                 this.showToast('Metadata repair undone');
+                await this.loadLibrary(false);
             } catch (error) { this.showToast(error.message); }
             finally { this.repairBusy = false; }
         },

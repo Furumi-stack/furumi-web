@@ -132,6 +132,36 @@ container `furumi-statistics-test-pg`. It requires Playwright (or
 `PLAYWRIGHT_MODULE`) and Chrome (or `CHROME_PATH`). Never point this test at a
 live service.
 
+## Metadata Repair
+
+Admin → Library Tools provides a chat for editing the selected library resources.
+Use **Show related**, then **Deselect all** to choose only the resources needed
+for the task. Releases show their years; tracks show their source release.
+
+The assistant sees the complete selected scope and replaces the proposed plan
+after every clarification. Expand **Proposed changes** in the chat to review or
+edit it before applying. Plans support moving tracks, creating releases, merging
+releases, and deleting artists, releases, or tracks. Release deletion requires
+explicit moves or deletion of all its tracks. Artist deletion detaches credits
+and requires all credited releases and tracks to be included.
+
+Applied plans are transactional and can be undone from History. Metadata Repair
+retains audio and artwork files for Undo. Undo refuses to overwrite subsequent
+metadata, playback, or federation changes.
+
+```bash
+node --test tests/admin_metadata_repair.test.cjs
+cargo test admin::metadata_fix::tests
+```
+
+`tests/browser-metadata-repair.cjs` checks the chat and plan updates, a four-release
+merge, deletion and restoration of tracks and artist credits, playlists, playback
+queues, and undo conflicts. Run it only against a disposable instance and a
+PostgreSQL container named `furumi-repair-test-pg`, with database
+`furumi_repair_test`. Set `FURU_TEST_URL`, `FURU_REPAIR_TEST_PG`, `CHROME_PATH`, and
+`PLAYWRIGHT_MODULE` as needed. It seeds `tests/metadata_repair_fixture.sql` after
+creating the test administrator. Set `FURU_REPAIR_SKIP_SEED=1` for a seeded database.
+
 ## Importing into playlists
 
 The player's download manager offers **Add downloads to a playlist** for file
