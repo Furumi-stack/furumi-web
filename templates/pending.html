@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ t.approval_heading }} | {{ t.site_name }}{% endblock title %}
+{% block head_extra %}
+<style>
+body { margin:0; min-height:100vh; display:grid; place-items:center; background:#121212; color:#eee; font-family:system-ui,sans-serif; }
+.approval-card { max-width:440px; margin:24px; padding:36px; border:1px solid #333; border-radius:18px; background:#1b1b1b; }
+h1 { font-size:24px; } p { line-height:1.6; color:#bbb; } a { color:#b7d79f; }
+</style>
+{% endblock head_extra %}
+{% block body %}
+<main class="approval-card"><h1>{{ t.approval_heading }}</h1><p>{{ t.approval_message }}</p><a href="/logout">{{ t.player_log_out }}</a></main>
+<script>
+setInterval(async () => {
+    try {
+        const response = await fetch('/auth/status', {cache:'no-store'});
+        if (!response.ok) return;
+        const {status} = await response.json();
+        if (status === 'active') location.replace('/');
+        else if (status === 'anonymous') location.replace('/login');
+    } catch {}
+}, 5000);
+</script>
+{% endblock body %}

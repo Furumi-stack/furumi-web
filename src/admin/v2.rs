@@ -230,6 +230,8 @@ struct AdminUserRowDto {
     email: Option<String>,
     role: String,
     is_active: bool,
+    local_role: Option<String>,
+    sso_role: Option<String>,
     is_online: bool,
     last_seen_ms: Option<i64>,
     plays: i64,
@@ -2667,6 +2669,8 @@ struct AdminUserSqlRow {
     email: Option<String>,
     role: String,
     is_active: bool,
+    local_role: Option<String>,
+    sso_role: Option<String>,
     plays: i64,
     listened_seconds: i64,
     last_play_ms: Option<i64>,
@@ -2700,7 +2704,7 @@ async fn load_admin_users_page(
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
     let mut qb = QueryBuilder::<Postgres>::new(
-        "SELECT id, username::text, display_name, email, role::text, is_active, \
+        "SELECT id, username::text, display_name, email, role::text, is_active, local_role, sso_role, \
          (SELECT COUNT(*) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS plays, \
          (SELECT (COALESCE(SUM(listened_ms), 0) / 1000)::bigint FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id) AS listened_seconds, \
          (SELECT MAX(started_at_ms) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS last_play_ms \
@@ -2715,7 +2719,7 @@ async fn load_admin_users_page(
         qb.push_bind(pattern);
         qb.push(")");
     }
-    qb.push(" ORDER BY username ASC LIMIT ");
+    qb.push(" ORDER BY is_active ASC, username ASC LIMIT ");
     qb.push_bind(limit);
     qb.push(" OFFSET ");
     qb.push_bind(offset);
@@ -2747,7 +2751,7 @@ async fn load_admin_user_detail(
     user_id: i64,
 ) -> anyhow::Result<Option<AdminUserDetailDto>> {
     let row = sqlx::query_as::<_, AdminUserSqlRow>(
-        "SELECT id, username::text, display_name, email, role::text, is_active, \
+        "SELECT id, username::text, display_name, email, role::text, is_active, local_role, sso_role, \
          (SELECT COUNT(*) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS plays, \
          (SELECT (COALESCE(SUM(listened_ms), 0) / 1000)::bigint FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id) AS listened_seconds, \
          (SELECT MAX(started_at_ms) FROM furumusic__listen_event le WHERE le.user_id = furumusic__user.id AND qualified) AS last_play_ms \
@@ -2939,6 +2943,8 @@ fn admin_user_row(
         email: row.email,
         role: row.role,
         is_active: row.is_active,
+        local_role: row.local_role,
+        sso_role: row.sso_role,
         plays: row.plays,
         listened_seconds: row.listened_seconds,
         last_play_ms: row.last_play_ms,

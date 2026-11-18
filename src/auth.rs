@@ -72,8 +72,13 @@ fn authenticated_user_from_user(user: User) -> Option<AuthenticatedUser> {
     })
 }
 
-/// Read `user_id` from the session, fetch the `User` from DB, return
-/// `AuthenticatedUser` if the user exists and is active.
+/// Return the signed-in identity, including an account awaiting approval.
+pub async fn get_session_identity(session: &Session, db: &Database) -> Option<User> {
+    let user_id: i64 = session.get(SESSION_USER_ID).await.ok()??;
+    User::get_by_id(db, user_id).await.ok()?
+}
+
+/// Return a session user only when access to the instance has been granted.
 pub async fn get_session_user(session: &Session, db: &Database) -> Option<AuthenticatedUser> {
     let user_id: i64 = session.get(SESSION_USER_ID).await.ok()??;
     let user = User::get_by_id(db, user_id).await.ok()??;

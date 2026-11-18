@@ -7002,3 +7002,20 @@ button.user-stat:hover {
 .queue-tracks::-webkit-scrollbar-thumb,
 .playlist-list::-webkit-scrollbar-thumb { background: var(--bg-active); border-radius: 3px; }
 </style>
+
+<style>
+.guest-player [data-member-only], .guest-player .search-bar, .guest-player .breadcrumb,
+.guest-player .device-picker, .guest-player .mobile-library-backdrop,
+.guest-player .mobile-library-btn, .guest-player .mobile-library-toggle { display:none !important; }
+.guest-player .artist-link, .guest-player .track-artist a, .guest-player .player-artist a { pointer-events:none; cursor:default; }
+.guest-account { display:flex; align-items:center; justify-content:space-between; gap:16px; width:100%; font-size:14px; }
+.guest-account a { color:var(--accent); text-decoration:none; }
+.guest-account div { color:var(--text-secondary); }
+@media(max-width:600px) { .guest-account { flex-wrap:wrap; gap:8px; font-size:12px; } }
+@media(max-width:1100px) {
+    .guest-player .playlist-track-row > span:nth-child(4) { display:none; }
+    .guest-player .playlist-track-row .track-num { grid-column:1; grid-row:1; }
+    .guest-player .playlist-track-row .playlist-track-info { grid-column:2; grid-row:1; }
+    .guest-player .playlist-track-row .track-actions { grid-column:3; grid-row:1; }
+}
+</style>

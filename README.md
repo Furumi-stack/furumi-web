@@ -23,7 +23,8 @@ catalog and media files; the browser is only the player.
 - a responsive web player with artists, releases, search, queue, and playlists;
 - direct file uploads and imports from YouTube, torrent files, or magnet links;
 - optional AI-assisted recognition and normalization of metadata;
-- password login or OIDC/SSO with group-based access control;
+- password login or OIDC/SSO with group grants and local administrator approval;
+- public track, release, and queue links with scoped guest playback and downloads;
 - optional federation without a central catalog or search service;
 - trusted-device pairing, playback handoff, and synchronization between Furumi
   players;
@@ -31,6 +32,46 @@ catalog and media files; the browser is only the player.
 
 Furumusic does not include music. Import only media you are allowed to store and
 share.
+
+## Access and public sharing
+
+OIDC identifies accounts by issuer and subject. Matching admin groups take
+precedence over matching user groups, and either SSO grant takes precedence over
+a local role. Without matching groups (including an empty group configuration),
+a new account waits for approval in **Admin → Users**. Any instance administrator
+can approve it as a user or administrator. The waiting page updates automatically.
+On subsequent SSO logins the group grant is refreshed: if it disappears, only an
+independently assigned local role preserves access. Existing password accounts
+keep their local roles; existing OIDC-only accounts retain their last SSO grant
+until the next login, without receiving an implicit local approval.
+
+Sharing creates an unguessable `/share/{token}` link to a snapshot of track IDs,
+including their order and repetitions. Guests and accounts awaiting approval can
+play and download only the tracks in that snapshot, using the regular player.
+They cannot browse the library, search, use recommendations, or write personal
+history. Signing in from a share returns to that share; signing in from the root
+shows only the approval page until access is granted. Track info offers a browser
+download of the original audio file. The old radio implementation is removed.
+
+Migration `m_0053_local_approval_and_public_shares` deletes the old share records.
+Old track/release/playlist URL routes are removed, with no compatibility layer.
+Link expiry, cleanup, and revocation are not part of this implementation.
+
+The access regression suite uses a disposable migrated database and a local OIDC
+provider with signed tokens and PKCE:
+
+```bash
+node --test tests/*.test.cjs
+FURU_ACCESS_TEST_DATABASE_URL=postgresql://... cargo test postgres_approval_survives_sso_changes_without_implicit_grants -- --ignored
+# Fresh disposable instance on :18048, media root /tmp/furumi-access-media,
+# PostgreSQL container furumi-access-test-pg, database furumi_access_test:
+node tests/browser-access-sharing.cjs
+```
+
+The browser test requires Playwright (`PLAYWRIGHT_MODULE`) and Chrome
+(`CHROME_PATH`), and uses local port 18049 for its OIDC provider. It checks
+approval, SSO precedence and group removal, guest playback and downloads,
+unauthorized track substitution, and desktop/mobile player behavior.
 
 ## Importing music
 
@@ -95,6 +136,13 @@ cargo run --locked
 The repository also contains a multi-stage `Dockerfile` for building a small
 runtime image. A deployment must provide PostgreSQL plus persistent, writable
 volumes for the inbox and music library.
+
+CI uses Rust 1.97.0 and cargo-chef 0.1.74 to cache compiled dependencies separately
+from application sources. Buildx imports and exports intermediate layers through
+`ultradesu/furumusic:buildcache` (`mode=max`). After the first build, changes to
+source code, templates or prompts reuse the dependency layer when its recipe and
+toolchain are unchanged. Both dependency and application builds use `--locked`.
+Update the pinned build tools in `Dockerfile`; changing them rebuilds the cache.
 
 ## Admin statistics
 

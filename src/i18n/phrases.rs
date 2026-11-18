@@ -1,6 +1,12 @@
 use super::translations;
 
 translations! {
+    approval_heading: "Awaiting approval", "Ожидается одобрение";
+    approval_message: "You are signed in. An instance administrator must approve your account before you can access the library.", "Вы вошли в аккаунт. Для доступа к библиотеке нужно одобрение администратора инстанса.";
+    guest_login: "Sign in / register", "Войти / зарегистрироваться";
+    guest_label: "Shared music", "Музыка по ссылке";
+    share_unavailable: "This link is unavailable or contains no playable tracks.", "Ссылка недоступна или не содержит доступных треков.";
+    track_download: "Download", "Скачать";
     // Global
     site_name:            "furumusic"                    , "furumusic";
 
@@ -71,7 +77,7 @@ translations! {
     settings_oidc_admin_groups: "Admin groups"                   , "Группы администраторов";
     settings_oidc_admin_groups_help: "Comma-separated OIDC group names that grant admin role (e.g. /admin,/furumusic-admins)" , "OIDC группы через запятую, дающие роль администратора (напр. /admin,/furumusic-admins)";
     settings_oidc_user_groups: "User groups"                    , "Группы пользователей";
-    settings_oidc_user_groups_help: "Comma-separated OIDC group names allowed to access the service. If empty, any authenticated SSO user is allowed." , "OIDC группы через запятую, которым разрешён доступ к сервису. Если пусто, разрешён любой SSO пользователь.";
+    settings_oidc_user_groups_help: "Comma-separated OIDC groups granting automatic user access. Everyone else needs local administrator approval." , "OIDC группы через запятую, дающие автоматический доступ. Остальным нужно локальное одобрение администратора.";
 
     // User management
     nav_users:                "Users"                       , "Пользователи";
@@ -360,8 +366,6 @@ translations! {
     player_play:             "Play"                            , "Играть";
     player_listen:           "Listen"                          , "Слушать";
     player_listen_artist:    "Listen to artist"                , "Слушать артиста";
-    player_start_radio:      "Start radio"                     , "Запустить радио";
-    player_radio_failed:     "Could not start radio"           , "Не удалось запустить радио";
     player_played_at:        "Played"                          , "Прослушано";
     player_like:             "Like"                            , "Лайк";
     player_add_to_queue:     "Add to queue"                    , "Добавить в очередь";

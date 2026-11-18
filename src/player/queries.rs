@@ -54,7 +54,7 @@ pub(super) struct ReorderPlaylistRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct CreatePlaylistShareRequest {
+pub(super) struct CreateShareRequest {
     pub(super) track_ids: Vec<i64>,
     pub(super) title: Option<String>,
 }
@@ -74,12 +74,6 @@ pub(super) struct PathId {
 #[derive(Debug, Deserialize)]
 pub(super) struct PathStringId {
     pub(super) id: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct PathRadioSeed {
-    pub(super) kind: String,
-    pub(super) id: i64,
 }
 
 #[derive(Debug, Deserialize)]

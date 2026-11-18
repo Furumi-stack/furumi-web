@@ -808,9 +808,8 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/admin",
     "/swagger",
     "/swagger/openapi.json",
-    "/share/track/{id}",
-    "/share/release/{id}",
-    "/share/playlist/{token}",
+    "/share/{token}",
+    "/auth/status",
     "/metrics",
     "/login",
     "/logout",
@@ -880,10 +879,11 @@ const KNOWN_HTTP_ROUTES: &[&str] = &[
     "/api/player/artists",
     "/api/player/artists/{id}",
     "/api/player/releases/{id}",
-    "/api/player/radio/{kind}/{id}",
     "/api/player/playlists",
-    "/api/player/share-playlist",
-    "/api/player/share-playlist/{id}",
+    "/api/player/shares",
+    "/api/player/shares/{id}",
+    "/api/player/shares/{token}/{action}/{track_id}",
+    "/api/player/download/{track_id}",
     "/api/player/playlists/{id}",
     "/api/player/playlists/{id}/tracks",
     "/api/player/likes",
@@ -928,13 +928,10 @@ mod tests {
             known_http_route("/admin/v2/api/jobs/metadata_backfill/runs/123"),
             Some("/admin/v2/api/jobs/{name}/runs/{run_id}")
         );
+        assert_eq!(known_http_route("/share/abcDEF123"), Some("/share/{token}"));
         assert_eq!(
-            known_http_route("/share/playlist/abcDEF123"),
-            Some("/share/playlist/{token}")
-        );
-        assert_eq!(
-            known_http_route("/share/release/42"),
-            Some("/share/release/{id}")
+            known_http_route("/api/player/shares/abcDEF123/stream/42"),
+            Some("/api/player/shares/{token}/{action}/{track_id}")
         );
         assert_eq!(
             known_http_route("/api/player/youtube/start"),

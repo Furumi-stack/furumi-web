@@ -48,4 +48,5 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.docker_tags }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          # Export intermediate stages, including cargo-chef's compiled dependencies.
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max

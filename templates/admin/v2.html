@@ -2667,7 +2667,12 @@ tbody tr:hover {
                                     </td>
                                     <td x-text="fmt(user.plays)"></td><td x-text="durationApprox(user.listened_seconds)"></td><td x-text="user.last_play_ms ? statisticsDate(user.last_play_ms) : '—'"></td><td><span x-text="user.role"></span></td>
                                     <td>
-                                        <span class="badge" :class="user.is_active ? 'ok' : 'disabled'" x-text="user.is_active ? 'active' : 'disabled'"></span>
+                                        <span class="badge" :class="user.is_active ? 'ok' : 'disabled'" x-text="user.is_active ? 'active' : 'pending approval'"></span>
+                                        <div x-show="!user.local_role" @click.stop>
+                                            <button class="btn" @click="approveUser(user, 'user')">Approve as user</button>
+                                            <button class="btn" @click="approveUser(user, 'admin')">Approve as admin</button>
+                                        </div>
+                                        <div class="secondary-line" x-text="user.sso_role ? 'SSO: ' + user.sso_role : (user.local_role ? 'Local: ' + user.local_role : '')"></div>
                                     </td>
                                     <td><span x-text="userLastSeenLabel(user)"></span></td>
                                 </tr>
@@ -3378,7 +3383,7 @@ tbody tr:hover {
         <section class="modal user-modal"><div class="modal-head"><strong x-text="userDraft.id ? 'Edit user' : 'Add user'"></strong><button class="btn" @click="userEditorOpen = false">Close</button></div>
         <form class="modal-body" @submit.prevent="saveUser()">
             <template x-for="field in ['username', 'email', 'display_name', 'password']" :key="field"><label class="field"><span x-text="field === 'password' && userDraft.id ? 'Password (leave blank to keep)' : field.replace('_', ' ')"></span><input class="search" :type="field === 'password' ? 'password' : (field === 'email' ? 'email' : 'text')" :autocomplete="field === 'password' ? 'new-password' : 'off'" :required="field === 'username' || (field === 'password' && !userDraft.id)" maxlength="255" x-model="userDraft[field]"></label></template>
-            <label class="field">Role<select class="search" x-model="userDraft.role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
+            <label class="field">Local access<select class="search" x-model="userDraft.role"><option value="" x-show="userDraft.id">No local approval (SSO only)</option><option value="user">User</option><option value="admin">Administrator</option></select></label>
             <button class="btn primary" type="submit" :disabled="userSaving">Save user</button>
         </form></section>
     </div>
@@ -3412,7 +3417,7 @@ tbody tr:hover {
                         </div>
                         <div class="user-summary-card">
                             <span>Account</span>
-                            <strong x-text="activeUserDetail?.user.is_active ? 'active' : 'disabled'"></strong>
+                            <strong x-text="activeUserDetail?.user.is_active ? 'active' : 'pending approval'"></strong>
                         </div>
                         <div class="user-summary-card">
                             <span>Last.fm</span>
@@ -4137,7 +4142,7 @@ function adminV2() {
         scheduleDraft: '',
         editUser(user = null) {
             this.userModalOpen = false;
-            this.userDraft = {id:user?.id || null, username:user?.username || '', email:user?.email || '', display_name:user?.display_name || '', password:'', role:user?.role || 'user'};
+            this.userDraft = {id:user?.id || null, username:user?.username || '', email:user?.email || '', display_name:user?.display_name || '', password:'', role:user ? (user.local_role || '') : 'user'};
             this.userEditorOpen = true;
         },
         async saveUser() {
@@ -4822,6 +4827,13 @@ function adminV2() {
                 this.libraryLoading = false;
                 this.icons();
             }
+        },
+
+        async approveUser(user, role) {
+            try {
+                await this.request(`${this.apiBase}/users/manage`, {method:'POST', body:JSON.stringify({action:'approve', id:user.id, role})});
+                await this.loadUsers(false);
+            } catch (error) { this.showToast(error.message); }
         },
 
         async loadUsers(resetOffset = true) {

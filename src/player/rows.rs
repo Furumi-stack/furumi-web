@@ -54,8 +54,8 @@ pub(super) struct ReleaseArtistRefRow {
 #[derive(sqlx::FromRow)]
 pub(super) struct MediaFileRow {
     pub(super) file_path: String,
+    pub(super) original_filename: String,
     pub(super) mime_type: String,
-    pub(super) file_size_bytes: i64,
     pub(super) sha256_hash: String,
     pub(super) created_at: String,
 }

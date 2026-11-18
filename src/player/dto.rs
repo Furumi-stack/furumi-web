@@ -324,7 +324,7 @@ pub(super) struct ShareLinkResponse {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub(super) struct PlaylistShareDetail {
+pub(super) struct ShareDetail {
     pub(super) token: String,
     pub(super) title: String,
     pub(super) tracks: Vec<TrackItem>,

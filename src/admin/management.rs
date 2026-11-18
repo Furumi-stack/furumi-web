@@ -28,7 +28,18 @@ pub(super) async fn manage_user(
         Ok(u) => u,
         Err(r) => return Ok(r),
     };
-    if body.action == "delete" {
+    if body.action == "approve" {
+        let Some(id) = body.id.filter(|id| *id > 0) else {
+            return Ok(json_error(StatusCode::BAD_REQUEST, "Invalid user"));
+        };
+        if Role::from_code(&body.role).is_none() || (id == admin.id && body.role != "admin") {
+            return Ok(json_error(StatusCode::BAD_REQUEST, "Invalid role"));
+        }
+        let Some(mut user) = User::get_by_id(&db, id).await? else {
+            return Ok(json_error(StatusCode::NOT_FOUND, "User not found"));
+        };
+        user.approve(&db, &body.role, admin.id).await?;
+    } else if body.action == "delete" {
         let Some(id) = body.id.filter(|id| *id > 0) else {
             return Ok(json_error(StatusCode::BAD_REQUEST, "Invalid user"));
         };
@@ -43,7 +54,8 @@ pub(super) async fn manage_user(
         if !["create", "update"].contains(&body.action.as_str())
             || body.username.trim().is_empty()
             || body.username.chars().count() > 255
-            || Role::from_code(&body.role).is_none()
+            || (Role::from_code(&body.role).is_none()
+                && !(body.action == "update" && body.role.is_empty()))
             || (body.action == "create" && body.password.is_empty())
         {
             return Ok(json_error(
@@ -74,15 +86,15 @@ pub(super) async fn manage_user(
             let Some(id) = body.id.filter(|id| *id > 0) else {
                 return Ok(json_error(StatusCode::BAD_REQUEST, "Invalid user"));
             };
-            if id == admin.id && body.role != "admin" {
+            let Some(mut user) = User::get_by_id(&db, id).await? else {
+                return Ok(json_error(StatusCode::NOT_FOUND, "User not found"));
+            };
+            if id == admin.id && body.role != "admin" && !user.has_sso_admin_role() {
                 return Ok(json_error(
                     StatusCode::BAD_REQUEST,
                     "You cannot remove your own administrator role",
                 ));
             }
-            let Some(mut user) = User::get_by_id(&db, id).await? else {
-                return Ok(json_error(StatusCode::NOT_FOUND, "User not found"));
-            };
             if User::get_by_username(&db, body.username.trim())
                 .await?
                 .is_some_and(|u| u.id_val() != id)

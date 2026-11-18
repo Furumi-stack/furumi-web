@@ -418,16 +418,6 @@ pub async fn oidc_callback_handler(
         config.oidc_user_groups,
     );
 
-    if !is_allowed_by_groups(&groups, &config.oidc_user_groups, &config.oidc_admin_groups) {
-        tracing::warn!(
-            "OIDC login denied by group allowlist: sub={sub}, groups={groups:?}, user_groups={:?}, admin_groups={:?}",
-            config.oidc_user_groups,
-            config.oidc_admin_groups,
-        );
-        crate::metrics::record_auth_attempt("oidc", "failure", "not_in_group");
-        return redirect_login_with_error(i18n.t.login_access_denied);
-    }
-
     // User provisioning logic.
     let user = match provision_user(
         &db,
@@ -437,6 +427,7 @@ pub async fn oidc_callback_handler(
         name.as_deref(),
         &groups,
         &config.oidc_admin_groups,
+        &config.oidc_user_groups,
     )
     .await
     {
@@ -728,17 +719,6 @@ pub async fn oidc_mobile_callback_handler(
         .map(|n| n.to_string());
     let groups = extract_groups_from_jwt(&id_token.to_string());
 
-    if !is_allowed_by_groups(&groups, &config.oidc_user_groups, &config.oidc_admin_groups) {
-        tracing::warn!(
-            "Mobile OIDC login denied by group allowlist: sub={sub}, groups={groups:?}, user_groups={:?}, admin_groups={:?}",
-            config.oidc_user_groups,
-            config.oidc_admin_groups,
-        );
-        crate::metrics::record_auth_attempt("mobile_oidc", "failure", "not_in_group");
-        clear_mobile_oidc_session(&session).await?;
-        return Ok(mobile_redirect_error(&app_redirect_uri, "access_denied"));
-    }
-
     let user = match provision_user(
         &db,
         &issuer,
@@ -747,6 +727,7 @@ pub async fn oidc_mobile_callback_handler(
         name.as_deref(),
         &groups,
         &config.oidc_admin_groups,
+        &config.oidc_user_groups,
     )
     .await
     {
@@ -758,6 +739,11 @@ pub async fn oidc_mobile_callback_handler(
             return Ok(mobile_redirect_error(&app_redirect_uri, "oidc_error"));
         }
     };
+
+    if !user.is_active() {
+        clear_mobile_oidc_session(&session).await?;
+        return Ok(mobile_redirect_error(&app_redirect_uri, "approval_pending"));
+    }
 
     let exchange_code = auth::create_mobile_exchange_code(&db, user.id_val())
         .await
@@ -773,48 +759,26 @@ pub async fn oidc_mobile_callback_handler(
 // User provisioning
 // ---------------------------------------------------------------------------
 
-/// Resolve the role based on OIDC group membership.
-/// If `admin_groups` is non-empty and any user group matches, return "admin";
-/// otherwise return "user".
-fn resolve_role(groups: &[String], admin_groups: &str) -> &'static str {
-    if admin_groups.is_empty() {
-        return auth::Role::User.code();
+/// Group-derived access always takes precedence over local approval.
+fn resolve_sso_role(
+    groups: &[String],
+    admin_groups: &str,
+    user_groups: &str,
+) -> Option<&'static str> {
+    let matches = |configured: &str| {
+        configured
+            .split(',')
+            .map(str::trim)
+            .filter(|group| !group.is_empty())
+            .any(|group| groups.iter().any(|g| g == group))
+    };
+    if matches(admin_groups) {
+        Some("admin")
+    } else if matches(user_groups) {
+        Some("user")
+    } else {
+        None
     }
-    let admin_set: std::collections::HashSet<&str> = admin_groups
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if admin_set.is_empty() {
-        return auth::Role::User.code();
-    }
-    for g in groups {
-        if admin_set.contains(g.as_str()) {
-            return auth::Role::Admin.code();
-        }
-    }
-    auth::Role::User.code()
-}
-
-fn parse_group_set(groups: &str) -> std::collections::HashSet<&str> {
-    groups
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-fn has_any_group(groups: &[String], allowed: &std::collections::HashSet<&str>) -> bool {
-    groups.iter().any(|g| allowed.contains(g.as_str()))
-}
-
-fn is_allowed_by_groups(groups: &[String], user_groups: &str, admin_groups: &str) -> bool {
-    let user_set = parse_group_set(user_groups);
-    if user_set.is_empty() {
-        return true;
-    }
-    let admin_set = parse_group_set(admin_groups);
-    has_any_group(groups, &user_set) || has_any_group(groups, &admin_set)
 }
 
 async fn provision_user(
@@ -825,8 +789,9 @@ async fn provision_user(
     name: Option<&str>,
     groups: &[String],
     admin_groups: &str,
+    user_groups: &str,
 ) -> Result<User, String> {
-    let role = resolve_role(groups, admin_groups);
+    let role = resolve_sso_role(groups, admin_groups, user_groups);
 
     // 1. Check for existing OIDC link.
     if let Some(mut link) = OidcLink::find_by_issuer_sub(db, issuer, sub)
@@ -841,8 +806,8 @@ async fn provision_user(
                     .await
                     .map_err(|e| format!("DB error updating OIDC link: {e}"))?;
 
-                // Always update role on login.
-                user.update_role(db, role)
+                // Refresh only the SSO grant; preserve independent local approval.
+                user.sync_sso_role(db, role)
                     .await
                     .map_err(|e| format!("DB error updating user role: {e}"))?;
 
@@ -860,25 +825,6 @@ async fn provision_user(
                     .map_err(|e| format!("DB error deleting stale OIDC link: {e}"))?;
             }
             Err(e) => return Err(format!("DB error fetching user: {e}")),
-        }
-    }
-
-    // 2. No existing link — try to find a user by email.
-    if let Some(email_str) = email {
-        if let Some(mut user) = User::get_by_email(db, email_str)
-            .await
-            .map_err(|e| format!("DB error finding user by email: {e}"))?
-        {
-            // Create OIDC link for existing user.
-            OidcLink::create_link(db, user.id_val(), issuer, sub, email, name)
-                .await
-                .map_err(|e| format!("DB error creating OIDC link: {e}"))?;
-
-            user.update_role(db, role)
-                .await
-                .map_err(|e| format!("DB error updating user role: {e}"))?;
-
-            return Ok(user);
         }
     }
 
@@ -1298,5 +1244,110 @@ mod tests {
         assert!(safe_mobile_redirect_uri(Some("http://evil.com:80/callback")).is_none());
         assert!(safe_mobile_redirect_uri(Some("https://127.0.0.1:80/callback")).is_none());
         assert!(safe_mobile_redirect_uri(Some("http://127.0.0.1:notaport/x")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+
+    #[test]
+    fn matching_groups_are_required_and_admin_wins() {
+        let groups = vec!["listeners".into(), "admins".into()];
+        assert_eq!(
+            resolve_sso_role(&groups, " admins ", "listeners"),
+            Some("admin")
+        );
+        assert_eq!(
+            resolve_sso_role(&groups, "other", "listeners"),
+            Some("user")
+        );
+        assert_eq!(resolve_sso_role(&groups, "other", ""), None);
+        assert_eq!(resolve_sso_role(&[], "", ""), None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a migrated disposable database in FURU_ACCESS_TEST_DATABASE_URL"]
+    async fn postgres_approval_survives_sso_changes_without_implicit_grants() {
+        let db = Database::new(std::env::var("FURU_ACCESS_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        let subject = format!("approval-test-{}", uuid::Uuid::new_v4());
+        let provision = |groups: Vec<String>| {
+            let db = &db;
+            let subject = &subject;
+            async move {
+                provision_user(
+                    db,
+                    "https://test.example",
+                    subject,
+                    None,
+                    Some("Test pending user"),
+                    &groups,
+                    "admins",
+                    "listeners",
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let first = provision(vec![]).await;
+        assert!(!first.is_active());
+        let mut again = provision(vec![]).await;
+        assert_eq!(again.id_val(), first.id_val());
+        again.approve(&db, "admin", 1).await.unwrap();
+        assert_eq!(provision(vec![]).await.role(), auth::Role::Admin);
+        assert_eq!(
+            provision(vec!["listeners".into()]).await.role(),
+            auth::Role::User
+        );
+        assert_eq!(
+            provision(vec!["admins".into()]).await.role(),
+            auth::Role::Admin
+        );
+        assert_eq!(provision(vec![]).await.role(), auth::Role::Admin);
+
+        let auto_sub = format!("auto-{subject}");
+        let automatic = provision_user(
+            &db,
+            "https://test.example",
+            &auto_sub,
+            None,
+            None,
+            &["listeners".into()],
+            "admins",
+            "listeners",
+        )
+        .await
+        .unwrap();
+        assert!(automatic.is_active());
+        let removed = provision_user(
+            &db,
+            "https://test.example",
+            &auto_sub,
+            None,
+            None,
+            &[],
+            "admins",
+            "listeners",
+        )
+        .await
+        .unwrap();
+        assert!(!removed.is_active());
+        assert_eq!(automatic.id_val(), removed.id_val());
+        // A stale User held by an OIDC callback must retain a newer local grant.
+        let mut stale = removed.clone();
+        let mut approving = removed.clone();
+        approving.approve(&db, "admin", 1).await.unwrap();
+        stale.sync_sso_role(&db, Some("user")).await.unwrap();
+        stale.sync_sso_role(&db, None).await.unwrap();
+        assert!(stale.is_active());
+        assert_eq!(stale.role(), auth::Role::Admin);
+        let username = stale.username_str().to_owned();
+        stale
+            .update_fields(&db, &username, None, Some("Renamed"), None, "")
+            .await
+            .unwrap();
+        assert!(!stale.is_active());
     }
 }

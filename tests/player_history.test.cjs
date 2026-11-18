@@ -3,11 +3,11 @@ const {readFileSync} = require('node:fs');
 const {test} = require('node:test');
 const vm = require('node:vm');
 const template = readFileSync(`${__dirname}/../templates/player/scripts.html`, 'utf8');
-function player(fetchImpl = async () => ({ok:true}), beacon = () => true) {
+function player(fetchImpl = async () => ({ok:true}), beacon = () => true, guest = false) {
     // Exercise the production methods with audio and network stubs.
     const methods = template.slice(template.indexOf('        _recordHistory(endedReason'), template.indexOf('        _sendNowPlaying()'));
     const audio = {currentTime:60};
-    const context = vm.createContext({audio, fetch:fetchImpl, navigator:{sendBeacon:beacon}, Blob,
+    const context = vm.createContext({GUEST:guest, audio, fetch:fetchImpl, navigator:{sendBeacon:beacon}, Blob,
         globalThis:{crypto:{randomUUID:()=> 'uuid'}}, setTimeout: fn => { fn(); }, console});
     vm.runInContext('this.methods = {' + methods + '};', context);
     return Object.assign(context.methods, {
@@ -49,4 +49,11 @@ test('unstarted tracks and sub-five-second interrupted sessions are not recorded
     p._playbackStartedAt=null; p._recordHistory('finished');
     p._playbackStartedAt=123; p._listenedSeconds=4; p._recordHistory('skipped'); await flush();
     assert.equal(p._historyRecorded,false);
+});
+
+test('guest listening never writes personal history or sends a beacon', async () => {
+    const calls = [];
+    const p = player(async () => {calls.push('fetch'); return {ok:true};}, () => {calls.push('beacon'); return true;}, true);
+    p._recordHistory('finished'); p._recordHistory('stopped', true);
+    await flush(); assert.deepEqual(calls, []);
 });

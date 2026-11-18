@@ -19,6 +19,10 @@ pub struct User {
     avatar_url: Option<String>,
     role: LimitedString<32>,
     is_active: bool,
+    local_role: Option<String>,
+    sso_role: Option<String>,
+    approved_by: Option<i64>,
+    approved_at: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +54,10 @@ impl User {
             avatar_url: None,
             role: LimitedString::new(role).unwrap(),
             is_active: true,
+            local_role: Some(role.to_owned()),
+            sso_role: None,
+            approved_by: None,
+            approved_at: None,
         };
         user.insert(db).await?;
         Ok(user)
@@ -72,8 +80,13 @@ impl User {
         if let Some(pw) = new_password {
             self.password = Some(PasswordHash::from_password(&Password::new(pw)).into_string());
         }
-        self.role = LimitedString::new(role).unwrap();
-        self.save(db).await
+        let local_role = (!role.is_empty()).then(|| role.to_owned());
+        db.raw_with("UPDATE furumusic__user SET username = $1, email = $2, display_name = $3, password = $4, local_role = $5, role = COALESCE(sso_role, $5, 'user'), is_active = (sso_role IS NOT NULL OR $5 IS NOT NULL) WHERE id = $6",
+            &[&username.to_owned(), &self.email, &self.display_name, &self.password, &local_role, &self.id_val()]).await?;
+        if let Some(updated) = Self::get_by_id(db, self.id_val()).await? {
+            *self = updated;
+        }
+        Ok(())
     }
 
     /// Look up a user by username.
@@ -126,13 +139,17 @@ impl User {
         self.is_active
     }
 
+    pub fn has_sso_admin_role(&self) -> bool {
+        self.sso_role.as_deref() == Some("admin")
+    }
+
     /// Create a user without a password (for OIDC-only accounts).
     pub async fn create_oidc(
         db: &Database,
         username: &str,
         email: Option<&str>,
         display_name: Option<&str>,
-        role: &str,
+        sso_role: Option<&str>,
     ) -> cot::db::Result<Self> {
         let mut user = Self {
             id: Auto::auto(),
@@ -141,24 +158,44 @@ impl User {
             email: email.map(str::to_owned),
             display_name: display_name.map(str::to_owned),
             avatar_url: None,
-            role: LimitedString::new(role).unwrap(),
-            is_active: true,
+            role: LimitedString::new(sso_role.unwrap_or("user")).unwrap(),
+            is_active: sso_role.is_some(),
+            local_role: None,
+            sso_role: sso_role.map(str::to_owned),
+            approved_by: None,
+            approved_at: None,
         };
         user.insert(db).await?;
         Ok(user)
     }
 
-    /// Update the user's role and persist the change.
-    pub async fn update_role(&mut self, db: &Database, role: &str) -> cot::db::Result<()> {
-        self.role = LimitedString::new(role).unwrap();
-        self.save(db).await
+    pub async fn sync_sso_role(
+        &mut self,
+        db: &Database,
+        role: Option<&str>,
+    ) -> cot::db::Result<()> {
+        let role = role.map(str::to_owned);
+        // Change just this grant atomically: a concurrent administrator approval
+        // must not be overwritten by a stale User loaded before the OIDC callback.
+        db.raw_with("UPDATE furumusic__user SET sso_role = $1, role = COALESCE($1, local_role, 'user'), is_active = ($1 IS NOT NULL OR local_role IS NOT NULL) WHERE id = $2", &[&role, &self.id_val()]).await?;
+        if let Some(updated) = Self::get_by_id(db, self.id_val()).await? {
+            *self = updated;
+        }
+        Ok(())
     }
 
-    /// Find a user by email address.
-    pub async fn get_by_email(db: &Database, email: &str) -> cot::db::Result<Option<Self>> {
-        cot::db::query!(User, $email == Some(email.to_owned()))
-            .get(db)
-            .await
+    pub async fn approve(
+        &mut self,
+        db: &Database,
+        role: &str,
+        admin_id: i64,
+    ) -> cot::db::Result<()> {
+        db.raw_with("UPDATE furumusic__user SET local_role = $1, role = COALESCE(sso_role, $1), is_active = true, approved_by = $2, approved_at = $3 WHERE id = $4",
+            &[&role.to_owned(), &admin_id, &chrono::Utc::now().to_rfc3339(), &self.id_val()]).await?;
+        if let Some(updated) = Self::get_by_id(db, self.id_val()).await? {
+            *self = updated;
+        }
+        Ok(())
     }
 }
 
@@ -393,9 +430,38 @@ pub mod db_migrations {
             &[Operation::custom(create_oidc_link_indexes).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn add_local_approval(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        ctx.db.raw("ALTER TABLE furumusic__user ADD COLUMN local_role text, ADD COLUMN sso_role text, ADD COLUMN approved_by bigint, ADD COLUMN approved_at text").await?;
+        // Existing password accounts retain local access. OIDC-only accounts retain
+        // their last SSO role until the next verified login refreshes group membership.
+        ctx.db.raw("UPDATE furumusic__user SET local_role = CASE WHEN password IS NOT NULL AND is_active THEN role ELSE NULL END, sso_role = CASE WHEN password IS NULL AND is_active THEN role ELSE NULL END").await?;
+        ctx.db
+            .raw("DROP TABLE furumusic__playlist_share_link")
+            .await?;
+        ctx.db.raw("CREATE TABLE furumusic__share_link (token text PRIMARY KEY, creator_user_id bigint NOT NULL, title text NOT NULL, track_ids_json text NOT NULL, created_at text NOT NULL)").await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0053LocalApprovalAndPublicShares;
+    impl migrations::Migration for M0053LocalApprovalAndPublicShares {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0053_local_approval_and_public_shares";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] = &[
+            migrations::MigrationDependency::migration("furumusic", "m_0005_oidc_link_indexes"),
+            migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0037_create_playlist_share_links",
+            ),
+        ];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(add_local_approval).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0003CreateUser,
         &M0004CreateOidcLink,
         &M0005OidcLinkIndexes,
+        &M0053LocalApprovalAndPublicShares,
     ];
 }

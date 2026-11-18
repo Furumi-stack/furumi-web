@@ -1,9 +1,11 @@
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 <script>
+const GUEST = {{ guest }};
+const SHARE_TOKEN = "{{ share_token }}";
 // Handle expired sessions centrally, including background player requests.
 let loginRedirectStarted = false;
 function redirectOnUnauthorized(status) {
-    if (status !== 401 || loginRedirectStarted) return;
+    if (GUEST || status !== 401 || loginRedirectStarted) return;
     loginRedirectStarted = true;
     window.location.replace('/login');
 }
@@ -60,8 +62,8 @@ const T = {
     lastfmDisconnectConfirm: "{{ t.player_lastfm_disconnect_confirm }}",
     lastfmConnectFailed: "{{ t.player_lastfm_connect_failed }}",
     lastfmDisconnectFailed: "{{ t.player_lastfm_disconnect_failed }}",
-    startRadio: "{{ t.player_start_radio }}",
-    radioFailed: "{{ t.player_radio_failed }}",
+    download: "{{ t.track_download }}",
+    shareUnavailable: "{{ t.share_unavailable }}",
     searchSimilarTo: "{{ t.player_search_similar_to }}",
     findSimilar: "{{ t.player_find_similar }}",
     similarityFailed: "{{ t.player_similarity_failed }}",
@@ -342,6 +344,7 @@ document.addEventListener('alpine:init', () => {
             }
         },
         navigate(link) {
+            if (GUEST) return;
             if (!link || !link.id) return;
             this.close();
             const library = Alpine.store('library');
@@ -388,35 +391,39 @@ document.addEventListener('alpine:init', () => {
             return copied;
         },
 
-        copyTrack(track, trigger = null) {
+        async copyTrack(track, trigger = null) {
             const id = Number(track?.id || track);
-            if (!id) return;
-            this.copyUrl(`/share/track/${id}`, trigger);
+            if (id) return this.copyTracks([{id}], track?.title || T.sharedPlaylist, trigger);
         },
 
         async copyQueue(trigger = null) {
-            const queue = Alpine.store('queue');
-            return this.copyTracks(queue?.tracks || [], T.sharedPlaylist, trigger);
+            return this.copyTracks(Alpine.store('queue')?.tracks || [], T.sharedPlaylist, trigger);
         },
 
         async copyRelease(release, trigger = null) {
-            const id = Number(release?.id || release || 0);
-            if (!id) return;
-            return this.copyUrl(`/share/release/${id}`, trigger);
+            try {
+                const id = Number(release?.id || release || 0);
+                if (!id) return;
+                const response = await fetch(`/api/player/releases/${id}`);
+                if (!response.ok) throw new Error('release load failed');
+                const data = await response.json();
+                return this.copyTracks(data.tracks || [], data.title || T.sharedPlaylist, trigger);
+            } catch { this.flashTrigger(trigger, false); }
         },
 
         async copyTracks(tracks, title = T.sharedPlaylist, trigger = null) {
+            if (GUEST) return this.copyUrl(`/share/${SHARE_TOKEN}`, trigger);
             const trackIds = (tracks || []).map(track => Number(track.id)).filter(Boolean);
             if (!trackIds.length) return;
             try {
-                const res = await fetch('/api/player/share-playlist', {
+                const res = await fetch('/api/player/shares', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ track_ids: trackIds, title }),
                 });
                 if (!res.ok) throw new Error('share failed');
                 const data = await res.json();
-                await this.copyUrl(data.url || `/share/playlist/${data.token}`, trigger);
+                await this.copyUrl(data.url || `/share/${data.token}`, trigger);
             } catch (err) {
                 this.flashTrigger(trigger, false);
                 console.warn(err);
@@ -468,84 +475,24 @@ document.addEventListener('alpine:init', () => {
         },
 
         async handleInitialShareLinks() {
-            if (this._handledInitialLink) return;
+            if (this._handledInitialLink || !SHARE_TOKEN) return;
             this._handledInitialLink = true;
-
-            const params = new URLSearchParams(window.location.search);
-            const trackId = Number(params.get('track') || 0);
-            const releaseId = Number(params.get('release') || 0);
-            const playlistToken = (params.get('playlist_share') || '').trim();
-
-            if (trackId > 0) {
-                await this.openSharedTrack(trackId);
-                this._clearShareQuery();
-            } else if (releaseId > 0) {
-                await this.openSharedRelease(releaseId);
-                this._clearShareQuery();
-            } else if (playlistToken) {
-                await this.openSharedPlaylist(playlistToken);
-                this._clearShareQuery();
-            }
-        },
-
-        async openSharedTrack(trackId) {
             try {
-                const res = await fetch('/api/player/tracks-by-ids', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ids: [Number(trackId)] }),
-                });
-                if (!res.ok) throw new Error('track load failed');
-                const tracks = await res.json();
-                const track = Array.isArray(tracks) ? tracks[0] : null;
-                if (!track) return;
-                this.markSharedTrack(track.id);
-                if (track.release_id) {
-                    await Alpine.store('library').openRelease(track.release_id, { focusSharedTrackId: track.id });
-                }
-                const queue = Alpine.store('queue');
-                queue.tracks = [track];
-                queue.currentIndex = 0;
-                Alpine.store('player')._playLocal(track, { paused: true });
-                this.focusSharedTrack(track.id);
-            } catch (err) {
-                console.warn(err);
-            }
-        },
-
-        async openSharedRelease(releaseId) {
-            const id = Number(releaseId || 0);
-            if (!id) return;
-            this.markSharedTrack(null);
-            await Alpine.store('library').openRelease(id);
-        },
-
-        async openSharedPlaylist(token) {
-            try {
-                const res = await fetch(`/api/player/share-playlist/${encodeURIComponent(token)}`);
-                if (!res.ok) throw new Error('playlist load failed');
-                const data = await res.json();
-                const tracks = Array.isArray(data.tracks) ? data.tracks : [];
-                if (!tracks.length) return;
+                const response = await fetch(`/api/player/shares/${SHARE_TOKEN}`);
+                if (!response.ok) throw new Error('share unavailable');
+                const data = await response.json();
+                const tracks = data.tracks || [];
+                Alpine.store('library').showSharedPlaylist(data);
+                if (!tracks.length) throw new Error('share empty');
                 const queue = Alpine.store('queue');
                 queue.tracks = tracks;
                 queue.currentIndex = 0;
-                Alpine.store('player')._playLocal(tracks[0], { paused: true });
-                Alpine.store('library').showSharedPlaylist(data);
-            } catch (err) {
-                console.warn(err);
+                Alpine.store('player')._playLocal(tracks[0], {paused:true});
+            } catch {
+                Alpine.store('library').showSharedPlaylist({title:T.shareUnavailable, tracks:[]});
             }
         },
 
-        _clearShareQuery() {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('track');
-            url.searchParams.delete('release');
-            url.searchParams.delete('playlist_share');
-            const query = url.searchParams.toString();
-            const next = `${url.pathname}${query ? '?' + query : ''}${window.location.hash}`;
-            history.replaceState({}, '', next);
-        },
     });
 
     // -----------------------------------------------------------------------
@@ -553,15 +500,31 @@ document.addEventListener('alpine:init', () => {
     // -----------------------------------------------------------------------
     Alpine.store('user', {
         profile: null,
+        accessStatus: "anonymous",
         menuOpen: false,
         settingsOpen: false,
         lastfm: { configured: false, connected: false, username: null, reauth_required: false, last_error: null },
         lastfmBusy: false,
 
         init() {
+            if (GUEST) {
+                this.checkAccess();
+                setInterval(() => this.checkAccess(), 5000);
+                return;
+            }
             this.cleanLastfmQuery();
             this.load();
             this.loadLastfm();
+        },
+
+        async checkAccess() {
+            try {
+                const response = await fetch('/auth/status', {cache:'no-store'});
+                if (!response.ok) return;
+                const data = await response.json();
+                this.accessStatus = data.status;
+                if (data.status === 'active') window.location.reload();
+            } catch {}
         },
 
         cleanLastfmQuery() {
@@ -799,11 +762,7 @@ document.addEventListener('alpine:init', () => {
         _prefetchedQueueKey: null,
         _baseDocumentTitle: '',
 
-        _hasInitialShareLink() {
-            const params = new URLSearchParams(window.location.search);
-            return Number(params.get('track') || 0) > 0
-                || (params.get('playlist_share') || '').trim().length > 0;
-        },
+        _hasInitialShareLink() { return !!SHARE_TOKEN; },
 
         init() {
             audio.volume = this.volume;
@@ -1447,6 +1406,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _saveState() {
+            if (GUEST) return;
             const queue = Alpine.store('queue');
             if (!this.currentTrack && queue.tracks.length === 0) return;
             const state = this._buildStatePayload();
@@ -1458,6 +1418,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _saveStateSync() {
+            if (GUEST) return;
             const queue = Alpine.store('queue');
             if (!this.currentTrack && queue.tracks.length === 0) return;
             const state = this._buildStatePayload();
@@ -1466,6 +1427,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async _restoreState() {
+            if (GUEST) return;
             try {
                 const res = await fetch('/api/player/state');
                 if (!res.ok) return;
@@ -1521,6 +1483,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _recordHistory(endedReason, unloading = false) {
+            if (GUEST) return;
             const track = this._historyTrack;
             if (this._historyRecorded || !track || !this._playbackStartedAt) return;
             if (!Number.isInteger(Number(track.id)) || track.federated_cache) return;
@@ -1603,6 +1566,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _sendNowPlaying() {
+            if (GUEST) return;
             if (this._nowPlayingSent || !this.currentTrack) return;
             if (!Number.isInteger(Number(this.currentTrack.id)) || this.currentTrack.federated_cache) {
                 return;
@@ -1652,6 +1616,7 @@ document.addEventListener('alpine:init', () => {
         _lastPlaybackState: null,
 
         init() {
+            if (GUEST) return;
             this.id = this._ensureId();
             this.currentJamId = sessionStorage.getItem('furu_player_jam_id') || null;
             this.heartbeat();
@@ -1868,6 +1833,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         isActive() {
+            if (GUEST) return true;
             if (this.isControllingRemoteJam()) return false;
             return !this.activeDeviceId || this.activeDeviceId === this.id;
         },
@@ -2635,6 +2601,10 @@ document.addEventListener('alpine:init', () => {
         _hashNav: false, // guard against circular hash updates
 
         init() {
+            if (GUEST) {
+                this.$nextTick(() => Alpine.store('sharing').handleInitialShareLinks());
+                return;
+            }
             this._setupScroll();
             this.loadFederationLikes();
             window.addEventListener('furumi:track-availability', event => {
@@ -2668,6 +2638,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _navigateFromHash(options = {}) {
+            if (GUEST) return;
             if (this._hashNav) return;
             const hash = location.hash || '#artists';
             const match = hash.match(/^#(\w+)(?:\/([-]?\d+))?(?:\?(.*))?$/);
@@ -2778,6 +2749,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         goArtists(options = {}) {
+            if (GUEST) return;
             this._beginNavigation('#artists', options);
             if (this.artistFilter !== 'all' || this.artistsPage === 0) {
                 this._resetArtistList('all');
@@ -2795,6 +2767,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         goMyUploads(options = {}) {
+            if (GUEST) return;
             this._beginNavigation('#uploads', options);
             if (this.artistFilter !== 'uploads' || this.artistsPage === 0) {
                 this._resetArtistList('uploads');
@@ -2854,6 +2827,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async openArtist(id, options = {}) {
+            if (GUEST) return;
             this.stopArtistFederation();
             this._beginNavigation('#artist/' + id, options);
             this.searchQuery = '';
@@ -3145,26 +3119,22 @@ document.addEventListener('alpine:init', () => {
             return `${T.lastfmRating}: ${Math.round(value)}\n${this.trackInfo(track)}`;
         },
 
-        async startRadio(kind, id) {
-            if (!kind || !id) return;
-            try {
-                const res = await fetch(`/api/player/radio/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`);
-                if (!res.ok) throw new Error('radio failed');
-                const tracks = await res.json();
-                if (!Array.isArray(tracks) || tracks.length === 0) throw new Error('radio empty');
-                Alpine.store('queue').playRelease(tracks, 0);
-                Alpine.store('info').close();
-            } catch (err) {
-                console.warn(err);
-                window.alert(T.radioFailed);
-            }
+        downloadTrack(track) {
+            if (!track?.id) return;
+            const link = document.createElement('a');
+            link.href = GUEST ? `/api/player/shares/${SHARE_TOKEN}/download/${track.id}` : `/api/player/download/${track.id}`;
+            link.download = '';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
         },
 
         openTrackInfo(track) {
-            Alpine.store('info').openRows(T.trackInfoTitle, this.trackInfoRows(track), [
-                { label: T.startRadio, run: () => this.startRadio('track', track?.id) },
-                { label: T.findSimilar, run: () => this.searchSimilar(track) },
-            ]);
+            const rows = this.trackInfoRows(track).map(row => GUEST && row.links
+                ? {...row, value: row.links.map(link => link.label).join(', '), links: null} : row);
+            const actions = [{label:T.download, run:() => this.downloadTrack(track)}];
+            if (!GUEST) actions.push({label:T.findSimilar, run:() => this.searchSimilar(track)});
+            Alpine.store('info').openRows(T.trackInfoTitle, rows, actions);
         },
 
         uploadersInfo(uploaders) {
@@ -3188,9 +3158,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         openReleaseInfo(release) {
-            Alpine.store('info').openRows(T.releaseInfoTitle, this.releaseInfoRows(release), [
-                { label: T.startRadio, run: () => this.startRadio('release', release?.id) },
-            ]);
+            Alpine.store('info').openRows(T.releaseInfoTitle, this.releaseInfoRows(release));
         },
 
         infoLinks(items, type) {
@@ -3289,6 +3257,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async openRelease(id, options = {}) {
+            if (GUEST) return;
             this.stopReleaseFederation();
             this._beginNavigation('#release/' + id, options);
             this.searchQuery = '';
@@ -3405,6 +3374,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async openPlaylist(id, options = {}) {
+            if (GUEST) return;
             this._beginNavigation('#playlist/' + id, options);
             Alpine.store('playlists')?.stopEdit?.();
             this.view = 'playlist_detail';
@@ -3491,6 +3461,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async search(query, options = {}) {
+            if (GUEST) return;
             const q = (query || '').trim();
             if (!q) {
                 this.clearSearch();
@@ -3518,6 +3489,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async searchSimilar(trackOrId, options = {}) {
+            if (GUEST) return;
             const id = Number(typeof trackOrId === 'object' ? trackOrId?.id : trackOrId);
             if (!Number.isInteger(id) || id <= 0) return;
             const track = typeof trackOrId === 'object' ? trackOrId : null;
@@ -4494,6 +4466,7 @@ document.addEventListener('alpine:init', () => {
         _set: new Set(),
 
         init() {
+            if (GUEST) return;
             this.reload();
         },
 
@@ -4563,6 +4536,7 @@ document.addEventListener('alpine:init', () => {
         artists: [],
 
         init() {
+            if (GUEST) return;
             this.reload();
         },
 
@@ -6503,6 +6477,7 @@ document.addEventListener('alpine:init', () => {
         _pointerDragEnd: null,
 
         init() {
+            if (GUEST) return;
             this.reload();
         },
 

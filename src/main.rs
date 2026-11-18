@@ -70,59 +70,64 @@ fn build_registry() -> Arc<JobRegistry> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct IndexQuery {
-    track: Option<i64>,
-    release: Option<i64>,
-    playlist_share: Option<String>,
+async fn index(session: Session, db: Database, i18n: I18n) -> cot::Result<cot::response::Response> {
+    render_player(session, db, i18n, String::new()).await
 }
 
-async fn index(
+async fn render_player(
     session: Session,
     db: Database,
     i18n: I18n,
-    UrlQuery(query): UrlQuery<IndexQuery>,
+    share_token: String,
 ) -> cot::Result<cot::response::Response> {
-    let _user = match auth::get_session_user(&session, &db).await {
-        Some(u) => u,
-        None => {
-            if let Some(location) = share_query_redirect(&query) {
-                auth::remember_post_login_redirect(&session, &location).await?;
-            }
-            return Ok(auth::redirect("/login"));
+    let guest = auth::get_session_user(&session, &db).await.is_none();
+    if guest && share_token.is_empty() {
+        if auth::get_session_identity(&session, &db).await.is_some() {
+            return Html::new(PendingTemplate { t: i18n.t }.render()?).into_response();
         }
-    };
+        return Ok(auth::redirect("/login"));
+    }
     let (config, _) = AppConfig::load_with_db(&db).await;
-    let template = player::PlayerPageTemplate {
-        t: i18n.t,
-        downloads_enabled: config.downloads_enabled,
-        torrent_downloads_enabled: config.downloads_enabled && config.torrent_downloads_enabled,
-        youtube_downloads_enabled: config.downloads_enabled && config.youtube_downloads_enabled,
-    };
-    Html::new(template.render()?).into_response()
+    Html::new(
+        player::PlayerPageTemplate {
+            t: i18n.t,
+            guest,
+            share_token,
+            downloads_enabled: !guest && config.downloads_enabled,
+            torrent_downloads_enabled: !guest
+                && config.downloads_enabled
+                && config.torrent_downloads_enabled,
+            youtube_downloads_enabled: !guest
+                && config.downloads_enabled
+                && config.youtube_downloads_enabled,
+        }
+        .render()?,
+    )
+    .into_response()
 }
 
-fn share_query_redirect(query: &IndexQuery) -> Option<String> {
-    if let Some(track_id) = query.track.filter(|id| *id > 0) {
-        return Some(format!("/?track={track_id}"));
-    }
-    if let Some(release_id) = query.release.filter(|id| *id > 0) {
-        return Some(format!("/?release={release_id}"));
-    }
-    let token = query.playlist_share.as_deref()?.trim();
-    if is_share_token(token) {
-        Some(format!("/?playlist_share={token}"))
-    } else {
-        None
-    }
+#[derive(Debug, Template)]
+#[template(path = "pending.html")]
+struct PendingTemplate {
+    t: &'static Translations,
+}
+
+async fn access_status(session: Session, db: Database) -> cot::Result<cot::response::Response> {
+    let identity = auth::get_session_identity(&session, &db).await;
+    let status = match identity {
+        Some(user) if user.is_active() => "active",
+        Some(_) => "pending",
+        None => "anonymous",
+    };
+    let mut response = cot::json::Json(serde_json::json!({"status": status})).into_response()?;
+    response
+        .headers_mut()
+        .insert("Cache-Control", "private, no-store".parse().unwrap());
+    Ok(response)
 }
 
 fn is_share_token(token: &str) -> bool {
-    !token.is_empty()
-        && token.len() <= 64
-        && token
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[derive(Deserialize)]
@@ -187,11 +192,7 @@ struct LoginForm {
 #[derive(Deserialize)]
 struct LoginQuery {
     error: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SharePathId {
-    id: i64,
+    next: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -236,56 +237,26 @@ async fn metrics_handler(
         .expect("valid response"))
 }
 
-async fn share_track_handler(
+async fn share_handler(
     session: Session,
     db: Database,
-    Path(path): Path<SharePathId>,
-) -> cot::Result<cot::response::Response> {
-    let location = if path.id > 0 {
-        format!("/?track={}", path.id)
-    } else {
-        "/".to_string()
-    };
-    if auth::get_session_user(&session, &db).await.is_none() {
-        auth::remember_post_login_redirect(&session, &location).await?;
-        return Ok(auth::redirect("/login"));
-    }
-    Ok(auth::redirect(&location))
-}
-
-async fn share_release_handler(
-    session: Session,
-    db: Database,
-    Path(path): Path<SharePathId>,
-) -> cot::Result<cot::response::Response> {
-    let location = if path.id > 0 {
-        format!("/?release={}", path.id)
-    } else {
-        "/".to_string()
-    };
-    if auth::get_session_user(&session, &db).await.is_none() {
-        auth::remember_post_login_redirect(&session, &location).await?;
-        return Ok(auth::redirect("/login"));
-    }
-    Ok(auth::redirect(&location))
-}
-
-async fn share_playlist_handler(
-    session: Session,
-    db: Database,
+    i18n: I18n,
     Path(path): Path<SharePathToken>,
 ) -> cot::Result<cot::response::Response> {
-    let token = path.token.trim();
-    let location = if is_share_token(token) {
-        format!("/?playlist_share={token}")
-    } else {
-        "/".to_string()
-    };
-    if auth::get_session_user(&session, &db).await.is_none() {
-        auth::remember_post_login_redirect(&session, &location).await?;
-        return Ok(auth::redirect("/login"));
+    if !is_share_token(&path.token) {
+        return Ok(cot::http::Response::builder()
+            .status(cot::http::StatusCode::NOT_FOUND)
+            .body(Body::fixed("Shared music not found"))
+            .expect("valid response"));
     }
-    Ok(auth::redirect(&location))
+    let mut response = render_player(session, db, i18n, path.token).await?;
+    response
+        .headers_mut()
+        .insert("Referrer-Policy", "no-referrer".parse().unwrap());
+    response
+        .headers_mut()
+        .insert("Cache-Control", "private, no-store".parse().unwrap());
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -316,26 +287,13 @@ impl App for FuruApp {
             ),
             Route::with_handler_and_name(
                 "/",
-                |session: Session, db: Database, i18n: I18n, query: UrlQuery<IndexQuery>| async move {
-                    index(session, db, i18n, query).await
+                |session: Session, db: Database, i18n: I18n| async move {
+                    index(session, db, i18n).await
                 },
                 "index",
             ),
-            Route::with_handler_and_name(
-                "/share/track/{id}",
-                get(share_track_handler),
-                "share_track",
-            ),
-            Route::with_handler_and_name(
-                "/share/release/{id}",
-                get(share_release_handler),
-                "share_release",
-            ),
-            Route::with_handler_and_name(
-                "/share/playlist/{token}",
-                get(share_playlist_handler),
-                "share_playlist",
-            ),
+            Route::with_handler_and_name("/share/{token}", get(share_handler), "share"),
+            Route::with_handler_and_name("/auth/status", get(access_status), "access_status"),
             Route::with_handler_and_name(
                 "/metrics",
                 get({
@@ -353,12 +311,28 @@ impl App for FuruApp {
                 "/login",
                 get({
                     let config = Arc::clone(&self.config);
-                    move |i18n: I18n, db: Database, query: UrlQuery<LoginQuery>| {
+                    move |i18n: I18n,
+                          db: Database,
+                          session: Session,
+                          query: UrlQuery<LoginQuery>| {
                         let config = Arc::clone(&config);
                         async move {
                             // No users at all → redirect to first-run setup
                             if User::count_all(&db).await.unwrap_or(0) == 0 {
                                 return Ok(auth::redirect("/admin/setup"));
+                            }
+                            if let Some(next) = query.0.next.as_deref() {
+                                if next.strip_prefix("/share/").is_some_and(is_share_token) {
+                                    auth::remember_post_login_redirect(&session, next).await?;
+                                }
+                            } else {
+                                auth::clear_post_login_redirect(&session).await?;
+                            }
+                            if auth::get_session_identity(&session, &db).await.is_some() {
+                                let destination = auth::get_post_login_redirect(&session)
+                                    .await?
+                                    .unwrap_or_else(|| "/".into());
+                                return Ok(auth::redirect(&destination));
                             }
                             let message = query.0.error.unwrap_or_default();
                             login_page_handler(i18n, &config, db, message)
