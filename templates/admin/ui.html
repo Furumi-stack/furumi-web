@@ -1,0 +1,120 @@
+<script>
+// Shared responsive shell state. Business data stays in adminV2().
+function adminUI() {
+    return {
+        menuOpen: false,
+        isCompact: false,
+        isTaskStacked: false,
+        taskPane: 'list',
+        initUI() {
+            const compact = window.matchMedia('(max-width: 1023px)');
+            const stacked = window.matchMedia('(max-width: 1279px)');
+            const update = () => {
+                this.isCompact = compact.matches;
+                this.isTaskStacked = stacked.matches;
+                if (!this.isCompact) this.menuOpen = false;
+            };
+            update();
+            compact.addEventListener('change', update);
+            stacked.addEventListener('change', update);
+            this._uiCleanup = () => {
+                compact.removeEventListener('change', update);
+                stacked.removeEventListener('change', update);
+            };
+            this.$watch('activeView', () => {
+                this.closeMenu();
+                if (this.$refs?.main) this.$refs.main.scrollTop = 0;
+            });
+        },
+        destroy() {
+            this._uiCleanup?.();
+            if (this.poller) clearInterval(this.poller);
+        },
+        openMenu() { this.menuOpen = true; },
+        closeMenu() { this.menuOpen = false; },
+        showTaskPane(pane) {
+            this.taskPane = pane;
+            if (this.isTaskStacked) this.$nextTick(() => document.getElementById('task-tab-' + pane)?.focus());
+        },
+        taskTabKeydown(event) {
+            const panes = ['list', 'details', 'logs'];
+            const index = panes.indexOf(this.taskPane);
+            const keys = {ArrowRight:(index + 1) % 3, ArrowLeft:(index + 2) % 3, Home:0, End:2};
+            if (!(event.key in keys)) return;
+            event.preventDefault();
+            this.showTaskPane(panes[keys[event.key]]);
+        },
+        jumpToSettings(section) {
+            const target = document.getElementById('settings-' + section);
+            if (!target) return;
+            target.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block:'start'});
+            target.setAttribute('tabindex', '-1');
+            target.focus({preventScroll:true});
+        },
+    };
+}
+
+// All modal dialogs and the mobile navigation share one focus/scroll lifecycle.
+// State is outside Alpine reactivity so opening a dialog does not retrigger x-effect.
+const adminOverlay = (() => {
+    const states = new WeakMap();
+    const stack = [];
+    const frame = callback => window.requestAnimationFrame(callback);
+    const focusables = element => [...element.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')]
+        .filter(node => node.getClientRects().length && !node.closest('[inert]'));
+    function updateBackground() {
+        const top = stack.at(-1);
+        const main = document.getElementById('admin-main');
+        const nav = document.getElementById('admin-navigation');
+        if (main) { main.inert = !!top; main.classList.toggle('is-locked', !!top); }
+        if (nav) nav.inert = (top && top !== nav) || (nav.dataset.compact === 'true' && !nav.classList.contains('is-open'));
+        for (const entry of stack) entry.inert = entry !== top;
+    }
+    function sync(element, open) {
+        const previous = states.get(element);
+        if (previous?.open === open) return;
+        states.set(element, {open, returnFocus:open ? document.activeElement : previous?.returnFocus});
+        if (open) {
+            stack.push(element);
+            frame(() => {
+                if (stack.at(-1) !== element) return;
+                updateBackground();
+                const dialog = element.querySelector('[role="dialog"]') || element;
+                dialog.focus({preventScroll:true});
+            });
+        } else {
+            const index = stack.indexOf(element);
+            if (index !== -1) stack.splice(index, 1);
+            element.inert = element.id !== 'admin-navigation';
+            frame(() => {
+                updateBackground();
+                const top = stack.at(-1);
+                if (top) {
+                    if (!top.contains(document.activeElement)) (top.querySelector('[role="dialog"]') || top).focus({preventScroll:true});
+                } else if (previous?.open) {
+                    const target = previous.returnFocus;
+                    if (target?.isConnected && target.getClientRects().length && !target.closest('[inert]')) target.focus({preventScroll:true});
+                    else document.querySelector('.menu-toggle')?.focus({preventScroll:true});
+                }
+            });
+        }
+    }
+    function keydown(event, element) {
+        if (stack.at(-1) !== element) return;
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+            const close = element.querySelector('[data-dialog-close]');
+            if (close && !close.disabled) { event.preventDefault(); event.stopPropagation(); close.click(); }
+        } else if (event.key === 'Tab') {
+            const nodes = focusables(element);
+            const first = nodes[0], last = nodes.at(-1);
+            if (!first) { event.preventDefault(); return; }
+            if (event.shiftKey && (document.activeElement === first || !nodes.includes(document.activeElement))) {
+                event.preventDefault(); last.focus();
+            } else if (!event.shiftKey && (document.activeElement === last || !nodes.includes(document.activeElement))) {
+                event.preventDefault(); first.focus();
+            }
+        }
+    }
+    return {sync, keydown};
+})();
+</script>

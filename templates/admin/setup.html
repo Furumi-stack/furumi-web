@@ -5,13 +5,13 @@
 {% block head_extra %}
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-    .setup-card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); padding: 2rem 2.5rem; width: 100%; max-width: 400px; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100dvh; padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+    .setup-card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); padding: clamp(20px, 5vw, 40px); width: 100%; max-width: 400px; }
     .setup-card h1 { margin-bottom: 1.5rem; font-size: 1.5rem; text-align: center; }
     .setup-card label { display: block; margin-bottom: .25rem; font-weight: 600; font-size: .9rem; }
     .setup-card input[type="text"],
-    .setup-card input[type="password"] { width: 100%; padding: .5rem .7rem; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 4px; font-size: .95rem; }
-    .setup-card button { display: block; width: 100%; padding: .6rem; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; background: #1a1a2e; color: #fff; }
+    .setup-card input[type="password"] { width: 100%; padding: .5rem .7rem; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; min-height: 44px; }
+    .setup-card button { display: block; width: 100%; padding: .6rem; min-height: 44px; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; background: #1a1a2e; color: #fff; }
     .setup-card button:hover { background: #16213e; }
     .setup-card .flash { color: #856404; background: #fff3cd; padding: .5rem .75rem; border-radius: 4px; margin-bottom: 1rem; text-align: center; font-size: .9rem; }
 </style>
@@ -27,11 +27,11 @@
 
     <form method="post" action="/admin/setup">
         <label for="username">{{ t.setup_username }}</label>
-        <input type="text" name="username" id="username" required>
+        <input type="text" name="username" id="username" autocomplete="username" required>
         <label for="password">{{ t.setup_password }}</label>
-        <input type="password" name="password" id="password" required>
+        <input type="password" name="password" id="password" autocomplete="new-password" required>
         <label for="confirm_password">{{ t.setup_confirm }}</label>
-        <input type="password" name="confirm_password" id="confirm_password" required>
+        <input type="password" name="confirm_password" id="confirm_password" autocomplete="new-password" required>
         <button type="submit">{{ t.setup_submit }}</button>
     </form>
 </div>

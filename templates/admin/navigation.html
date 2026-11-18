@@ -1,0 +1,25 @@
+<aside class="sidebar" id="admin-navigation" :class="{'is-open': menuOpen}" :data-compact="isCompact" :inert="isCompact && !menuOpen" :role="isCompact ? 'dialog' : null" :aria-modal="isCompact && menuOpen ? 'true' : null" aria-label="Admin navigation" tabindex="-1" x-effect="adminOverlay.sync($el, isCompact && menuOpen)" @keydown="adminOverlay.keydown($event, $el)">
+    <div class="brand">
+        <div><div class="brand-title">FuruMusic <span class="version">v{{ version }}</span></div><div class="admin-user">{{ user_name }} · {{ user_role }}</div></div>
+        <button class="icon-btn nav-close" data-dialog-close aria-label="Close navigation" @click="closeMenu()"><i data-lucide="x"></i></button>
+    </div>
+    <nav aria-label="Administration" class="nav-sections" @click="if ($event.target.closest('.nav-btn')) closeMenu()">
+        <div class="nav-group">
+            <div class="nav-label">Operations</div>
+            <button class="nav-btn" :class="{active: activeView === 'reviews'}" :aria-current="activeView === 'reviews' ? 'page' : null" @click="openReviews()"><i data-lucide="inbox"></i><span>Review Queue</span><span class="nav-count" x-text="reviewTotalAll()"></span></button>
+            <button class="nav-btn" :class="{active: activeView === 'jobs'}" :aria-current="activeView === 'jobs' ? 'page' : null" @click="openJobs()"><i data-lucide="calendar-clock"></i><span>Tasks</span><span class="nav-count" x-text="jobs.length || 0"></span></button>
+        </div>
+        <div class="nav-group">
+            <div class="nav-label">Music</div>
+            <button class="nav-btn" :class="{active: activeView === 'library'}" :aria-current="activeView === 'library' ? 'page' : null" @click="openLibrary(libraryKind)"><i data-lucide="library"></i><span>Library Workbench</span><span class="nav-count" x-text="fmt(stats.tracks || 0)"></span></button>
+            <button class="nav-btn" :class="{active: activeView === 'tools'}" :aria-current="activeView === 'tools' ? 'page' : null" @click="openTools()"><i data-lucide="wrench"></i><span>Library Tools</span></button>
+            <button class="nav-btn" :class="{active: activeView === 'statistics'}" :aria-current="activeView === 'statistics' ? 'page' : null" @click="openStatistics()"><i data-lucide="chart-no-axes-combined"></i><span>Statistics</span></button>
+        </div>
+        <div class="nav-group">
+            <div class="nav-label">Instance</div>
+            <button class="nav-btn" :class="{active: activeView === 'users'}" :aria-current="activeView === 'users' ? 'page' : null" @click="openUsers()"><i data-lucide="users"></i><span>Users</span><span class="nav-count" x-text="users.online_count ? users.online_count + ' online' : ''"></span></button>
+            <button class="nav-btn" :class="{active: activeView === 'settings'}" :aria-current="activeView === 'settings' ? 'page' : null" @click="openSettings()"><i data-lucide="settings"></i><span>Settings</span></button>
+        </div>
+    </nav>
+    <a class="nav-player btn" href="/"><i data-lucide="music-2"></i>Back to player</a>
+</aside>

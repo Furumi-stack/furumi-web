@@ -3,2174 +3,33 @@
 {% block title %}FuruMusic Admin v{{ version }}{% endblock title %}
 
 {% block head_extra %}
-<style>
-:root {
-    --bg-primary: #121212;
-    --bg-secondary: #181818;
-    --bg-elevated: #232323;
-    --bg-hover: #2a2a2a;
-    --bg-active: #333;
-    --text-primary: #fff;
-    --text-secondary: #b3b3b3;
-    --text-subdued: #727272;
-    --accent: #1db954;
-    --accent-hover: #1ed760;
-    --blue: #5aa7ff;
-    --amber: #f1b84b;
-    --red: #ef6262;
-    --violet: #b98cff;
-    --border-color: #2b2b2b;
-    --sidebar-width: 244px;
-}
-
-* { box-sizing: border-box; }
-[x-cloak] { display: none !important; }
-
-html, body {
-    width: 100%;
-    height: 100%;
-    min-width: 1180px;
-    margin: 0;
-    overflow: hidden;
-}
-
-body {
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-}
-
-button, input, select, textarea {
-    font: inherit;
-}
-
-button {
-    border: 0;
-}
-
-.admin-shell {
-    display: grid;
-    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
-}
-
-.sidebar {
-    min-width: 0;
-    border-right: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    display: flex;
-    flex-direction: column;
-}
-
-.brand {
-    padding: 18px 16px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.brand-title {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 18px;
-    font-weight: 800;
-}
-
-.version {
-    color: var(--text-subdued);
-    font-size: 11px;
-    font-weight: 700;
-}
-
-.admin-user {
-    margin-top: 8px;
-    color: var(--text-subdued);
-    font-size: 12px;
-}
-
-.nav-group {
-    padding: 12px;
-}
-
-.nav-label {
-    padding: 8px 8px 6px;
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0;
-    text-transform: uppercase;
-}
-
-.nav-btn {
-    width: 100%;
-    height: 38px;
-    padding: 0 10px;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-secondary);
-    display: grid;
-    grid-template-columns: 18px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    cursor: pointer;
-    text-align: left;
-}
-
-.nav-btn:hover,
-.nav-btn.active {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-}
-
-.nav-btn svg,
-.icon-btn svg,
-.btn svg {
-    width: 16px;
-    height: 16px;
-}
-
-.nav-count {
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.main {
-    min-width: 0;
-    min-height: 0;
-    overflow: auto;
-    background: var(--bg-primary);
-}
-
-.topbar {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    height: 64px;
-    padding: 12px 18px;
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(18, 18, 18, 0.96);
-    backdrop-filter: blur(12px);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-}
-
-.page-title {
-    min-width: 0;
-}
-
-.page-title h1 {
-    margin: 0;
-    font-size: 20px;
-    line-height: 1.1;
-}
-
-.page-title p {
-    margin: 4px 0 0;
-    color: var(--text-subdued);
-    font-size: 12px;
-}
-
-.top-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.content {
-    padding: 18px;
-}
-
-.repair-shell { display:grid;grid-template-columns:290px minmax(0,1fr);gap:14px;height:calc(100dvh - 116px);min-height:520px; }
-.repair-side,.repair-work { min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px; }
-.repair-side .panel,.repair-plan,.repair-chat { min-height:0;display:flex;flex-direction:column; }
-.repair-side .panel { flex:1; }
-.repair-scroll { overflow:auto;min-height:0;padding:12px; }
-.repair-work .repair-chat { flex:1; }
-.repair-chat > .repair-scroll { flex:1;display:flex;flex-direction:column;gap:12px; }
-.repair-plan { border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary);flex:none; }
-.repair-plan summary { cursor:pointer;padding:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
-.repair-plan summary::before { content:'▸'; }
-.repair-plan[open] summary::before { content:'▾'; }
-.repair-plan-body { padding:0 12px 14px;overflow:auto; }
-.repair-preview { display:grid;gap:8px;margin:10px 0; }
-.repair-preview-row { padding:10px 12px;border:1px solid var(--border-color);border-radius:6px; }
-.repair-preview-row strong { display:block;font-size:13px;margin:4px 0;overflow-wrap:anywhere; }
-.repair-preview-row p { margin:0;font-size:12px;line-height:1.5;color:var(--text-secondary);white-space:pre-line;overflow-wrap:anywhere; }
-.repair-manual > summary { font-size:12px;color:var(--text-secondary); }
-.repair-plan-actions { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border-top:1px solid var(--border-color); }
-.repair-delete { color:var(--red); }
-.repair-context { display:block;color:var(--text-subdued);font-size:11px;margin-top:3px; }
-@media (max-width:800px) {
-    html:has(.repair-view),body:has(.repair-view) { min-width:0; }
-    .repair-view { grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr); }
-    .repair-view .sidebar { border-right:0;border-bottom:1px solid var(--border-color); }
-    .repair-view .sidebar .brand,.repair-view .sidebar .nav-label,.repair-view .sidebar .nav-group:last-child { display:none; }
-    .repair-view .sidebar .nav-group { display:flex;overflow-x:auto;gap:4px;padding:8px; }
-    .repair-view .sidebar .nav-btn { width:auto;flex:none;white-space:nowrap;padding:10px; }
-    .repair-view .sidebar .nav-count { display:none; }
-    .repair-view .topbar { height:auto;padding:12px;flex-wrap:wrap; }
-    .repair-view .content { padding:12px; }
-    .repair-view .panel-head { flex-wrap:wrap;gap:12px; }
-    .repair-plan-actions { align-items:stretch;flex-direction:column; }
-    .repair-shell { grid-template-columns:1fr;height:auto;min-height:0; }
-    .repair-side .panel:first-child .repair-scroll { max-height:280px; }
-    .repair-work .repair-chat { min-height:65dvh;max-height:90dvh; }
-}
-
-.repair-group { margin:12px 0 5px;color:var(--text-secondary);font-size:11px;font-weight:800;text-transform:uppercase; }
-.repair-entity { display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:12px; }
-.repair-entity span { overflow-wrap:anywhere; }
-.repair-search-results { max-height:160px;overflow:auto;border:1px solid var(--border-color);border-radius:6px;margin-top:6px; }
-.repair-search-results button { display:block;width:100%;padding:8px;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer; }
-.repair-search-results button:hover { background:var(--bg-hover); }
-.repair-diff { min-width:850px;width:100%;border-collapse:collapse;font-size:12px; }
-.repair-diff th,.repair-diff td { text-align:left;border-bottom:1px solid var(--border-color);padding:7px;vertical-align:top; }
-.repair-diff th { color:var(--text-subdued);font-size:10px;text-transform:uppercase; }
-.repair-diff input,.repair-diff select { width:100%;min-width:90px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:5px;padding:6px; }
-.repair-diff .compact { min-width:65px;max-width:90px; }
-.repair-message { padding:12px 14px;border-radius:9px;max-width:90%;font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere; }
-.repair-message.user { background:#16452a;align-self:flex-end; }
-.repair-message.assistant { background:var(--bg-elevated);align-self:flex-start; }
-.repair-composer { border-top:1px solid var(--border-color);padding:9px;display:flex;gap:8px;align-items:end; }
-.repair-composer textarea { flex:1;min-width:0;resize:vertical;max-height:180px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;padding:8px; }
-.repair-thinking { display:flex;align-items:center;gap:8px;color:var(--amber);font-size:12px;padding:10px; }
-.repair-thinking::before { content:"";width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:repair-spin .8s linear infinite; }
-@keyframes repair-spin { to { transform:rotate(360deg); } }
-.repair-section-title { margin:16px 0 6px;font-size:12px;font-weight:800;color:var(--text-secondary); }
-.repair-history { font-size:11px;line-height:1.5; }
-
-.stats-strip {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-    gap: 8px;
-    margin-bottom: 14px;
-}
-
-.stat-cell {
-    min-width: 0;
-    padding: 10px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-secondary);
-}
-
-.stat-value {
-    font-size: 18px;
-    font-weight: 800;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.stat-label {
-    margin-top: 2px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.panel {
-    min-width: 0;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-secondary);
-}
-
-.panel-head {
-    min-height: 56px;
-    padding: 12px;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.panel-title {
-    min-width: 0;
-}
-
-.panel-title strong {
-    display: block;
-    font-size: 14px;
-}
-
-.panel-title span {
-    display: block;
-    margin-top: 2px;
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.btn,
-.icon-btn,
-.seg-btn {
-    height: 32px;
-    border-radius: 6px;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    cursor: pointer;
-}
-
-.btn {
-    padding: 0 12px;
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.icon-btn {
-    width: 32px;
-    padding: 0;
-}
-
-.btn:hover,
-.icon-btn:hover,
-.seg-btn:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-}
-
-.btn.primary {
-    background: var(--accent);
-    color: #07120b;
-}
-
-.btn.primary:hover {
-    background: var(--accent-hover);
-}
-
-.btn.danger {
-    background: rgba(239, 98, 98, 0.18);
-    color: #ffb8b8;
-}
-
-.btn.warn {
-    background: rgba(241, 184, 75, 0.16);
-    color: #ffd891;
-}
-
-.btn:disabled,
-.icon-btn:disabled,
-.seg-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-}
-
-.segmented {
-    display: inline-flex;
-    padding: 3px;
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-
-.seg-btn {
-    min-width: 76px;
-    height: 28px;
-    padding: 0 10px;
-    background: transparent;
-    font-size: 12px;
-}
-
-.seg-btn.active {
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-}
-
-.search {
-    width: 260px;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    outline: none;
-}
-
-.search:focus {
-    border-color: var(--accent);
-}
-
-.action-strip {
-    min-height: 44px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.selection-summary {
-    color: var(--text-subdued);
-    font-size: 12px;
-}
-
-.table-wrap {
-    max-height: 560px;
-    overflow: auto;
-}
-
-.review-table-wrap {
-    max-height: calc(100vh - 318px);
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-}
-
-th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    height: 34px;
-    padding: 0 10px;
-    background: var(--bg-secondary);
-    color: var(--text-subdued);
-    border-bottom: 1px solid var(--border-color);
-    font-size: 11px;
-    font-weight: 800;
-    text-align: left;
-    text-transform: uppercase;
-}
-
-td {
-    height: 54px;
-    padding: 8px 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-    color: var(--text-secondary);
-    font-size: 12px;
-    vertical-align: middle;
-}
-
-tr {
-    cursor: default;
-}
-
-tbody tr:hover {
-    background: rgba(255, 255, 255, 0.035);
-}
-
-.col-check { width: 38px; }
-.col-status { width: 112px; }
-.col-type { width: 120px; }
-.col-confidence { width: 88px; }
-.col-tags { width: 250px; }
-.col-time { width: 132px; }
-
-.users-table { min-width: 1080px; table-layout: auto; }
-.users-table-wrap {
-    max-height: calc(100vh - 300px);
-}
-
-.users-table .user-status-column { width: 116px; }
-.users-table .user-role-column { width: 110px; }
-.users-table .user-active-column { width: 112px; }
-.users-table .user-seen-column { width: 170px; }
-
-.check {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent);
-}
-
-.primary-line {
-    color: var(--text-primary);
-    font-weight: 750;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.secondary-line {
-    margin-top: 3px;
-    color: var(--text-subdued);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.badge {
-    display: inline-flex;
-    align-items: center;
-    height: 22px;
-    padding: 0 8px;
-    border-radius: 999px;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font-size: 11px;
-    font-weight: 800;
-}
-
-.badge.queued { background: rgba(90, 167, 255, 0.16); color: #9ccbff; }
-.badge.processing { background: rgba(185, 140, 255, 0.18); color: #d8c2ff; }
-.badge.pending { background: rgba(241, 184, 75, 0.18); color: #ffe1a6; }
-.badge.failed,
-.badge.rejected { background: rgba(239, 98, 98, 0.18); color: #ffb7b7; }
-.badge.approved,
-.badge.auto_approved,
-.badge.completed,
-.badge.ok { background: rgba(29, 185, 84, 0.16); color: #8ef0b2; }
-.badge.running { background: rgba(185, 140, 255, 0.18); color: #d8c2ff; }
-.badge.disabled { background: rgba(255, 255, 255, 0.08); color: var(--text-subdued); }
-
-.tags {
-    display: flex;
-    gap: 5px;
-    flex-wrap: wrap;
-    max-height: 42px;
-    overflow: hidden;
-}
-
-.tag {
-    display: inline-flex;
-    align-items: center;
-    height: 20px;
-    padding: 0 7px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 800;
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.1);
-}
-
-.tag.format { background: rgba(90, 167, 255, 0.22); color: #b8d9ff; }
-.tag.bitrate { background: rgba(185, 140, 255, 0.22); color: #dfcbff; }
-.tag.sample,
-.tag.depth { background: rgba(29, 185, 84, 0.18); color: #9af0b8; }
-.tag.size { background: rgba(255, 255, 255, 0.1); color: #d2d2d2; }
-.tag.count { background: rgba(90, 167, 255, 0.18); color: #b8d9ff; }
-.tag.relation { background: rgba(241, 184, 75, 0.18); color: #ffe1a6; }
-.tag.plays,
-.tag.followers { background: rgba(185, 140, 255, 0.18); color: #d8c2ff; }
-.tag.visibility { background: rgba(29, 185, 84, 0.16); color: #8ef0b2; }
-.tag.metadata-lastfm { background: rgba(90, 167, 255, 0.18); color: #c7e0ff; }
-.tag.metadata-file { background: rgba(29, 185, 84, 0.16); color: #9af0b8; }
-.tag.metadata-review { background: rgba(241, 184, 75, 0.18); color: #ffe1a6; }
-.tag.metadata-track-genre { background: rgba(255, 255, 255, 0.1); color: #d2d2d2; }
-.tag.metadata-release-lastfm { background: rgba(90, 167, 255, 0.12); color: #b7d6ff; border: 1px solid rgba(90, 167, 255, 0.22); }
-.tag.metadata-release-file { background: rgba(29, 185, 84, 0.1); color: #a7eabd; border: 1px solid rgba(29, 185, 84, 0.2); }
-.tag.metadata-release-review { background: rgba(241, 184, 75, 0.12); color: #ffe1a6; border: 1px solid rgba(241, 184, 75, 0.22); }
-
-.jobs-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    padding: 12px;
-}
-
-.metadata-backfill-options {
-    display: grid;
-    gap: 8px;
-    margin-bottom: 12px;
-    padding: 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-
-.metadata-backfill-options .option-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-}
-
-.metadata-backfill-options label {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-height: 26px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.metadata-backfill-options input {
-    width: auto;
-    min-height: auto;
-}
-
-.metadata-backfill-options .mode-row {
-    display: flex;
-    gap: 14px;
-    flex-wrap: wrap;
-    padding-top: 4px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.jobs-page {
-    display: grid;
-    grid-template-columns: minmax(720px, 1fr) 380px;
-    grid-template-rows: minmax(310px, 1fr) minmax(260px, 0.85fr);
-    gap: 14px;
-    align-items: stretch;
-    height: calc(100vh - 100px);
-    min-height: 0;
-}
-
-.jobs-page .jobs-list-panel {
-    grid-column: 1;
-    grid-row: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.job-table-wrap {
-    flex: 1;
-    min-height: 0;
-    max-height: none;
-    overflow: auto;
-}
-
-.job-table {
-    table-layout: fixed;
-}
-
-.jobs-page .jobs-list-panel .panel-head {
-    flex-shrink: 0;
-}
-
-.job-table .job-column { width: 32%; }
-.job-table .state-column { width: 12%; }
-.job-table .schedule-column { width: 22%; }
-.job-table .runs-column { width: 24%; }
-.job-table .actions-column { width: 10%; }
-
-.job-table .toolbar {
-    flex-wrap: nowrap;
-    justify-content: flex-end;
-}
-
-.inline-runs {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 5px;
-    max-width: 100%;
-    overflow: hidden;
-}
-
-.run-chip {
-    gap: 5px;
-    max-width: 70px;
-    height: 20px;
-    padding: 0 7px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.task-form {
-    position: sticky;
-    top: 82px;
-    grid-column: 2;
-    grid-row: 1 / span 2;
-    align-self: start;
-    display: flex;
-    flex-direction: column;
-    max-height: calc(100vh - 100px);
-    overflow: hidden;
-}
-
-.task-form-body {
-    min-height: 0;
-    overflow: auto;
-    padding: 12px;
-}
-
-.job-detail-description {
-    margin-bottom: 10px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.45;
-}
-
-.job-facts {
-    display: grid;
-    gap: 8px;
-    margin-bottom: 12px;
-}
-
-.job-fact {
-    display: grid;
-    grid-template-columns: 58px minmax(0, 1fr);
-    gap: 8px;
-    align-items: center;
-    min-height: 28px;
-    padding: 6px 8px;
-    border: 1px solid var(--border-color);
-    border-radius: 7px;
-    background: var(--bg-primary);
-}
-
-.job-fact span:first-child {
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 850;
-    text-transform: uppercase;
-}
-
-.job-fact span:last-child {
-    min-width: 0;
-    color: var(--text-secondary);
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.job-param-note {
-    margin: -2px 0 10px;
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.job-run-pager {
-    min-height: 34px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 0 0;
-}
-
-.job-run-pager .toolbar {
-    flex-wrap: nowrap;
-}
-
-.run-log-panel {
-    grid-column: 1;
-    grid-row: 2;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.run-log-body {
-    flex: 1;
-    min-height: 0;
-    padding: 12px;
-    overflow: hidden;
-}
-
-.run-log-output {
-    width: 100%;
-    height: 100%;
-    min-height: 210px;
-    margin: 0;
-    padding: 14px 16px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: #0b0d0f;
-    color: #dce6ef;
-    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-    font-size: 13px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow: auto;
-    tab-size: 4;
-}
-
-.job-card {
-    min-width: 0;
-    padding: 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    cursor: pointer;
-}
-
-.job-card:hover,
-.job-card.active {
-    border-color: rgba(29, 185, 84, 0.55);
-}
-
-.job-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-}
-
-.job-name {
-    min-width: 0;
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 850;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.job-desc {
-    height: 32px;
-    margin-top: 6px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    line-height: 16px;
-    overflow: hidden;
-}
-
-.job-meta {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin-top: 8px;
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.runs {
-    border-top: 1px solid var(--border-color);
-}
-
-.run-row {
-    display: grid;
-    grid-template-columns: 76px 96px minmax(0, 1fr) 72px;
-    align-items: center;
-    gap: 8px;
-    min-height: 42px;
-    padding: 6px 12px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-    color: var(--text-secondary);
-    font-size: 12px;
-    cursor: pointer;
-}
-
-.run-row:hover {
-    background: rgba(255, 255, 255, 0.035);
-}
-
-.library-shell {
-    display: block;
-}
-
-.settings-page {
-    max-width: 1440px;
-    margin: 0 auto;
-}
-
-.settings-layout {
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    grid-template-areas:
-        "access access access access oidc oidc oidc oidc oidc oidc oidc oidc"
-        "agent agent agent agent agent agent agent agent agentstatus agentstatus agentstatus agentstatus"
-        "similarity similarity similarity similarity similarity similarity similarity similarity similaritystatus similaritystatus similaritystatus similaritystatus"
-        "downloads downloads downloads downloads downloads downloads downloads downloads downloads downloads downloads downloads"
-        "federation federation federation federation federation federation federation federation federation federation federation federation"
-        "lastfm lastfm lastfm lastfm lastfm lastfm lastfm lastfm developer developer developer developer"
-        "actions actions actions actions actions actions actions actions actions actions actions actions";
-    gap: 16px;
-    align-items: stretch;
-}
-
-.settings-column {
-    display: contents;
-}
-
-.settings-section {
-    min-width: 0;
-    margin: 0;
-}
-.settings-access { grid-area: access; }
-.settings-oidc { grid-area: oidc; }
-.settings-agent { grid-area: agent; }
-.settings-agent-status { grid-area: agentstatus; }
-.settings-similarity { grid-area: similarity; }
-.settings-similarity-status { grid-area: similaritystatus; }
-.settings-downloads { grid-area: downloads; }
-.settings-federation { grid-area: federation; }
-.settings-lastfm { grid-area: lastfm; }
-.settings-developer { grid-area: developer; }
-.settings-section-narrow { border-left: 2px solid rgba(29, 185, 84, 0.55); }
-
-.settings-access .settings-grid,
-.settings-developer .settings-grid {
-    grid-template-columns: minmax(0, 1fr);
-}
-
-.settings-section-narrow .panel-head {
-    background: rgba(29, 185, 84, 0.035);
-}
-
-.settings-actions {
-    grid-area: actions;
-    position: sticky;
-    bottom: 0;
-    z-index: 5;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: rgba(35, 35, 35, 0.96);
-    backdrop-filter: blur(10px);
-}
-
-.settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px 16px;
-    padding: 16px;
-}
-
-.settings-card {
-    padding: 14px;
-}
-
-.setting-field {
-    min-width: 0;
-    max-width: 480px;
-}
-
-.setting-field.settings-short { max-width: 150px; }
-.settings-wide { max-width: 680px; }
-
-.setting-field label,
-.setting-toggle label {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 7px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.setting-field input,
-.setting-field select {
-    width: 100%;
-    height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    outline: none;
-}
-
-.setting-field textarea {
-    width: 100%;
-    min-height: 68px;
-    padding: 8px 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    outline: none;
-    resize: vertical;
-}
-
-.download-method-setting {
-    min-width: 0;
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 7px;
-    background: rgba(255, 255, 255, 0.018);
-}
-
-.download-method-setting > label,
-.proxy-editor-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 9px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 750;
-}
-
-.download-method-controls {
-    display: grid;
-    grid-template-columns: minmax(150px, 0.75fr) minmax(220px, 1.25fr);
-    gap: 10px;
-    align-items: center;
-}
-
-.download-method-controls select,
-.proxy-row input {
-    width: 100%;
-    height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    outline: none;
-}
-
-.youtube-cookie-settings {
-    display: grid;
-    gap: 9px;
-    margin-top: 11px;
-    padding-top: 11px;
-    border-top: 1px solid var(--border-color);
-}
-
-.youtube-cookie-picker,
-.youtube-cookie-upload,
-.youtube-cookie-row {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-}
-
-.youtube-cookie-picker > span {
-    flex: 0 0 auto;
-    color: var(--text-subdued);
-    font-size: 11px;
-    font-weight: 750;
-}
-
-.youtube-cookie-picker select {
-    min-width: 0;
-    flex: 1;
-    height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    outline: none;
-}
-
-.youtube-cookie-upload {
-    justify-content: space-between;
-}
-
-.youtube-cookie-upload span,
-.youtube-cookie-empty {
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.youtube-cookie-list {
-    display: grid;
-    gap: 6px;
-}
-
-.youtube-cookie-row {
-    justify-content: space-between;
-    min-width: 0;
-    padding: 8px 9px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-}
-
-.youtube-cookie-row.active {
-    border-color: rgba(29, 185, 84, 0.55);
-    background: rgba(29, 185, 84, 0.08);
-}
-
-.youtube-cookie-info {
-    display: grid;
-    min-width: 0;
-    gap: 3px;
-}
-
-.youtube-cookie-info strong {
-    overflow: hidden;
-    color: var(--text-primary);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.youtube-cookie-info span {
-    color: var(--text-subdued);
-    font-size: 10px;
-}
-
-.proxy-editor {
-    grid-column: 1 / -1;
-    min-width: 0;
-    padding-top: 4px;
-}
-
-.proxy-row {
-    display: grid;
-    grid-template-columns: minmax(210px, 1.4fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) auto;
-    gap: 10px;
-    align-items: end;
-    padding: 10px;
-    margin-top: 8px;
-    border: 1px solid var(--border-color);
-    border-radius: 7px;
-    background: rgba(255, 255, 255, 0.018);
-}
-
-.proxy-row label {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-    color: var(--text-subdued);
-    font-size: 11px;
-    font-weight: 700;
-}
-
-.setting-field input:focus,
-.setting-field select:focus,
-.setting-field textarea:focus {
-    border-color: var(--accent);
-}
-
-.setting-toggle {
-    min-height: 68px;
-    padding: 11px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-
-.setting-toggle-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.setting-toggle-row span {
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 800;
-}
-
-.setting-toggle input,
-.setting-toggle-row input[type="checkbox"] {
-    flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    accent-color: var(--accent);
-}
-
-.setting-help {
-    margin-top: 6px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    line-height: 1.45;
-    max-width: 68ch;
-}
-
-.source-pill {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    height: 18px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 850;
-    text-transform: lowercase;
-}
-
-.source-pill.env { background: rgba(90, 167, 255, 0.16); color: #9ccbff; }
-.source-pill.database { background: rgba(29, 185, 84, 0.16); color: #8ef0b2; }
-.source-pill.default { background: rgba(255, 255, 255, 0.08); color: var(--text-subdued); }
-
-.settings-wide {
-    grid-column: 1 / -1;
-}
-
-.settings-federation-body {
-    display: grid;
-    grid-template-columns: minmax(360px, 4fr) minmax(580px, 8fr);
-    gap: 20px;
-    padding: 16px;
-}
-
-.settings-federation-body > .settings-grid,
-.settings-federation-body > .probe-body {
-    padding: 0;
-}
-
-.federation-status-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.transport-log {
-    grid-column: 1 / -1;
-    min-width: 0;
-}
-
-.transport-log-head {
-    display: flex;
-    align-items: end;
-    justify-content: space-between;
-    gap: 12px;
-    margin: 14px 0 7px;
-}
-
-.transport-log-head strong { font-size: 12px; }
-.transport-log-head span { color: var(--text-subdued); font-size: 11px; }
-
-.transport-log-scroll {
-    max-height: 210px;
-    overflow: auto;
-    border: 1px solid var(--border-color);
-    border-radius: 7px;
-    background: var(--bg-primary);
-}
-
-.transport-row {
-    display: grid;
-    grid-template-columns: 68px minmax(100px, 1.2fr) 84px 72px 54px 64px 64px 66px 66px 66px;
-    gap: 8px;
-    align-items: center;
-    min-width: 850px;
-    min-height: 30px;
-    padding: 5px 9px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-    color: var(--text-secondary);
-    font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
-
-.transport-row:last-child { border-bottom: 0; }
-.transport-row.transport-header {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    color: var(--text-subdued);
-    background: var(--bg-elevated);
-    font-size: 10px;
-    font-weight: 850;
-    text-transform: uppercase;
-}
-.transport-row > span { overflow: hidden; text-overflow: ellipsis; }
-.transport-number { text-align: right; }
-
-@media (max-width: 1000px) {
-    .settings-layout {
-        grid-template-columns: 1fr;
-        grid-template-areas:
-            "access"
-            "oidc"
-            "agent"
-            "agentstatus"
-            "similarity"
-            "similaritystatus"
-            "downloads"
-            "federation"
-            "lastfm"
-            "developer"
-            "actions";
-    }
-    .settings-federation-body { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 700px) {
-    .settings-grid,
-    .federation-status-grid { grid-template-columns: 1fr; }
-    .setting-field { max-width: none; }
-    .download-method-controls,
-    .proxy-row { grid-template-columns: 1fr; }
-    .youtube-cookie-picker,
-    .youtube-cookie-upload { align-items: stretch; flex-direction: column; }
-}
-
-.settings-note {
-    padding: 14px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.55;
-}
-
-.probe-body {
-    padding: 16px;
-}
-
-.probe-intro {
-    margin: 0 0 12px;
-    color: var(--text-primary);
-    font-size: 13px;
-    line-height: 1.45;
-}
-
-.probe-table {
-    display: grid;
-    gap: 7px;
-    color: var(--text-secondary);
-    font-size: 12px;
-}
-
-.probe-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: 12px;
-    min-height: 22px;
-}
-
-.probe-row strong {
-    max-width: 210px;
-    overflow: hidden;
-    text-align: right;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.similarity-profile-details {
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border-color);
-}
-
-.similarity-profile-details > span {
-    display: block;
-    margin-bottom: 5px;
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-}
-
-.similarity-profile-details pre {
-    margin: 0;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: 11px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-}
-
-.library-row {
-    display: grid;
-    grid-template-columns: 38px minmax(0, 1fr) 300px 130px;
-    align-items: center;
-    gap: 10px;
-    min-height: 58px;
-    padding: 8px 12px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-}
-
-.library-row:hover,
-.library-row.active {
-    background: rgba(255, 255, 255, 0.035);
-}
-
-.field {
-    margin-bottom: 12px;
-}
-
-.field label {
-    display: block;
-    margin-bottom: 6px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-}
-
-.field input,
-.field textarea,
-.field select {
-    width: 100%;
-    min-height: 34px;
-    padding: 8px 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    resize: vertical;
-    outline: none;
-}
-
-.field textarea {
-    min-height: 110px;
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    font-size: 11px;
-}
-
-.image-editor {
-    display: grid;
-    grid-template-columns: 150px minmax(0, 1fr);
-    gap: 14px;
-    margin-bottom: 12px;
-}
-
-.image-preview {
-    width: 150px;
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    color: var(--text-subdued);
-    font-size: 12px;
-}
-
-.image-preview img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.cover-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
-    gap: 8px;
-}
-
-.cover-option {
-    min-width: 0;
-    padding: 6px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    color: var(--text-secondary);
-    cursor: pointer;
-}
-
-.cover-option:hover {
-    border-color: rgba(29, 185, 84, 0.55);
-    color: var(--text-primary);
-}
-
-.cover-option img {
-    width: 100%;
-    aspect-ratio: 1;
-    object-fit: cover;
-    border-radius: 5px;
-    display: block;
-}
-
-.cover-option span {
-    display: block;
-    margin-top: 5px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 10px;
-}
-
-.artist-tags {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-}
-
-.run-log-output.is-following {
-    border-color: rgba(29, 185, 84, 0.36);
-}
-
-.metadata-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    max-height: 112px;
-    overflow: auto;
-    padding: 8px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-
-.metadata-tags .tag {
-    height: auto;
-    min-height: 24px;
-    gap: 5px;
-    padding: 4px 8px;
-}
-
-.metadata-tags small {
-    font-size: 9px;
-    font-weight: 800;
-    opacity: 0.72;
-    text-transform: uppercase;
-}
-
-.metadata-empty {
-    min-height: 34px;
-    padding: 8px 10px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-
-.artist-picker {
-    position: relative;
-}
-
-.artist-picker input {
-    width: 100%;
-}
-
-.artist-results {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: calc(100% + 5px);
-    z-index: 5;
-    max-height: 242px;
-    overflow: auto;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-elevated);
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
-}
-
-.artist-result {
-    width: 100%;
-    min-height: 34px;
-    padding: 8px 10px;
-    border: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    background: transparent;
-    color: var(--text-secondary);
-    text-align: left;
-    cursor: pointer;
-}
-
-.artist-result small {
-    display: block;
-    margin-top: 2px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.artist-result:hover,
-.artist-result:focus {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-}
-
-.artist-result:last-child {
-    border-bottom: 0;
-}
-
-.tag button {
-    width: 16px;
-    height: 16px;
-    margin-left: 5px;
-    border: 0;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.14);
-    color: inherit;
-    cursor: pointer;
-    line-height: 1;
-}
-
-.tag button:hover {
-    background: rgba(255, 255, 255, 0.24);
-}
-
-.editor-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.release-track-search-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    margin-bottom: 10px;
-}
-
-.release-track-list {
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    overflow: hidden;
-}
-
-.release-track-head,
-.release-track-row {
-    display: grid;
-    grid-template-columns: 72px 82px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, .9fr) 70px 36px;
-    gap: 8px;
-    align-items: center;
-    padding: 8px;
-}
-
-.release-track-head {
-    min-height: 34px;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 850;
-    text-transform: uppercase;
-}
-
-.release-track-row {
-    min-height: 48px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-}
-
-.release-track-row:last-child {
-    border-bottom: 0;
-}
-
-.release-track-row:hover {
-    background: rgba(255, 255, 255, 0.03);
-}
-
-.release-track-row input {
-    width: 100%;
-    height: 30px;
-    min-height: 30px;
-    padding: 0 8px;
-}
-
-.release-track-title,
-.release-track-meta {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.release-track-title {
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 750;
-}
-
-.release-track-meta {
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.merge-modal {
-    width: min(1120px, calc(100vw - 56px));
-}
-
-.merge-release-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px;
-    margin-bottom: 14px;
-}
-
-.merge-release-card {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr);
-    gap: 10px;
-    align-items: center;
-    min-height: 68px;
-    padding: 9px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    text-align: left;
-    cursor: pointer;
-}
-
-.merge-release-card:hover,
-.merge-release-card.active {
-    border-color: rgba(29, 185, 84, 0.78);
-    background: rgba(29, 185, 84, 0.08);
-}
-
-.merge-release-cover {
-    width: 48px;
-    height: 48px;
-    border-radius: 6px;
-    background: var(--bg-elevated);
-    object-fit: cover;
-}
-
-.merge-release-cover.empty {
-    display: grid;
-    place-items: center;
-    padding: 0;
-    font-size: 10px;
-}
-
-.merge-release-title,
-.merge-release-meta {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.merge-release-title {
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.merge-release-meta {
-    margin-top: 4px;
-    color: var(--text-subdued);
-    font-size: 10px;
-}
-
-.merge-cover-grid {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.merge-cover-option {
-    width: 82px;
-    padding: 6px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    color: var(--text-subdued);
-    cursor: pointer;
-}
-
-.merge-cover-option.active {
-    border-color: rgba(29, 185, 84, 0.78);
-    color: var(--text-primary);
-}
-
-.merge-cover-option img,
-.merge-cover-empty {
-    display: grid;
-    place-items: center;
-    width: 68px;
-    height: 68px;
-    margin-bottom: 5px;
-    border-radius: 5px;
-    background: var(--bg-elevated);
-    object-fit: cover;
-}
-
-.merge-track-list {
-    min-width: 760px;
-}
-
-.merge-track-head,
-.merge-track-row {
-    display: grid;
-    grid-template-columns: 52px 70px 74px minmax(180px, 1.5fr) minmax(130px, 1fr) minmax(130px, 1fr) 62px;
-    gap: 8px;
-    align-items: center;
-    padding: 8px;
-}
-
-.merge-track-head {
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 850;
-    text-transform: uppercase;
-}
-
-.merge-track-row {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-}
-
-.merge-track-row:last-child {
-    border-bottom: 0;
-}
-
-.merge-track-row input {
-    width: 100%;
-    height: 30px;
-    min-height: 30px;
-    padding: 0 7px;
-}
-
-.merge-order-actions {
-    display: flex;
-    gap: 3px;
-}
-
-.merge-footer {
-    position: sticky;
-    bottom: -14px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin: 14px -14px -14px;
-    padding: 12px 14px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-}
-
-.image-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 10px;
-}
-
-.file-name {
-    max-width: 280px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.cover-option.active {
-    border-color: rgba(29, 185, 84, 0.8);
-    box-shadow: 0 0 0 1px rgba(29, 185, 84, 0.32);
-}
-
-.muted {
-    color: var(--text-subdued);
-}
-
-.empty {
-    padding: 28px;
-    color: var(--text-subdued);
-    text-align: center;
-}
-
-.toast {
-    position: fixed;
-    right: 18px;
-    bottom: 18px;
-    z-index: 20;
-    max-width: 420px;
-    padding: 10px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-elevated);
-    color: var(--text-primary);
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
-    font-size: 12px;
-}
-
-.loading-mask {
-    position: absolute;
-    inset: 64px 0 0 var(--sidebar-width);
-    z-index: 10;
-    display: grid;
-    place-items: center;
-    background: rgba(18, 18, 18, 0.68);
-}
-
-.modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 30;
-    display: grid;
-    place-items: center;
-    padding: 28px;
-    background: rgba(0, 0, 0, 0.62);
-}
-
-.modal {
-    width: min(760px, calc(100vw - 80px));
-    max-height: calc(100vh - 80px);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-secondary);
-    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.56);
-    overflow: hidden;
-}
-
-.modal-head {
-    min-height: 58px;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.modal-body {
-    max-height: calc(100vh - 154px);
-    padding: 14px;
-    overflow: auto;
-}
-
-.user-modal {
-    width: min(860px, calc(100vw - 80px));
-}
-
-.user-modal-tabs {
-    margin-bottom: 14px;
-}
-
-.user-summary-grid,
-.user-profile-facts {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-    margin-bottom: 14px;
-}
-
-.user-summary-card,
-.user-profile-facts > div {
-    min-width: 0;
-    padding: 10px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-
-.user-summary-card span,
-.user-profile-facts span {
-    display: block;
-    color: var(--text-subdued);
-    font-size: 11px;
-    margin-bottom: 4px;
-}
-
-.user-summary-card strong,
-.user-profile-facts strong {
-    display: block;
-    overflow: hidden;
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 800;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.user-stats-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.user-activity-list {
-    display: grid;
-    gap: 8px;
-}
-
-.user-activity-row {
-    min-width: 0;
-    padding: 8px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-    display: grid;
-    grid-template-columns: 52px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-}
-
-.user-activity-cover {
-    width: 52px;
-    height: 52px;
-    border-radius: 4px;
-    background: var(--bg-elevated);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-subdued);
-}
-
-.user-activity-cover img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.user-activity-cover svg {
-    width: 24px;
-    height: 24px;
-}
-
-.user-activity-main {
-    min-width: 0;
-}
-
-.user-activity-title,
-.user-activity-meta,
-.user-activity-sub {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.user-activity-title {
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 800;
-}
-
-.user-activity-meta {
-    margin-top: 3px;
-    color: var(--text-secondary);
-    font-size: 12px;
-}
-
-.user-activity-sub {
-    margin-top: 3px;
-    color: var(--text-subdued);
-    font-size: 11px;
-}
-
-.user-activity-time {
-    min-width: 118px;
-    color: var(--text-subdued);
-    font-size: 11px;
-    text-align: right;
-}
-
-.user-activity-time strong {
-    display: block;
-    color: var(--text-primary);
-    font-size: 12px;
-}
-
-.statistics-filters { padding: 20px; }
-.statistics-toolbar { align-items: end; flex-wrap: wrap; margin-top: 18px; }
-.statistics-toolbar label { display: grid; gap: 7px; color: var(--text-subdued); font-size: 12px; }
-.statistics-toolbar .search { width: 200px; }
-.statistics-chips { flex-wrap: wrap; margin-top: 12px; }
-.statistics-note { font-size: 12px; line-height: 1.7; margin: 14px 0 0; }
-.statistics-error { color: #fca5a5; margin-top: 12px; }
-.statistics-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 18px 0; }
-.statistics-panel { margin-top: 20px; overflow: hidden; }
-.statistics-chart { display: flex; align-items: end; gap: 12px; overflow-x: auto; padding: 24px; min-height: 190px; }
-.statistics-bar-column { min-width: 58px; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 11px; }
-.statistics-bar-column small { white-space: nowrap; color: var(--text-subdued); font-size: 10px; }
-.statistics-bar { width: 100%; max-width: 60px; background: #6bd6a0; border-radius: 4px 4px 0 0; }
-.statistics-table { table-layout: auto; min-width: 720px; }
-.statistics-table td { vertical-align: top; }
-.statistics-link { border: 0; padding: 0; background: none; color: #8ee4b4; cursor: pointer; text-align: left; font: inherit; }
-.statistics-link:hover { text-decoration: underline; }
-.statistics-link:disabled { color: inherit; cursor: default; text-decoration: none; }
-.artist-stat-link { margin-right: 10px; font-size: 12px; }
-.statistics-service-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 24px; padding: 20px; }
-.statistics-service-row { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; font-size: 13px; }
-@media (max-width: 800px) { .statistics-ranking-head { align-items: stretch; flex-direction: column; gap: 12px; } .statistics-toolbar .search { width: 160px; } }
-
-
-@media (max-width: 800px) {
-    html:has(.statistics-view), body:has(.statistics-view) { min-width: 0; }
-    .statistics-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-    .statistics-view .sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }
-    .statistics-view .sidebar .brand, .statistics-view .sidebar .nav-label, .statistics-view .sidebar .nav-group:last-child { display: none; }
-    .statistics-view .sidebar .nav-group { display: flex; overflow-x: auto; gap: 4px; padding: 8px; }
-    .statistics-view .sidebar .nav-btn { width: auto; flex: none; white-space: nowrap; padding: 10px; }
-    .statistics-view .sidebar .nav-count { display: none; }
-    .statistics-view .topbar { height: auto; padding: 12px; flex-wrap: wrap; }
-    .statistics-view .page-title p { line-height: 1.5; }
-    .statistics-view .content { padding: 12px; }
-    .statistics-view .panel-head { flex-wrap: wrap; gap: 12px; }
-    .statistics-view .statistics-filters { padding: 14px; }
-    .statistics-view .statistics-toolbar { gap: 12px; }
-    .statistics-view .statistics-toolbar label { flex: 1; min-width: 135px; }
-    .statistics-view .statistics-toolbar .search { width: 100%; }
-    .statistics-view .statistics-ranking-head .toolbar { flex-wrap: wrap; }
-    .statistics-view .statistics-ranking-head .search { width: 100%; }
-    .statistics-view .statistics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .statistics-view .action-strip { flex-wrap: wrap; gap: 10px; }
-}
-
-</style>
+{% include "admin/styles.html" %}
+{% include "admin/responsive.html" %}
 {% endblock head_extra %}
 
 {% block content %}
-<div class="admin-shell" :class="{'statistics-view': activeView === 'statistics', 'repair-view': activeView === 'tools'}" x-data="adminV2()" x-cloak>
-    <aside class="sidebar">
-        <div class="brand">
-            <div class="brand-title">
-                <span>FuruMusic Admin</span>
-                <span class="version">v{{ version }}</span>
-            </div>
-            <div class="admin-user">{{ user_name }} - {{ user_role }}</div>
-        </div>
+<div class="admin-shell" x-data="adminV2()" x-cloak>
+    <button class="nav-backdrop" x-show="isCompact && menuOpen" x-cloak @click="closeMenu()" aria-label="Close navigation" tabindex="-1"></button>
+    {% include "admin/navigation.html" %}
 
-        <div class="nav-group">
-            <div class="nav-label">Operations</div>
-            <button class="nav-btn" :class="{active: activeView === 'reviews'}" @click="openReviews()">
-                <i data-lucide="inbox"></i>
-                <span>Review Queue</span>
-                <span class="nav-count" x-text="reviewTotalAll()"></span>
-            </button>
-            <button class="nav-btn" :class="{active: activeView === 'jobs'}" @click="openJobs()">
-                <i data-lucide="calendar-clock"></i>
-                <span>Tasks</span>
-                <span class="nav-count" x-text="jobs.length || 0"></span>
-            </button>
-            <button class="nav-btn" :class="{active: activeView === 'library'}" @click="openLibrary(libraryKind)">
-                <i data-lucide="library"></i>
-                <span>Library Workbench</span>
-                <span class="nav-count" x-text="fmt(stats.tracks || 0)"></span>
-            </button>
-            <button class="nav-btn" :class="{active: activeView === 'tools'}" @click="openTools()">
-                <i data-lucide="wrench"></i>
-                <span>Library Tools</span>
-            </button>
-            <button class="nav-btn" :class="{active: activeView === 'statistics'}" @click="openStatistics()"><i data-lucide="chart-no-axes-combined"></i><span>Statistics</span></button>
-            <button class="nav-btn" :class="{active: activeView === 'users'}" @click="openUsers()">
-                <i data-lucide="users"></i>
-                <span>Users</span>
-                <span class="nav-count" x-text="users.online_count ? users.online_count + ' online' : ''"></span>
-            </button>
-            <button class="nav-btn" :class="{active: activeView === 'settings'}" @click="openSettings()">
-                <i data-lucide="settings"></i>
-                <span>Settings</span>
-                <span class="nav-count" x-text="settings.lastfm_scrobbling_configured ? 'ok' : ''"></span>
-            </button>
-        </div>
-
-        <div class="nav-group">
-            <div class="nav-label">Entities</div>
-            <button class="nav-btn" @click="openLibrary('artists')">
-                <i data-lucide="mic-2"></i>
-                <span>Artists</span>
-                <span class="nav-count" x-text="fmt(libraryOverview.artists || 0)"></span>
-            </button>
-            <button class="nav-btn" @click="openLibrary('releases')">
-                <i data-lucide="disc-3"></i>
-                <span>Releases</span>
-                <span class="nav-count" x-text="fmt(libraryOverview.releases || 0)"></span>
-            </button>
-            <button class="nav-btn" @click="openLibrary('playlists')">
-                <i data-lucide="list-music"></i>
-                <span>Playlists</span>
-                <span class="nav-count" x-text="fmt(libraryOverview.playlists || 0)"></span>
-            </button>
-        </div>
-    </aside>
-
-    <main class="main">
-        <div class="topbar">
+    <main class="main" id="admin-main" x-ref="main" tabindex="-1">
+        <header class="topbar">
+            <button class="icon-btn menu-toggle" @click="openMenu()" :aria-expanded="menuOpen" aria-controls="admin-navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
             <div class="page-title">
                 <h1 x-text="pageTitle()"></h1>
                 <p x-text="pageSubtitle()"></p>
             </div>
             <div class="top-actions">
-                <button class="btn" @click="refreshAll()" x-show="activeView !== 'settings'">
+                <button class="btn" @click="refreshAll()" x-show="activeView !== 'settings'" aria-label="Refresh page" title="Refresh page">
                     <i data-lucide="refresh-cw"></i>
-                    Refresh
+                    <span class="top-action-label">Refresh</span>
                 </button>
-                <a class="btn" href="/">
+                <a class="btn" href="/" aria-label="Open player" title="Open player">
                     <i data-lucide="music-2"></i>
-                    Player
+                    <span class="top-action-label">Player</span>
                 </a>
             </div>
-        </div>
+        </header>
 
         <div class="content" x-show="activeView === 'reviews'">
             <section class="stats-strip">
@@ -2235,7 +94,7 @@ tbody tr:hover {
                     </div>
 
                     <div class="table-wrap review-table-wrap">
-                        <table>
+                        <table class="responsive-table">
                             <thead>
                                 <tr>
                                     <th class="col-check"></th>
@@ -2250,24 +109,24 @@ tbody tr:hover {
                             <tbody>
                                 <template x-for="row in reviews.items" :key="row.id">
                                     <tr @click="openReview(row)">
-                                        <td class="col-check" @click.stop>
+                                        <td data-label="Select" class="col-check" @click.stop>
                                             <input class="check" type="checkbox" :checked="isReviewSelected(row.id)" @change="toggleReview(row)" :disabled="reviewBulkBusy" />
                                         </td>
-                                        <td><span class="badge" :class="row.status" x-text="row.status"></span></td>
-                                        <td>
-                                            <div class="primary-line" :title="row.input_path" x-text="row.filename || row.display_path"></div>
+                                        <td data-label="Status"><span class="badge" :class="row.status" x-text="row.status"></span></td>
+                                        <td data-label="Input" data-primary>
+                                            <button type="button" class="row-link primary-line" @click.stop="openReview(row)" :title="row.input_path" x-text="row.filename || row.display_path"></button>
                                             <div class="secondary-line" :title="row.input_path" x-text="row.display_path"></div>
                                         </td>
-                                        <td><span x-text="row.review_type"></span></td>
-                                        <td><span x-text="formatConfidence(row.confidence)"></span></td>
-                                        <td>
+                                        <td data-label="Type"><span x-text="row.review_type"></span></td>
+                                        <td data-label="Conf."><span x-text="formatConfidence(row.confidence)"></span></td>
+                                        <td data-label="Tags">
                                             <div class="tags">
                                                 <template x-for="tag in row.tags" :key="tag.kind + tag.label">
                                                     <span class="tag" :class="tag.kind" x-text="tag.label"></span>
                                                 </template>
                                             </div>
                                         </td>
-                                        <td><span x-text="shortDate(row.updated_at)"></span></td>
+                                        <td data-label="Updated"><span x-text="shortDate(row.updated_at)"></span></td>
                                     </tr>
                                 </template>
                             </tbody>
@@ -2293,8 +152,13 @@ tbody tr:hover {
         </div>
 
         <div class="content" x-show="activeView === 'jobs'">
-            <div class="jobs-page">
-                <section class="panel jobs-list-panel">
+            <nav class="workspace-tabs" role="tablist" aria-label="Task workspace" @keydown="taskTabKeydown($event)">
+                <button id="task-tab-list" role="tab" aria-controls="task-pane-list" :aria-selected="taskPane === 'list'" :tabindex="taskPane === 'list' ? 0 : -1" @click="taskPane = 'list'">Tasks</button>
+                <button id="task-tab-details" role="tab" aria-controls="task-pane-details" :aria-selected="taskPane === 'details'" :tabindex="taskPane === 'details' ? 0 : -1" @click="taskPane = 'details'">Configuration</button>
+                <button id="task-tab-logs" role="tab" aria-controls="task-pane-logs" :aria-selected="taskPane === 'logs'" :tabindex="taskPane === 'logs' ? 0 : -1" @click="taskPane = 'logs'">Run log</button>
+            </nav>
+            <div class="jobs-page" :data-task-pane="taskPane">
+                <section class="panel jobs-list-panel" id="task-pane-list" :role="isTaskStacked ? 'tabpanel' : 'region'" aria-labelledby="task-tab-list">
                     <div class="panel-head">
                         <div class="panel-title">
                             <strong>Tasks</strong>
@@ -2308,7 +172,7 @@ tbody tr:hover {
                         </div>
                     </div>
                     <div class="job-table-wrap">
-                        <table class="job-table">
+                        <table class="responsive-table job-table">
                             <thead>
                                 <tr>
                                     <th class="job-column">Task</th>
@@ -2320,26 +184,26 @@ tbody tr:hover {
                             </thead>
                             <tbody>
                                 <template x-for="job in jobs" :key="job.name">
-                                    <tr :class="{active: activeJob && activeJob.name === job.name}" @click="selectJob(job.name)">
-                                        <td>
-                                            <div class="primary-line" x-text="job.name"></div>
+                                    <tr :class="{active: activeJob && activeJob.name === job.name}" @click="selectJob(job.name); showTaskPane('details')">
+                                        <td data-label="Task" data-primary>
+                                            <button type="button" class="row-link primary-line" @click.stop="selectJob(job.name); showTaskPane('details')" x-text="job.name"></button>
                                             <div class="secondary-line" x-text="job.description"></div>
                                         </td>
-                                        <td><span class="badge" :class="job.health" x-text="job.health"></span></td>
-                                        <td>
+                                        <td data-label="State"><span class="badge" :class="job.health" x-text="job.health"></span></td>
+                                        <td data-label="Schedule">
                                             <div class="primary-line" x-text="'Next ' + relativeDate(job.next_run_at)"></div>
                                             <div class="secondary-line" x-text="'Last ' + relativeDate(job.last_run_at)"></div>
                                         </td>
-                                        <td>
+                                        <td data-label="Latest Runs">
                                             <div class="inline-runs">
                                                 <template x-for="run in (job.recent_runs || []).slice(0, 3)" :key="run.id">
-                                                    <button class="badge run-chip" :class="run.status" @click.stop="loadRunDetail(run)" :title="runTitle(run)">
+                                                    <button class="badge run-chip" :class="run.status" @click.stop="loadRunDetail(run); showTaskPane('logs')" :title="runTitle(run)">
                                                         <span x-text="runChipLabel(run)"></span>
                                                     </button>
                                                 </template>
                                             </div>
                                         </td>
-                                        <td>
+                                        <td data-label="Actions">
                                             <div class="toolbar">
                                                 <button class="icon-btn" type="button" @click.stop="runJob(job)" :disabled="Boolean(job.launching)" title="Run now">
                                                     <i data-lucide="play"></i>
@@ -2356,7 +220,7 @@ tbody tr:hover {
                     </div>
                 </section>
 
-                <section class="panel task-form">
+                <section class="panel task-form" id="task-pane-details" :role="isTaskStacked ? 'tabpanel' : 'region'" aria-labelledby="task-tab-details">
                     <div class="panel-head">
                         <div class="panel-title">
                             <strong x-text="activeJob ? activeJob.name : 'Task Details'"></strong>
@@ -2424,12 +288,12 @@ tbody tr:hover {
                             <label>Recent Runs</label>
                             <div class="runs">
                                 <template x-for="run in pagedVisibleRuns()" :key="run.id">
-                                    <div class="run-row" @click="loadRunDetail(run)">
+                                    <button type="button" class="run-row" @click="loadRunDetail(run); showTaskPane('logs')">
                                         <span class="badge" :class="run.status" x-text="run.status"></span>
                                         <span x-text="'#' + run.id"></span>
                                         <span class="secondary-line" x-text="run.error_message || run.log_excerpt || run.trigger"></span>
                                         <span x-text="duration(run.duration_ms)"></span>
-                                    </div>
+                                    </button>
                                 </template>
                                 <div class="empty" x-show="visibleRuns().length === 0">No runs for this task yet</div>
                             </div>
@@ -2445,7 +309,7 @@ tbody tr:hover {
                     <div class="empty" x-show="!activeJob">Select a task from the table</div>
                 </section>
 
-                <section class="panel run-log-panel">
+                <section class="panel run-log-panel" id="task-pane-logs" :role="isTaskStacked ? 'tabpanel' : 'region'" aria-labelledby="task-tab-logs">
                     <div class="panel-head">
                         <div class="panel-title">
                             <strong>Selected Run Log</strong>
@@ -2534,7 +398,7 @@ tbody tr:hover {
                             <div class="library-row" :class="{active: activeLibraryItem && activeLibraryItem.id === item.id && activeLibraryItem.kind === item.kind}" @click="openEditor(item)">
                                 <input class="check" type="checkbox" :checked="isLibrarySelected(item)" @click.stop @change="toggleLibrary(item)" />
                                 <div>
-                                    <div class="primary-line" x-text="item.title"></div>
+                                    <button type="button" class="row-link primary-line" @click.stop="openEditor(item)" x-text="item.title"></button>
                                     <div class="secondary-line" x-text="item.subtitle || item.kind"></div>
                                 </div>
                                 <div class="tags">
@@ -2601,12 +465,12 @@ tbody tr:hover {
                     <div class="panel-head statistics-ranking-head"><div class="panel-title"><strong x-text="statisticsFilter.artist || statisticsFilter.content_id ? 'Popularity and listeners for this selection' : 'Popularity and listeners'"></strong><span>Click an artist or track to see its listeners; click a listener for their history.</span></div>
                         <div class="toolbar"><select class="search" x-model="statisticsKind" @change="statisticsRankPage = 1; loadStatistics()"><option value="artists">Artists</option><option value="tracks">Tracks</option><option value="releases">Releases</option><option value="users">Listeners</option></select><input class="search" placeholder="Search this ranking" x-model="statisticsSearch" @input.debounce.300ms="statisticsRankPage = 1; loadStatistics()"></div>
                     </div>
-                    <div class="table-wrap"><table class="statistics-table"><thead><tr><th x-text="statisticsKind === 'users' ? 'Listener' : 'Name'"></th><th>Plays</th><th>Listeners</th><th>Listened time</th><th>Last play</th></tr></thead><tbody><template x-for="item in (statisticsData?.ranking.items || [])" :key="item.key"><tr><td><button class="statistics-link" :disabled="statisticsKind === 'releases'" @click="statisticsExplore(item)" x-text="item.label"></button><div class="secondary-line" x-text="item.detail"></div></td><td x-text="fmt(item.plays)"></td><td x-text="fmt(item.listeners)"></td><td x-text="durationApprox(item.listened_seconds)"></td><td x-text="statisticsDate(item.last_play_ms)"></td></tr></template></tbody></table><div class="empty" x-show="!(statisticsData?.ranking.items || []).length">No plays match this selection</div></div>
+                    <div class="table-wrap"><table class="responsive-table statistics-table"><thead><tr><th x-text="statisticsKind === 'users' ? 'Listener' : 'Name'"></th><th>Plays</th><th>Listeners</th><th>Listened time</th><th>Last play</th></tr></thead><tbody><template x-for="item in (statisticsData?.ranking.items || [])" :key="item.key"><tr><td data-label="Name" data-primary><button class="statistics-link" :disabled="statisticsKind === 'releases'" @click="statisticsExplore(item)" x-text="item.label"></button><div class="secondary-line" x-text="item.detail"></div></td><td data-label="Plays" x-text="fmt(item.plays)"></td><td data-label="Listeners" x-text="fmt(item.listeners)"></td><td data-label="Listened time" x-text="durationApprox(item.listened_seconds)"></td><td data-label="Last play" x-text="statisticsDate(item.last_play_ms)"></td></tr></template></tbody></table><div class="empty" x-show="!(statisticsData?.ranking.items || []).length">No plays match this selection</div></div>
                     <div class="action-strip"><span x-text="statisticsRange('ranking')"></span><div class="toolbar"><button class="btn" @click="statisticsRankPage--; loadStatistics()" :disabled="statisticsRankPage <= 1">Previous</button><button class="btn" @click="statisticsRankPage++; loadStatistics()" :disabled="!statisticsHasNext('ranking')">Next</button></div></div>
                 </section>
                 <section class="panel statistics-panel">
                     <div class="panel-head"><div class="panel-title"><strong>Listening history</strong><span>All matching events, including tracks no longer in the library. Artist names reflect the metadata recorded at the time.</span></div><select class="search" x-model="statisticsHistoryKind" @change="statisticsHistoryPage = 1; loadStatistics()"><option value="all">All events</option><option value="plays">Counted plays</option><option value="short">Short listens</option></select></div>
-                    <div class="table-wrap"><table class="statistics-table"><thead><tr><th>When</th><th>Listener</th><th>Track / artist</th><th>Listened</th><th>Result</th><th>Device</th></tr></thead><tbody><template x-for="play in (statisticsData?.history.items || [])" :key="play.user_id + ':' + play.listen_id"><tr><td x-text="statisticsDate(play.started_at_ms)"></td><td><button class="statistics-link" @click="statisticsSelectUser(play.user_id, play.user_name)" x-text="play.user_name"></button></td><td><button class="statistics-link" @click="statisticsSelectTrack(play.content_id, play.title)" x-text="play.title"></button><div class="secondary-line"><template x-for="name in play.artist_names" :key="name"><button class="statistics-link artist-stat-link" @click="statisticsSelectArtist(name)" x-text="name"></button></template></div><div class="secondary-line" x-text="play.release_title"></div></td><td x-text="durationApprox(play.listened_ms / 1000) + (play.track_duration_ms ? ' / ' + durationApprox(play.track_duration_ms / 1000) : '')"></td><td><span class="badge" :class="play.qualified ? 'ok' : 'disabled'" x-text="play.qualified ? 'play' : 'short'"></span><div class="secondary-line" x-text="play.ended_reason"></div></td><td><span x-text="play.device_name"></span><div class="secondary-line" x-text="play.source === 'instance' ? 'This instance' : 'Synced device'"></div></td></tr></template></tbody></table><div class="empty" x-show="!(statisticsData?.history.items || []).length">No listening events match this selection</div></div>
+                    <div class="table-wrap"><table class="responsive-table statistics-table"><thead><tr><th>When</th><th>Listener</th><th>Track / artist</th><th>Listened</th><th>Result</th><th>Device</th></tr></thead><tbody><template x-for="play in (statisticsData?.history.items || [])" :key="play.user_id + ':' + play.listen_id"><tr><td data-label="When" x-text="statisticsDate(play.started_at_ms)"></td><td data-label="Listener"><button class="statistics-link" @click="statisticsSelectUser(play.user_id, play.user_name)" x-text="play.user_name"></button></td><td data-label="Track / artist" data-primary><button class="statistics-link" @click="statisticsSelectTrack(play.content_id, play.title)" x-text="play.title"></button><div class="secondary-line"><template x-for="name in play.artist_names" :key="name"><button class="statistics-link artist-stat-link" @click="statisticsSelectArtist(name)" x-text="name"></button></template></div><div class="secondary-line" x-text="play.release_title"></div></td><td data-label="Listened" x-text="durationApprox(play.listened_ms / 1000) + (play.track_duration_ms ? ' / ' + durationApprox(play.track_duration_ms / 1000) : '')"></td><td data-label="Result"><span class="badge" :class="play.qualified ? 'ok' : 'disabled'" x-text="play.qualified ? 'play' : 'short'"></span><div class="secondary-line" x-text="play.ended_reason"></div></td><td data-label="Device"><span x-text="play.device_name"></span><div class="secondary-line" x-text="play.source === 'instance' ? 'This instance' : 'Synced device'"></div></td></tr></template></tbody></table><div class="empty" x-show="!(statisticsData?.history.items || []).length">No listening events match this selection</div></div>
                     <div class="action-strip"><span x-text="statisticsRange('history')"></span><div class="toolbar"><button class="btn" @click="statisticsHistoryPage--; loadStatistics()" :disabled="statisticsHistoryPage <= 1">Previous</button><button class="btn" @click="statisticsHistoryPage++; loadStatistics()" :disabled="!statisticsHasNext('history')">Next</button></div></div>
                 </section>
                 <section class="panel statistics-panel">
@@ -2645,7 +509,7 @@ tbody tr:hover {
                     </div>
                 </div>
                 <div class="table-wrap users-table-wrap">
-                    <table class="users-table">
+                    <table class="responsive-table users-table">
                         <thead>
                             <tr>
                                 <th class="user-status-column">Status</th>
@@ -2658,15 +522,15 @@ tbody tr:hover {
                         <tbody>
                             <template x-for="user in users.items" :key="user.id">
                                 <tr @click="openUser(user)">
-                                    <td>
+                                    <td data-label="Status">
                                         <span class="badge" :class="userStatusClass(user)" x-text="userStatusLabel(user)"></span>
                                     </td>
-                                    <td>
-                                        <div class="primary-line" x-text="user.display_name || user.username"></div>
+                                    <td data-label="User" data-primary>
+                                        <button type="button" class="row-link primary-line" @click.stop="openUser(user)" x-text="user.display_name || user.username"></button>
                                         <div class="secondary-line" x-text="user.email ? user.username + ' · ' + user.email : user.username"></div>
                                     </td>
-                                    <td x-text="fmt(user.plays)"></td><td x-text="durationApprox(user.listened_seconds)"></td><td x-text="user.last_play_ms ? statisticsDate(user.last_play_ms) : '—'"></td><td><span x-text="user.role"></span></td>
-                                    <td>
+                                    <td data-label="Plays" x-text="fmt(user.plays)"></td><td data-label="Listened time" x-text="durationApprox(user.listened_seconds)"></td><td data-label="Last play" x-text="user.last_play_ms ? statisticsDate(user.last_play_ms) : '—'"></td><td data-label="Role"><span x-text="user.role"></span></td>
+                                    <td data-label="Account">
                                         <span class="badge" :class="user.is_active ? 'ok' : 'disabled'" x-text="user.is_active ? 'active' : 'pending approval'"></span>
                                         <div x-show="!user.local_role" @click.stop>
                                             <button class="btn" @click="approveUser(user, 'user')">Approve as user</button>
@@ -2674,7 +538,7 @@ tbody tr:hover {
                                         </div>
                                         <div class="secondary-line" x-text="user.sso_role ? 'SSO: ' + user.sso_role : (user.local_role ? 'Local: ' + user.local_role : '')"></div>
                                     </td>
-                                    <td><span x-text="userLastSeenLabel(user)"></span></td>
+                                    <td data-label="Last activity"><span x-text="userLastSeenLabel(user)"></span></td>
                                 </tr>
                             </template>
                         </tbody>
@@ -2739,7 +603,7 @@ tbody tr:hover {
                                 <div class="repair-section-title" x-show="repairPlan.questions.length">Questions to review</div>
                                 <template x-for="question in repairPlan.questions" :key="question"><div class="repair-entity" style="color:var(--amber)" x-text="question"></div></template>
                                 <div class="repair-preview"><template x-for="row in repairPreview()" :key="row.key"><div class="repair-preview-row"><small class="muted" x-text="row.action"></small><strong x-text="row.title"></strong><p x-text="row.detail"></p></div></template></div>
-                                <details class="repair-manual"><summary>Edit fields manually</summary>
+                                <details class="repair-manual" tabindex="0" aria-label="Manual metadata comparison; scroll horizontally to see all fields"><summary>Edit fields manually</summary>
                                 <div class="repair-section-title" x-show="repairPlan.artists.length">Artists</div>
                                 <table class="repair-diff" x-show="repairPlan.artists.length"><thead><tr><th>Before</th><th>After</th><th></th></tr></thead><tbody><template x-for="(edit,index) in repairPlan.artists" :key="edit.id"><tr><td x-text="repairEntityLabel('artists',edit.id)"></td><td><input x-model="edit.name" /></td><td><button class="btn" @click="repairPlan.artists.splice(index,1)">Remove edit</button></td></tr></template></tbody></table>
                                 <div class="repair-section-title" x-show="repairPlan.releases.length">Releases</div>
@@ -2765,9 +629,14 @@ tbody tr:hover {
 
         <div class="content" x-show="activeView === 'settings'">
             <div class="settings-page">
+                <label class="section-jump">Settings section
+                    <select class="search" @change="jumpToSettings($event.target.value)">
+                        <option value="access">Access</option><option value="oidc">SSO</option><option value="agent">Import agent</option><option value="similarity">Similarity</option><option value="downloads">Downloads</option><option value="federation">Federation</option><option value="lastfm">Last.fm</option><option value="developer">Developer</option>
+                    </select>
+                </label>
                 <form class="settings-layout" @submit.prevent="saveSettings()">
                     <div class="settings-column">
-                        <section class="panel settings-section settings-section-wide settings-oidc">
+                        <section class="panel settings-section settings-section-wide settings-oidc" id="settings-oidc">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>OIDC</strong>
@@ -2827,7 +696,7 @@ tbody tr:hover {
                             </div>
                         </section>
 
-                        <section class="panel settings-section settings-section-wide settings-agent">
+                        <section class="panel settings-section settings-section-wide settings-agent" id="settings-agent">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Agent</strong>
@@ -2910,7 +779,7 @@ tbody tr:hover {
                             </div>
                         </section>
 
-                        <section class="panel settings-section settings-section-wide settings-similarity">
+                        <section class="panel settings-section settings-section-wide settings-similarity" id="settings-similarity">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Similarity Search</strong>
@@ -2967,7 +836,7 @@ tbody tr:hover {
                             </div>
                         </section>
 
-                        <section class="panel settings-section settings-section-full settings-downloads">
+                        <section class="panel settings-section settings-section-full settings-downloads" id="settings-downloads">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Download manager</strong>
@@ -3102,7 +971,7 @@ tbody tr:hover {
                     </div>
 
                     <div class="settings-column settings-side">
-                        <section class="panel settings-section settings-section-narrow settings-access">
+                        <section class="panel settings-section settings-section-narrow settings-access" id="settings-access">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Authentication</strong>
@@ -3133,7 +1002,7 @@ tbody tr:hover {
                             </div>
                         </section>
 
-                        <section class="panel settings-section settings-lastfm">
+                        <section class="panel settings-section settings-lastfm" id="settings-lastfm">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Last.fm Integration</strong>
@@ -3161,7 +1030,7 @@ tbody tr:hover {
                             </div>
                         </section>
 
-                        <section class="panel settings-section settings-developer">
+                        <section class="panel settings-section settings-developer" id="settings-developer">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Developer API</strong>
@@ -3183,7 +1052,7 @@ tbody tr:hover {
                             </div>
                         </section>
 
-                        <section class="panel settings-section settings-section-full settings-federation">
+                        <section class="panel settings-section settings-section-full settings-federation" id="settings-federation">
                             <div class="panel-head">
                                 <div class="panel-title">
                                     <strong>Federation</strong>
@@ -3379,23 +1248,23 @@ tbody tr:hover {
         </div>
     </main>
 
-    <div class="modal-backdrop" x-show="userEditorOpen" x-transition @click.self="userEditorOpen = false">
-        <section class="modal user-modal"><div class="modal-head"><strong x-text="userDraft.id ? 'Edit user' : 'Add user'"></strong><button class="btn" @click="userEditorOpen = false">Close</button></div>
+    <div class="modal-backdrop" x-show="userEditorOpen" x-effect="adminOverlay.sync($el, !!(userEditorOpen))" @keydown="adminOverlay.keydown($event, $el)" x-transition @click.self="userEditorOpen = false">
+        <section role="dialog" aria-modal="true" aria-labelledby="admin-dialog-title-0" tabindex="-1" class="modal user-modal"><div class="modal-head"><strong id="admin-dialog-title-0" x-text="userDraft.id ? 'Edit user' : 'Add user'"></strong><button data-dialog-close aria-label="Close dialog" class="btn" @click="userEditorOpen = false">Close</button></div>
         <form class="modal-body" @submit.prevent="saveUser()">
             <template x-for="field in ['username', 'email', 'display_name', 'password']" :key="field"><label class="field"><span x-text="field === 'password' && userDraft.id ? 'Password (leave blank to keep)' : field.replace('_', ' ')"></span><input class="search" :type="field === 'password' ? 'password' : (field === 'email' ? 'email' : 'text')" :autocomplete="field === 'password' ? 'new-password' : 'off'" :required="field === 'username' || (field === 'password' && !userDraft.id)" maxlength="255" x-model="userDraft[field]"></label></template>
             <label class="field">Local access<select class="search" x-model="userDraft.role"><option value="" x-show="userDraft.id">No local approval (SSO only)</option><option value="user">User</option><option value="admin">Administrator</option></select></label>
-            <button class="btn primary" type="submit" :disabled="userSaving">Save user</button>
+            <div class="dialog-actions"><button class="btn primary" type="submit" :disabled="userSaving">Save user</button></div>
         </form></section>
     </div>
 
-    <div class="modal-backdrop" x-show="userModalOpen && activeUserDetail" x-transition @click.self="userModalOpen = false">
-        <section class="modal user-modal">
+    <div class="modal-backdrop" x-show="userModalOpen && activeUserDetail" x-effect="adminOverlay.sync($el, !!(userModalOpen && activeUserDetail))" @keydown="adminOverlay.keydown($event, $el)" x-transition @click.self="userModalOpen = false">
+        <section role="dialog" aria-modal="true" aria-labelledby="admin-dialog-title-1" tabindex="-1" class="modal user-modal">
             <div class="modal-head">
                 <div class="panel-title">
-                    <strong x-text="activeUserDetail ? (activeUserDetail?.user.display_name || activeUserDetail?.user.username) : 'User'"></strong>
+                    <strong id="admin-dialog-title-1" x-text="activeUserDetail ? (activeUserDetail?.user.display_name || activeUserDetail?.user.username) : 'User'"></strong>
                     <span x-text="activeUserDetail ? userStatusLabel(activeUserDetail?.user) + ' · ' + activeUserDetail?.user.role : ''"></span>
                 </div>
-                <button class="icon-btn" @click="userModalOpen = false">
+                <button data-dialog-close aria-label="Close dialog" class="icon-btn" @click="userModalOpen = false">
                     <i data-lucide="x"></i>
                 </button>
             </div>
@@ -3473,14 +1342,14 @@ tbody tr:hover {
         </section>
     </div>
 
-    <div class="modal-backdrop" x-show="reviewModalOpen && activeReview" x-transition @click.self="reviewModalOpen = false">
-        <section class="modal">
+    <div class="modal-backdrop" x-show="reviewModalOpen && activeReview" x-effect="adminOverlay.sync($el, !!(reviewModalOpen && activeReview))" @keydown="adminOverlay.keydown($event, $el)" x-transition @click.self="reviewModalOpen = false">
+        <section role="dialog" aria-modal="true" aria-labelledby="admin-dialog-title-2" tabindex="-1" class="modal">
             <div class="modal-head">
                 <div class="panel-title">
-                    <strong x-text="activeReview ? 'Review #' + activeReview.id : 'Review'"></strong>
+                    <strong id="admin-dialog-title-2" x-text="activeReview ? 'Review #' + activeReview.id : 'Review'"></strong>
                     <span x-text="activeReview?.filename || activeReview?.review_type || ''"></span>
                 </div>
-                <button class="icon-btn" @click="reviewModalOpen = false">
+                <button data-dialog-close aria-label="Close dialog" class="icon-btn" @click="reviewModalOpen = false">
                     <i data-lucide="x"></i>
                 </button>
             </div>
@@ -3514,7 +1383,7 @@ tbody tr:hover {
                         <label>Title</label>
                         <input x-model="reviewDraft.title" />
                     </div>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="editor-grid">
                         <div class="field">
                             <label>Year</label>
                             <input type="number" min="0" max="3000" x-model="reviewDraft.year" />
@@ -3550,7 +1419,7 @@ tbody tr:hover {
                         <textarea x-model="reviewDraft.notes"></textarea>
                     </div>
                 </div>
-                <div class="toolbar">
+                <div class="toolbar dialog-actions">
                     <button class="btn primary" x-show="activeReview?.status === 'pending'" @click="approveActiveReview()">
                         <i data-lucide="check"></i>
                         Approve
@@ -3568,20 +1437,20 @@ tbody tr:hover {
         </section>
     </div>
 
-    <div class="modal-backdrop" x-show="mergeOpen" x-transition @click.self="closeReleaseMerge()">
-        <section class="modal merge-modal">
+    <div class="modal-backdrop" x-show="mergeOpen" x-effect="adminOverlay.sync($el, !!(mergeOpen))" @keydown="adminOverlay.keydown($event, $el)" x-transition @click.self="closeReleaseMerge()">
+        <section role="dialog" aria-modal="true" aria-labelledby="admin-dialog-title-3" tabindex="-1" class="modal merge-modal">
             <div class="modal-head">
                 <div class="panel-title">
-                    <strong>Merge releases</strong>
+                    <strong id="admin-dialog-title-3">Merge releases</strong>
                     <span x-text="mergeSubtitle()"></span>
                 </div>
-                <button class="icon-btn" type="button" @click="closeReleaseMerge()" :disabled="mergeSaving">
+                <button data-dialog-close aria-label="Close dialog" class="icon-btn" type="button" @click="closeReleaseMerge()" :disabled="mergeSaving">
                     <i data-lucide="x"></i>
                 </button>
             </div>
             <div class="modal-body">
                 <div class="empty" x-show="mergeLoading">Loading selected releases...</div>
-                <div x-show="!mergeLoading">
+                <div :hidden="mergeLoading">
                     <div class="field">
                         <label>Release to keep</label>
                         <div class="merge-release-grid">
@@ -3646,7 +1515,7 @@ tbody tr:hover {
                             <span class="muted" x-show="selectedMergeArtists().length === 0">No artists attached</span>
                         </div>
                         <div class="artist-picker">
-                            <input class="search" placeholder="Search artist" x-model="mergeArtistSearch" @keydown.enter.prevent="addMergeArtist()" @keydown.escape="mergeArtistSearch = ''" />
+                            <input class="search" placeholder="Search artist" x-model="mergeArtistSearch" @keydown.enter.prevent="addMergeArtist()" @keydown.escape.stop="mergeArtistSearch = ''" />
                             <div class="artist-results" x-show="mergeArtistSearchOpen()" x-transition>
                                 <template x-for="artist in filteredMergeArtists()" :key="artist.id">
                                     <button class="artist-result" type="button" @click="addMergeArtist(artist)" x-text="artist.name"></button>
@@ -3700,8 +1569,8 @@ tbody tr:hover {
                                 <template x-for="(track, index) in mergeDraft.tracks" :key="track.id">
                                     <div class="merge-track-row">
                                         <span class="release-track-meta" x-text="index + 1"></span>
-                                        <input type="number" min="1" max="999" x-model="track.disc_number" />
-                                        <input type="number" min="1" max="9999" x-model="track.track_number" />
+                                        <label class="track-field"><span>Disc</span><input aria-label="Disc number" type="number" min="1" max="999" x-model="track.disc_number" /></label>
+                                        <label class="track-field"><span>Track #</span><input aria-label="Track number" type="number" min="1" max="9999" x-model="track.track_number" /></label>
                                         <div>
                                             <div class="release-track-title" x-text="track.title"></div>
                                             <div class="release-track-meta" x-text="trackDuration(track.duration_seconds)"></div>
@@ -3722,7 +1591,7 @@ tbody tr:hover {
                         </div>
                     </div>
 
-                    <div class="merge-footer">
+                    <div class="merge-footer dialog-actions">
                         <span class="selection-summary" x-text="mergeConfirmationText()"></span>
                         <div class="toolbar">
                             <button class="btn" type="button" @click="closeReleaseMerge()" :disabled="mergeSaving">Cancel</button>
@@ -3737,20 +1606,20 @@ tbody tr:hover {
         </section>
     </div>
 
-    <div class="modal-backdrop" x-show="editorOpen && activeLibraryItem" x-transition @click.self="editorOpen = false">
-        <section class="modal">
+    <div class="modal-backdrop" x-show="editorOpen && activeLibraryItem" x-effect="adminOverlay.sync($el, !!(editorOpen && activeLibraryItem))" @keydown="adminOverlay.keydown($event, $el)" x-transition @click.self="editorOpen = false">
+        <section role="dialog" aria-modal="true" aria-labelledby="admin-dialog-title-4" tabindex="-1" class="modal">
             <div class="modal-head">
                 <div class="panel-title">
-                    <strong x-text="editorTitle()"></strong>
+                    <strong id="admin-dialog-title-4" x-text="editorTitle()"></strong>
                     <span x-text="editorSubtitle()"></span>
                 </div>
-                <button class="icon-btn" @click="editorOpen = false">
+                <button data-dialog-close aria-label="Close dialog" class="icon-btn" @click="editorOpen = false">
                     <i data-lucide="x"></i>
                 </button>
             </div>
             <div class="modal-body" x-show="activeLibraryItem">
                 <div class="empty" x-show="editorLoading">Loading editor...</div>
-                <div x-show="!editorLoading">
+                <div :hidden="editorLoading">
                     <div class="field">
                         <label x-text="isArtistEditor() ? 'Artist name' : (isReleaseEditor() ? 'Release title' : (isTrackEditor() ? 'Track title' : 'Title'))"></label>
                         <input x-model="editorDraft.title" />
@@ -3780,7 +1649,7 @@ tbody tr:hover {
                         <label>Release tracks</label>
                         <div class="release-track-search-row">
                             <div class="artist-picker">
-                                <input class="search" placeholder="Search track" x-model="releaseTrackSearch" @input.debounce.300ms="searchReleaseTracks()" @keydown.enter.prevent="addBestReleaseTrack()" @keydown.escape="clearReleaseTrackSearch()" />
+                                <input class="search" placeholder="Search track" x-model="releaseTrackSearch" @input.debounce.300ms="searchReleaseTracks()" @keydown.enter.prevent="addBestReleaseTrack()" @keydown.escape.stop="clearReleaseTrackSearch()" />
                                 <div class="artist-results" x-show="releaseTrackSearchOpen()" x-transition>
                                     <template x-for="track in availableReleaseTrackResults()" :key="track.id">
                                         <button class="artist-result" type="button" @click="addReleaseTrack(track)">
@@ -3809,8 +1678,8 @@ tbody tr:hover {
                             </div>
                             <template x-for="track in releaseTracks()" :key="track.id">
                                 <div class="release-track-row">
-                                    <input type="number" min="1" max="999" x-model="track.disc_number" />
-                                    <input type="number" min="1" max="9999" x-model="track.track_number" />
+                                    <label class="track-field"><span>Disc</span><input aria-label="Disc number" type="number" min="1" max="999" x-model="track.disc_number" /></label>
+                                    <label class="track-field"><span>Track #</span><input aria-label="Track number" type="number" min="1" max="9999" x-model="track.track_number" /></label>
                                     <div class="release-track-title" x-text="track.title"></div>
                                     <div class="release-track-meta" x-text="track.artists || 'Unknown artist'"></div>
                                     <div class="release-track-meta" x-text="releaseTrackOrigin(track)"></div>
@@ -3846,7 +1715,7 @@ tbody tr:hover {
                             <span class="muted" x-show="!selectedEditorRelease()">No release selected</span>
                         </div>
                         <div class="artist-picker">
-                            <input class="search" placeholder="Search release to move track" x-model="editorReleaseToAdd" @keydown.enter.prevent="selectEditorRelease()" @keydown.escape="editorReleaseToAdd = ''" />
+                            <input class="search" placeholder="Search release to move track" x-model="editorReleaseToAdd" @keydown.enter.prevent="selectEditorRelease()" @keydown.escape.stop="editorReleaseToAdd = ''" />
                             <div class="artist-results" x-show="editorReleaseSearchOpen()" x-transition>
                                 <template x-for="release in filteredEditorReleases()" :key="release.id">
                                     <button class="artist-result" type="button" @click="selectEditorRelease(release)">
@@ -3871,7 +1740,7 @@ tbody tr:hover {
                             <span class="muted" x-show="selectedEditorArtists().length === 0">No artists attached</span>
                         </div>
                         <div class="artist-picker">
-                            <input class="search" placeholder="Search artist" x-model="editorArtistToAdd" @keydown.enter.prevent="addEditorArtist()" @keydown.escape="editorArtistToAdd = ''" />
+                            <input class="search" placeholder="Search artist" x-model="editorArtistToAdd" @keydown.enter.prevent="addEditorArtist()" @keydown.escape.stop="editorArtistToAdd = ''" />
                             <div class="artist-results" x-show="editorArtistSearchOpen()" x-transition>
                                 <template x-for="artist in filteredEditorArtists()" :key="artist.id">
                                     <button class="artist-result" type="button" @click="addEditorArtist(artist)" x-text="artist.name"></button>
@@ -3952,7 +1821,7 @@ tbody tr:hover {
                         </div>
                     </div>
 
-                    <div class="toolbar">
+                    <div class="toolbar dialog-actions">
                         <button class="btn primary" @click="saveLibraryItem()" :disabled="!editorCanSave()">
                             <i :data-lucide="editorSaving ? 'loader-circle' : 'save'"></i>
                             <span x-text="editorSaving ? 'Saving...' : (editorIsNewRelease() ? 'Create' : 'Save')"></span>
@@ -3975,9 +1844,11 @@ tbody tr:hover {
 
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+{% include "admin/ui.html" %}
 <script>
 function adminV2() {
     return {
+        ...adminUI(),
         apiBase: '/admin/v2/api',
         activeView: 'reviews',
         loading: true,
@@ -4324,6 +2195,7 @@ function adminV2() {
         poller: null,
 
         async init() {
+            this.initUI();
             this.applyRouteFromHash();
             await this.refreshAll();
             this.routeReady = true;
@@ -4396,6 +2268,7 @@ function adminV2() {
         },
 
         applyRouteFromHash() {
+            this.closeMenu();
             const raw = (window.location.hash || '#reviews').replace(/^#\/?/, '');
             const parts = raw.split('/').filter(Boolean);
             const view = parts[0] || 'reviews';
@@ -4434,6 +2307,7 @@ function adminV2() {
         },
 
         setRoute(path) {
+            this.closeMenu();
             if (!path.startsWith('#')) path = '#' + path;
             if (window.location.hash !== path) {
                 window.history.pushState(null, '', path);

@@ -3,7 +3,8 @@ const {readFileSync} = require('node:fs');
 const {test} = require('node:test');
 const vm = require('node:vm');
 const template = readFileSync(`${__dirname}/../templates/admin/v2.html`, 'utf8');
-const script = template.match(/<script>\s*(function adminV2\(\)[\s\S]*?)<\/script>/)[1];
+const ui = readFileSync(`${__dirname}/../templates/admin/ui.html`, 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const script = ui + '\n' + template.match(/<script>\s*(function adminV2\(\)[\s\S]*?)<\/script>/)[1];
 function app() {
     const context = vm.createContext({URLSearchParams, Date}); vm.runInContext(script, context);
     const a = context.adminV2(); a.icons = () => {}; a.setRoute = () => {}; return a;
