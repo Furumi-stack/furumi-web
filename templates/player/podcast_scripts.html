@@ -5,6 +5,8 @@
             add: ['Add', 'Добавить'],
             mine: ['My podcasts', 'Мои подкасты'],
             public: ['Public podcasts', 'Публичные подкасты'],
+            results: ['Podcast search results','Результаты поиска подкастов'],
+            noMatches: ['No matching podcasts.','Подходящих подкастов нет.'],
             empty: ['Add an RSS or Atom feed.', 'Добавьте RSS или Atom ленту.'],
             check: ['Check episodes', 'Проверить выпуски'],
             checkAll: ['Check all', 'Проверить все'],
@@ -13,6 +15,7 @@
             remove: ['Unsubscribe', 'Отписаться'],
             subscribe: ['Subscribe', 'Подписаться'],
             play: ['Play', 'Слушать'],
+            open: ['Open', 'Открыть'],
             resume: ['Resume', 'Продолжить'],
             download: ['Save on server', 'Сохранить на сервере'],
             saved: ['Saved on server', 'Сохранено на сервере'],
@@ -28,7 +31,7 @@
             description: ['Description', 'Описание'],
             noEpisodes: ['No episodes in this filter.', 'В этом фильтре нет выпусков.'],
             noPublic: ['No public podcasts yet.', 'Публичных подкастов пока нет.'],
-            searchNetwork: ['Search Frid podcasts', 'Поиск подкастов в Frid'],
+            searchNetwork: ['Search podcasts', 'Поиск подкастов'],
             search: ['Search', 'Найти'],
             working: ['Working…', 'Выполняется…'],
             done: ['Done', 'Готово'],
@@ -58,6 +61,7 @@
             mine: [],
             public: [],
             hits: [],
+            searched: false,
             episodes: [],
             hasMore: false,
             selected: null,
@@ -105,9 +109,11 @@
                 this.public = data.public;
             },
             enter() {
+                if (location.hash !== '#podcasts')
+                    Alpine.store('library')._beginNavigation('#podcasts');
                 Alpine.store('library').view = 'podcasts';
                 Alpine.store('mobile')?.closeLibrary();
-                this.task(async () => {
+                const loading = this.task(async () => {
                     await this.load();
                     this.message = '';
                 });
@@ -116,6 +122,7 @@
                         if (Alpine.store('library').view === 'podcasts' && !this.busy)
                             this.update().catch(() => {});
                     }, 5000);
+                return loading;
             },
             async update() {
                 await this.load();
@@ -133,11 +140,7 @@
                 const old = this.episodes;
                 this.episodes = append
                     ? [...old, ...data.episodes]
-                    : [
-                          ...new Map(
-                              [...data.episodes, ...old].map((e) => [e.id, e]),
-                          ).values(),
-                      ];
+                    : [...new Map([...data.episodes, ...old].map((e) => [e.id, e])).values()];
                 if (append || old.length <= 200) this.hasMore = !!data.has_more;
             },
             more() {
@@ -153,6 +156,21 @@
                 this.filter = '';
                 this.season = '';
                 this.task(async () => {
+                    await this.loadEpisodes();
+                    this.message = '';
+                });
+            },
+            openResult(pod) {
+                return this.task(async () => {
+                    if (!pod.subscribed) await this.api('add', { url: pod.url });
+                    await this.load();
+                    this.selected = this.mine.find((p) => p.id === pod.id) || pod;
+                    this.episodes = [];
+                    this.hasMore = false;
+                    this.filter = '';
+                    this.season = '';
+                    Alpine.store('library')._beginNavigation('#podcasts');
+                    Alpine.store('library').view = 'podcasts';
                     await this.loadEpisodes();
                     this.message = '';
                 });
@@ -232,14 +250,18 @@
                 });
             },
             search() {
-                this.task(async () => {
-                    const data = await this.api('search', { query: this.query });
+                const query=this.query.trim();
+                return this.task(async () => {
+                    const data = await this.api('search', { query });
+                    if(this.query.trim()!==query){this.message='';return;}
                     this.hits = data.hits;
+                    this.searched=true;
                     this.message = this.text('done');
                 });
             },
+            resetSearch(){this.searched=false;this.hits=[];},
             publicCards() {
-                return [...new Map([...this.public, ...this.hits].map((p) => [p.id, p])).values()];
+                return [...new Map((this.searched?this.hits:this.public).map((p) => [p.id, p])).values()];
             },
             seasons() {
                 return [

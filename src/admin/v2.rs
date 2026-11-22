@@ -3978,11 +3978,11 @@ async fn search_tracks(
          LEFT JOIN furumusic__release r ON r.id = t.release_id \
          LEFT JOIN furumusic__track_artist ta ON ta.track_id = t.id AND ta.role = 'main' \
          LEFT JOIN furumusic__artist a ON a.id = ta.artist_id \
-         WHERE t.title ILIKE $1 OR COALESCE(r.title::text, '') ILIKE $1 OR COALESCE(a.name::text, '') ILIKE $1 \
+         WHERE t.title COLLATE furumusic_unicode ILIKE $1 OR COALESCE(r.title::text, '') COLLATE furumusic_unicode ILIKE $1 OR COALESCE(a.name::text, '') COLLATE furumusic_unicode ILIKE $1 \
          GROUP BY t.id, r.id, r.title \
          ORDER BY CASE \
-                    WHEN LOWER(t.title::text) = LOWER($2) THEN 0 \
-                    WHEN t.title ILIKE $3 THEN 1 \
+                    WHEN LOWER(t.title::text COLLATE furumusic_unicode) = LOWER($2::text COLLATE furumusic_unicode) THEN 0 \
+                    WHEN t.title COLLATE furumusic_unicode ILIKE $3 THEN 1 \
                     ELSE 2 \
                   END, \
                   t.title_sort ASC, t.id ASC \
@@ -4306,9 +4306,9 @@ fn push_library_search_filter(
     };
     match kind {
         "releases" => {
-            qb.push(" AND (r.title ILIKE ");
+            qb.push(" AND (r.title COLLATE furumusic_unicode ILIKE ");
             qb.push_bind(pattern.clone());
-            qb.push(" OR a.name ILIKE ");
+            qb.push(" OR a.name COLLATE furumusic_unicode ILIKE ");
             qb.push_bind(pattern);
             qb.push(")");
         }
@@ -4322,16 +4322,16 @@ fn push_library_search_filter(
             qb.push(")");
         }
         "tracks" => {
-            qb.push(" AND (t.title ILIKE ");
+            qb.push(" AND (t.title COLLATE furumusic_unicode ILIKE ");
             qb.push_bind(pattern.clone());
-            qb.push(" OR r.title ILIKE ");
+            qb.push(" OR r.title COLLATE furumusic_unicode ILIKE ");
             qb.push_bind(pattern.clone());
-            qb.push(" OR a.name ILIKE ");
+            qb.push(" OR a.name COLLATE furumusic_unicode ILIKE ");
             qb.push_bind(pattern);
             qb.push(")");
         }
         _ => {
-            qb.push(" AND a.name ILIKE ");
+            qb.push(" AND a.name COLLATE furumusic_unicode ILIKE ");
             qb.push_bind(pattern);
         }
     }
@@ -4356,7 +4356,7 @@ async fn load_artist_items(
          WHERE 1=1",
     );
     if let Some(pattern) = search_pattern {
-        qb.push(" AND a.name ILIKE ");
+        qb.push(" AND a.name COLLATE furumusic_unicode ILIKE ");
         qb.push_bind(pattern);
     }
     qb.push(" GROUP BY a.id ORDER BY secondary_count DESC, a.name ASC LIMIT ");
@@ -4390,9 +4390,9 @@ async fn load_release_items(
          WHERE 1=1",
     );
     if let Some(pattern) = search_pattern {
-        qb.push(" AND (r.title ILIKE ");
+        qb.push(" AND (r.title COLLATE furumusic_unicode ILIKE ");
         qb.push_bind(pattern.clone());
-        qb.push(" OR a.name ILIKE ");
+        qb.push(" OR a.name COLLATE furumusic_unicode ILIKE ");
         qb.push_bind(pattern);
         qb.push(")");
     }
@@ -4428,11 +4428,11 @@ async fn load_track_items(
          WHERE 1=1",
     );
     if let Some(pattern) = search_pattern {
-        qb.push(" AND (t.title ILIKE ");
+        qb.push(" AND (t.title COLLATE furumusic_unicode ILIKE ");
         qb.push_bind(pattern.clone());
-        qb.push(" OR r.title ILIKE ");
+        qb.push(" OR r.title COLLATE furumusic_unicode ILIKE ");
         qb.push_bind(pattern.clone());
-        qb.push(" OR a.name ILIKE ");
+        qb.push(" OR a.name COLLATE furumusic_unicode ILIKE ");
         qb.push_bind(pattern);
         qb.push(")");
     }
@@ -4610,6 +4610,96 @@ fn clean_search(search: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.chars().take(120).collect())
+}
+
+#[cfg(test)]
+mod unicode_search_tests {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "requires FURU_PODCAST_TEST_DATABASE_URL pointing to a disposable PostgreSQL database"]
+    async fn admin_unicode_search_matches_counts_lists_and_track_picker() {
+        let url = std::env::var("FURU_PODCAST_TEST_DATABASE_URL").unwrap();
+        let admin = PgPool::connect(&url).await.unwrap();
+        let schema = format!("unicode_search_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let search_path = format!("SET search_path TO {schema}");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .after_connect(move |conn, _| {
+                let statement = search_path.clone();
+                Box::pin(async move {
+                    sqlx::query(&statement).execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE COLLATION furumusic_unicode(provider=icu,locale='und',deterministic=true)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for statement in include_str!("../../tests/unicode_search_fixture.sql")
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+        {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        for query in ["АЛИСА", "алиса", "АлИсА"] {
+            let pattern = Some(format!("%{query}%"));
+            for kind in ["artists", "releases", "tracks"] {
+                assert_eq!(
+                    count_library(&pool, kind, pattern.clone()).await.unwrap(),
+                    1,
+                    "{kind}: {query}"
+                );
+            }
+            assert_eq!(
+                load_artist_items(&pool, pattern.clone(), 10, 0)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                load_release_items(&pool, pattern.clone(), 10, 0)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                load_track_items(&pool, pattern, 10, 0).await.unwrap().len(),
+                1
+            );
+        }
+        for query in ["солнце", "СОЛНЦЕ", "ελληνικά", "ΕΛΛΗΝΙΚΆ", "трек", "ТРЕК"]
+        {
+            assert_eq!(
+                load_track_items(&pool, Some(format!("%{query}%")), 10, 0)
+                    .await
+                    .unwrap()
+                    .len(),
+                1,
+                "{query}"
+            );
+            assert_eq!(
+                search_tracks(&pool, query, 10).await.unwrap().len(),
+                1,
+                "picker: {query}"
+            );
+        }
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
 }
 
 fn normalize_name(value: &str) -> String {

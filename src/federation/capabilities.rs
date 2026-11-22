@@ -15,7 +15,7 @@ fn local_manifest() -> CapabilityManifest {
     CapabilityManifest::frid("furumusic", env!("CARGO_PKG_VERSION"))
         // The web server does not expose federation Jam yet.
         .without_protocol(JAM_ID)
-        // Podcast discovery is supported, but personal device sync remains v3.
+        // Keep the advertised version aligned with the web device-sync adapter.
         .with_protocol(DEVICE_SYNC_ID, super::devices::PROTOCOL_VERSION)
         .with_protocol("audio", AUDIO_PROTOCOL_VERSION)
         .with_protocol(

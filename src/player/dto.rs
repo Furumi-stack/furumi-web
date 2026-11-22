@@ -332,6 +332,7 @@ pub(super) struct ShareDetail {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct SearchResults {
+    pub(super) podcasts: Vec<serde_json::Value>,
     pub(super) artists: Vec<ArtistCard>,
     pub(super) releases: Vec<ReleaseCard>,
     pub(super) tracks: Vec<TrackItem>,

@@ -2865,6 +2865,28 @@ pub mod db_migrations {
         const OPERATIONS: &'static [Operation] = &[Operation::custom(create_podcasts).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_podcast_sync(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        for statement in include_str!("../podcasts/sync_schema.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        Ok(())
+    }
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0055PodcastSyncAndUnicodeSearch;
+    impl migrations::Migration for M0055PodcastSyncAndUnicodeSearch {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0055_podcast_sync_unicode_search";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0054_create_podcasts",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(create_podcast_sync).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2909,5 +2931,6 @@ pub mod db_migrations {
         &M0051AddListenStatisticsIndexes,
         &M0052AddImportPlaylistDestinations,
         &M0054CreatePodcasts,
+        &M0055PodcastSyncAndUnicodeSearch,
     ];
 }

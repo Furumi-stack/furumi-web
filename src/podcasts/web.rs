@@ -107,6 +107,8 @@ async fn action(
         "admin_list" => return list(&pool, user, true).await,
         "add" => {
             let id = subscribe(&pool, user, &body.url).await?;
+            sync::ensure_subscribed(&pool, user, &id).await?;
+            sync::seed_user(&pool, user).await?;
             let checked = refresh(&pool, &id).await;
             tokio::spawn(async move {
                 let _ = download_pending(&pool, &config, Some(&id)).await;
@@ -116,6 +118,8 @@ async fn action(
             );
         }
         "remove" => {
+            require_subscription(&pool, user, &body.id).await?;
+            sync::local_subscription(&pool, user, &body.id, false).await?;
             sqlx::query(
                 "DELETE FROM furumusic__podcast_subscription WHERE user_id=$1 AND podcast_id=$2",
             )
@@ -126,6 +130,7 @@ async fn action(
         }
         "share" => {
             require_subscription(&pool, user, &body.id).await?;
+            sync::seed_user(&pool, user).await?;
             let row = sqlx::query("SELECT origin_url,metadata FROM furumusic__podcast WHERE id=$1")
                 .bind(&body.id)
                 .fetch_one(&pool)
@@ -147,6 +152,7 @@ async fn action(
                 return Ok(json!({"confirmation_required":true,"urls":urls}));
             }
             sqlx::query("UPDATE furumusic__podcast_subscription SET shared=$3,confirmed_urls=$4 WHERE user_id=$1 AND podcast_id=$2").bind(user).bind(&body.id).bind(body.shared).bind(if body.shared {Some(urls)} else {None}).execute(&pool).await?;
+            sync::local_share(&pool, user, &body.id, body.shared).await?;
         }
         "episodes" => {
             require_subscription(&pool, user, &body.id).await?;
@@ -187,15 +193,36 @@ async fn action(
             } else {
                 sqlx::query_scalar("UPDATE furumusic__podcast_progress SET position_ms=$3,completed=$4,checkpoint=$6,updated_at=now() WHERE user_id=$1 AND episode_id=$2 AND generation=$5 AND checkpoint<=$6 RETURNING generation").bind(user).bind(&body.id).bind(body.position_ms.max(0)).bind(completed).bind(body.generation).bind(body.sequence).fetch_optional(&pool).await?
             };
+            if let Some(generation) = generation {
+                sync::local_progress(
+                    &pool,
+                    user,
+                    &body.id,
+                    generation.max(0) as u64,
+                    body.position_ms.max(0),
+                    completed,
+                )
+                .await?;
+            }
             return Ok(json!({"ok":true,"generation":generation}));
         }
         "search" => {
             if body.query.chars().count() < 2 || body.query.len() > 200 {
                 bail!("enter 2–200 characters");
             }
-            let hits = crate::federation::handle()
-                .search_podcasts(&body.query)
-                .await?;
+            let mut hits = super::search(&pool, user, &body.query, 100).await?;
+            if let Ok(Ok(Value::Array(remote))) = tokio::time::timeout(
+                Duration::from_secs(10),
+                crate::federation::handle().search_podcasts(&body.query),
+            )
+            .await
+            {
+                for hit in remote {
+                    if !hits.iter().any(|local| local["id"] == hit["id"]) {
+                        hits.push(hit);
+                    }
+                }
+            }
             return Ok(json!({"hits":hits}));
         }
         "admin_settings" => {
@@ -211,9 +238,25 @@ async fn action(
                 .await?;
         }
         "admin_unpublish" => {
+            let owners:Vec<i64>=sqlx::query_scalar("SELECT user_id FROM furumusic__podcast_subscription WHERE podcast_id=$1 AND shared").bind(&body.id).fetch_all(&pool).await?;
+            for owner in owners {
+                sync::seed_user(&pool, owner).await?;
+                sync::local_share(&pool, owner, &body.id, false).await?;
+            }
             sqlx::query("UPDATE furumusic__podcast_subscription SET shared=false,confirmed_urls=NULL WHERE podcast_id=$1").bind(&body.id).execute(&pool).await?;
         }
         "admin_clear" | "admin_delete" => {
+            if body.action == "admin_delete" {
+                let owners: Vec<i64> = sqlx::query_scalar(
+                    "SELECT user_id FROM furumusic__podcast_subscription WHERE podcast_id=$1",
+                )
+                .bind(&body.id)
+                .fetch_all(&pool)
+                .await?;
+                for owner in owners {
+                    sync::local_subscription(&pool, owner, &body.id, false).await?;
+                }
+            }
             let mut tx = pool.begin().await?;
             let locked: bool =
                 sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,7421))")

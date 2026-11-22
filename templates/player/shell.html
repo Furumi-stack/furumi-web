@@ -440,13 +440,27 @@
                     </template>
                     <template x-if="!$store.library.searchLoading && $store.library.searchResults">
                         <div :class="{ 'similarity-unified-results': $store.library.similaritySearchLabel }">
-                            <template x-if="!$store.library.similaritySearchError && $store.library.searchResults.artists.length === 0 && $store.library.searchResults.releases.length === 0 && $store.library.searchResults.tracks.length === 0">
+                            <template x-if="!$store.library.similaritySearchError && $store.library.searchResults.artists.length === 0 && $store.library.searchResults.releases.length === 0 && $store.library.searchResults.tracks.length === 0 && !($store.library.searchResults.podcasts || []).length">
                                 <div class="empty-state">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                                     <p>{{ t.player_no_results }}</p>
                                 </div>
                             </template>
                             <!-- Artists section -->
+                            <template x-if="($store.library.searchResults.podcasts || []).length">
+                                <section class="search-section">
+                                    <h2 class="search-section-title" x-text="$store.podcasts.text('podcasts')"></h2>
+                                    <div class="podcast-grid">
+                                        <template x-for="pod in $store.library.searchResults.podcasts" :key="pod.id">
+                                            <article class="podcast-card">
+                                                <h3><button @click="$store.podcasts.openResult(pod)" x-text="pod.metadata.title"></button></h3>
+                                                <p class="podcast-description" x-text="pod.metadata.description"></p>
+                                                <button @click="$store.podcasts.openResult(pod)" :disabled="$store.podcasts.busy" x-text="$store.podcasts.text(pod.subscribed?'open':'subscribe')"></button>
+                                            </article>
+                                        </template>
+                                    </div>
+                                </section>
+                            </template>
                             <template x-if="$store.library.searchResults.artists.length > 0">
                                 <div class="search-section">
                                     <h2 class="search-section-title">{{ t.player_artists }}</h2>

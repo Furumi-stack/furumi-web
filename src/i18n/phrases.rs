@@ -305,7 +305,7 @@ translations! {
     player_likes_count:      "likes"                           , "лайков";
     player_likes_playlist:   "Likes"                           , "Лайки";
     player_listened:         "listened"                        , "прослушано";
-    player_search_placeholder: "Search artists, releases, tracks..." , "Поиск артистов, релизов, треков...";
+    player_search_placeholder: "Search artists, releases, tracks, podcasts..." , "Поиск артистов, релизов, треков, подкастов...";
     player_search_similar_to: "Search similar to:"                , "Поиск похожих на:";
     player_find_similar:      "Find similar tracks"                , "Найти похожие треки";
     player_similarity_failed: "Similarity search failed"           , "Не удалось найти похожие треки";

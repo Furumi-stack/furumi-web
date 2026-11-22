@@ -1,4 +1,5 @@
 //! Server-owned podcast catalogue and cache; subscriptions and progress are personal.
+pub(crate) mod sync;
 mod web;
 pub use web::PodcastApp;
 
@@ -20,6 +21,30 @@ use tokio::io::AsyncWriteExt;
 
 const MAX_FEED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_AUDIO_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+pub(crate) async fn search(
+    pool: &PgPool,
+    user: i64,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<Value>> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .take(20)
+        .map(|word| {
+            format!(
+                "%{}%",
+                word.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            )
+        })
+        .collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar("SELECT jsonb_build_object('id',p.id,'url',p.origin_url,'metadata',p.metadata,'subscribed',EXISTS(SELECT 1 FROM furumusic__podcast_subscription s WHERE s.user_id=$1 AND s.podcast_id=p.id)) FROM furumusic__podcast p WHERE EXISTS(SELECT 1 FROM furumusic__podcast_subscription s WHERE s.podcast_id=p.id AND (s.user_id=$1 OR s.shared)) AND NOT EXISTS(SELECT 1 FROM unnest($2::text[]) AS term WHERE concat_ws(' ',p.metadata->>'title',p.metadata->>'description',p.metadata->>'author') COLLATE furumusic_unicode NOT ILIKE term) ORDER BY p.metadata->>'title',p.id LIMIT $3").bind(user).bind(words).bind(limit.clamp(1,100)).fetch_all(pool).await?)
+}
 
 fn public_address(ip: IpAddr) -> bool {
     match ip {
@@ -244,6 +269,7 @@ async fn refresh_inner(pool: &PgPool, id: &str) -> Result<usize> {
         let meta = episode.to_meta(&podcast_id, episode_id.clone());
         let inserted: bool = sqlx::query_scalar("INSERT INTO furumusic__podcast_episode(id,podcast_id,metadata) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET metadata=EXCLUDED.metadata RETURNING (xmax=0)").bind(episode_id.as_str()).bind(id).bind(serde_json::to_value(meta)?).fetch_one(&mut *tx).await?;
         added += usize::from(inserted);
+        sync::restore_episode_progress(&mut tx, episode_id.as_str()).await?;
     }
     for alias in [
         Some(final_url.clone()),
@@ -342,9 +368,12 @@ pub async fn reconcile(pool: &PgPool, overlay: &PodcastDht) -> Result<()> {
     // never publish its snapshot after a completed share-off/unsubscribe pass.
     static GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = GATE.lock().await;
-    let rows = sqlx::query("SELECT p.*,s.confirmed_urls FROM furumusic__podcast p JOIN furumusic__podcast_subscription s ON s.podcast_id=p.id WHERE s.shared ORDER BY p.id").fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT p.*,s.confirmed_urls,s.user_id FROM furumusic__podcast p JOIN furumusic__podcast_subscription s ON s.podcast_id=p.id WHERE s.shared ORDER BY p.id").fetch_all(pool).await?;
     let mut states = std::collections::BTreeMap::new();
     for row in rows {
+        if !sync::publication_current(pool, row.get("user_id")).await? {
+            continue;
+        }
         let id: String = row.get("id");
         let meta: PodcastMeta = serde_json::from_value(row.get("metadata"))?;
         let origin = FeedUrl::parse(row.get::<&str, _>("origin_url"))?;

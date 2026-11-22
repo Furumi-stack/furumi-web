@@ -62,10 +62,16 @@ retention and administrator actions:
 ```bash
 node --test tests/podcasts.test.cjs
 FURU_PODCAST_TEST_DATABASE_URL=postgresql://... cargo test podcasts -- --include-ignored
+FURU_PODCAST_TEST_DATABASE_URL=postgresql://... cargo test admin_unicode_search -- --include-ignored
 ```
 
 Use a disposable database. The PostgreSQL test creates and drops a unique schema;
 its audio files use a unique temporary directory. Normal podcast tests need no network.
+The podcast fixture includes real Frid v4 subscription operations, snapshot exchange,
+offline unsubscribe replay, legacy-peer filtering, and private Unicode search. The
+admin fixture exercises list counts, all three catalogue lists and the track picker
+with Cyrillic and Greek searches. Use a PostgreSQL build with ICU support; running
+these fixtures on a database created with locale `C` covers the locale regression.
 
 The access regression suite uses a disposable migrated database and a local OIDC
 provider with signed tokens and PKCE:

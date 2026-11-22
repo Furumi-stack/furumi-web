@@ -82,6 +82,14 @@ async fn postgres_multiuser_progress_retention_and_admin() {
         .execute(&pool)
         .await
         .unwrap();
+    for source in [
+        include_str!("sync_schema.sql"),
+        include_str!("../../tests/podcast_sync_fixture.sql"),
+    ] {
+        for statement in source.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+    }
     let origin = FeedUrl::parse("https://example.test/feed.xml").unwrap();
     let podcast = PodcastId::from_feed_url(&origin);
     let feed=parse_feed_with_base(br#"<rss><channel><title>Fixture</title><item><title>Episode</title><guid>one</guid><enclosure url="https://example.test/audio.mp3"/></item></channel></rss>"#,Some(origin.as_str())).unwrap();
@@ -273,6 +281,85 @@ async fn postgres_multiuser_progress_retention_and_admin() {
             .unwrap()
             .is_empty()
     );
+    // An actual v4 wire operation, as emitted by the TUI, creates the web
+    // subscription without HTTP fetching or a second manual subscription.
+    let url = FeedUrl::parse("https://example.test/tui-feed").unwrap();
+    let id = PodcastId::from_feed_url(&url);
+    let incoming:music_dht::device_sync::SyncOpWire=serde_json::from_value(json!({"op_id":"tui_test:1","origin_device_id":"tui_test","seq":1,"hlc_ms":42,"payload":{"kind":"podcast_subscription_set","podcast_id":id,"subscribed":true,"podcast":{"feed_url":url,"title":"ТАЙНЫ Космоса","description":"История МУЗЫКИ и Ελληνικά"},"feed_aliases":[url],"generation":1}})).unwrap();
+    sync::apply_op(&pool, 1, &incoming).await.unwrap();
+    assert_eq!(
+        list(&pool, 1, false).await.unwrap()["mine"][0]["id"],
+        json!(id)
+    );
+    assert_eq!(
+        super::super::search(&pool, 1, "тайны музыка", 10)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    for query in [
+        "тайны космоса",
+        "ТАЙНЫ КОСМОСА",
+        "история музыки",
+        "ελληνικά",
+        "ΕΛΛΗΝΙΚΆ",
+    ] {
+        assert_eq!(
+            super::super::search(&pool, 1, query, 10)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "{query}"
+        );
+    }
+    assert!(
+        super::super::search(&pool, 2, "тайны", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut before = music_dht::device_sync::SyncSnapshot::default();
+    sync::append_snapshot(&pool, 1, &mut before).await.unwrap();
+    assert!(!before.for_peer(3).has_podcast_state());
+    // Simulate the same person's next connected device using another local
+    // user id, since local database user ids are not part of the wire contract.
+    sync::apply_snapshot(&pool, 2, &before).await.unwrap();
+    assert_eq!(
+        list(&pool, 2, false).await.unwrap()["mine"][0]["id"],
+        json!(id)
+    );
+    sync::local_subscription(&pool, 1, id.as_str(), false)
+        .await
+        .unwrap();
+    let mut after = music_dht::device_sync::SyncSnapshot::default();
+    sync::append_snapshot(&pool, 1, &mut after).await.unwrap();
+    sync::apply_snapshot(&pool, 2, &after).await.unwrap();
+    sync::apply_snapshot(&pool, 2, &before).await.unwrap();
+    sync::apply_op(&pool, 1, &incoming).await.unwrap();
+    assert!(
+        list(&pool, 1, false).await.unwrap()["mine"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        list(&pool, 2, false).await.unwrap()["mine"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let wire:music_dht::device_sync::SyncOpWire=serde_json::from_value(sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('op_id',op_id,'origin_device_id',origin_device_id,'seq',seq,'hlc_ms',hlc_ms,'payload',payload_json) FROM furumusic__fed_sync_ops WHERE user_id=1 AND kind='podcast_subscription_set' ORDER BY seq DESC LIMIT 1").fetch_one(&pool).await.unwrap()).unwrap();
+    assert!(!wire.podcast_subscription().unwrap().subscribed);
+    assert!(!music_dht::device_sync::op_allowed_for_peer(
+        &wire.payload,
+        3
+    ));
+    assert!(music_dht::device_sync::op_allowed_for_peer(
+        &wire.payload,
+        4
+    ));
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin_pool)

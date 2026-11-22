@@ -4,12 +4,12 @@ const {test} = require('node:test');
 const vm = require('node:vm');
 const source = readFileSync(`${__dirname}/../templates/player/podcast_scripts.html`, 'utf8').replace(/<\/?script>/g, '');
 function setup(responder=()=>({})) {
-    const calls=[],stores={library:{view:'artists'},mobile:{closeLibrary(){}},player:{_playLocal(track,options){this.currentTrack=track;this.options=options;},seek(){}}};
+    const calls=[],stores={library:{view:'artists',_beginNavigation(){}},mobile:{closeLibrary(){}},player:{_playLocal(track,options){this.currentTrack=track;this.options=options;},seek(){}}};
     vm.runInNewContext(source,{
         document:{documentElement:{lang:'ru'},addEventListener(_,fn){fn();}},
         Alpine:{store(name,value){if(value)stores[name]=value;return stores[name];}},
         fetch:async(url,options)=>{const body=JSON.parse(options.body);calls.push(body);return {ok:true,json:async()=>responder(body)};},
-        confirm:()=>true,setInterval:()=>1,Date,Map,Set,Blob,navigator:{sendBeacon(){}},
+        confirm:()=>true,setInterval:()=>1,Date,Map,Set,Blob,location:{hash:''},navigator:{sendBeacon(){}},
     });
     return {store:stores.podcasts,stores,calls};
 }
@@ -44,7 +44,7 @@ test('marking unplayed is an explicit reset and advances the active session gene
 test('filtering combines season, title and played status without mixing podcasts with music',()=>{
     const {store}=setup();store.episodes=[{...episode},{...episode,id:'other',completed:true},{...episode,id:'season3',metadata:{...episode.metadata,season:3}}];
     store.filter='epis';store.season='2';store.unplayedOnly=true;assert.deepEqual(Array.from(store.filteredEpisodes(),e=>e.id),[episode.id]);
-    store.public=[{id:'a',url:'origin'}];store.hits=[{id:'a',url:'origin'},{id:'b',url:'other'}];assert.equal(store.publicCards().length,2);
+    store.public=[{id:'a',url:'origin'}];store.hits=[{id:'a',url:'origin'},{id:'b',url:'other'}];store.searched=true;assert.equal(store.publicCards().length,2);
 });
 test('private URL publication requires a separate confirmation; revocation does not republish',async()=>{
     const {store,calls}=setup(body=>body.action==='share'&&!body.confirmed?{confirmation_required:true,urls:['https://example.test/feed?token=private']}:body.action==='list'?{mine:[],public:[]}:{ok:true});
@@ -67,4 +67,20 @@ test('new episodes do not create gaps in previously loaded pages',async()=>{
     items=[{id:'new',metadata:{title:'new'}},...items];
     await store.loadEpisodes();assert.equal(store.episodes.length,203);
     assert.equal(store.episodes[0].id,'new');assert.ok(store.episodes.some(e=>e.id==='episode-199'));
+});
+
+test('opening podcast navigation starts polling and search results open existing subscriptions',async()=>{
+    const podcast={id:'show',metadata:{title:'Show'},subscribed:true};
+    const {store,stores,calls}=setup(body=>body.action==='list'?{mine:[podcast],public:[]}:body.action==='episodes'?{episodes:[],has_more:false}:{});
+    await store.enter();assert.equal(store.poller,1);assert.equal(stores.library.view,'podcasts');
+    stores.library.view='search';await store.openResult(podcast);
+    assert.equal(stores.library.view,'podcasts');assert.equal(store.selected.id,'show');
+    assert.equal(calls.filter(c=>c.action==='add').length,0);
+});
+
+test('podcast search displays matching results instead of retaining unrelated public cards',async()=>{
+    const {store}=setup(()=>({hits:[{id:'matching',metadata:{title:'Found'}}]}));
+    store.public=[{id:'unrelated'}];store.query='космос';await store.search();
+    assert.deepEqual(Array.from(store.publicCards(),p=>p.id),['matching']);
+    store.resetSearch();assert.deepEqual(Array.from(store.publicCards(),p=>p.id),['unrelated']);
 });

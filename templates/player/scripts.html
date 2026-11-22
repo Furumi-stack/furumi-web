@@ -2669,6 +2669,8 @@ document.addEventListener('alpine:init', () => {
             if (view === 'artists' && !id) {
                 if (this.view !== 'artists' || this.artistsPage === 0) this.goArtists(options);
                 else if (options.restoreScroll) this._restoreScrollPosition(hash);
+            } else if (view === 'podcasts') {
+                Alpine.store('podcasts').enter();
             } else if (view === 'uploads' && !id) {
                 if (this.view !== 'my_uploads' || this.artistsPage === 0) this.goMyUploads(options);
                 else if (options.restoreScroll) this._restoreScrollPosition(hash);

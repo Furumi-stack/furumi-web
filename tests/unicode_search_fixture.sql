@@ -1,0 +1,14 @@
+CREATE TABLE furumusic__artist(id BIGINT PRIMARY KEY,name TEXT,is_hidden BOOLEAN DEFAULT false,updated_at TEXT DEFAULT '2026-01-01');
+CREATE TABLE furumusic__release(id BIGINT PRIMARY KEY,title TEXT,year INTEGER,is_hidden BOOLEAN DEFAULT false,updated_at TEXT DEFAULT '2026-01-01');
+CREATE TABLE furumusic__track(id BIGINT PRIMARY KEY,title TEXT,title_sort TEXT,release_id BIGINT,disc_number INTEGER,track_number INTEGER,duration_seconds DOUBLE PRECISION,is_hidden BOOLEAN DEFAULT false,updated_at TEXT DEFAULT '2026-01-01');
+CREATE TABLE furumusic__release_artist(release_id BIGINT,artist_id BIGINT);
+CREATE TABLE furumusic__track_artist(track_id BIGINT,artist_id BIGINT,role TEXT DEFAULT 'main');
+CREATE TABLE furumusic__user_followed_artist(user_id BIGINT,artist_id BIGINT);
+CREATE TABLE furumusic__track_ref(local_track_id BIGINT,content_id TEXT);
+CREATE TABLE furumusic__listen_event(content_id TEXT,qualified BOOLEAN,user_id BIGINT,listen_id TEXT);
+CREATE TABLE furumusic__playlist_track(track_id BIGINT,playlist_id BIGINT);
+INSERT INTO furumusic__artist(id,name) VALUES(1,'Алиса');
+INSERT INTO furumusic__release(id,title) VALUES(1,'СОЛНЦЕ');
+INSERT INTO furumusic__track(id,title,title_sort,release_id,duration_seconds) VALUES(1,'Ελληνικά ТРЕК','ελληνικά трек',1,123);
+INSERT INTO furumusic__release_artist VALUES(1,1);
+INSERT INTO furumusic__track_artist(track_id,artist_id) VALUES(1,1);

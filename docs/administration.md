@@ -31,8 +31,20 @@ its publications, clear saved audio, or delete the podcast for every user. Audio
 retention is disabled by default. When enabled, its day count is measured from the
 download time; the periodic job removes old audio while keeping episode descriptions
 and listening progress. Removed audio is downloaded again only on an explicit save
-or playback request. Podcast personal state is not replicated to trusted Frid devices
-yet; device synchronization continues to advertise protocol v3.
+or playback request.
+
+Connected devices use Frid device-sync v4 to exchange podcast subscriptions, share
+decisions, listening progress and listening-session records. Adding or removing a
+subscription on one connected device updates the others; unsubscribe and share-off
+registers survive offline devices reconnecting. Older v3 clients keep music sync and
+receive no unsupported podcast operations or snapshot sections.
+
+The main player search also finds accessible podcasts by words in their titles,
+descriptions and authors. All query words must match; a private subscription is visible
+only to its owner. Podcast search and the admin artist/release/track search use the
+explicit ICU `und` collation `furumusic_unicode`, so case matching does not depend on
+the database's initial locale (including databases created with the `C` locale).
+PostgreSQL must include ICU support to apply migration `m_0055_podcast_sync_unicode_search`.
 
 ## Access and public sharing
 

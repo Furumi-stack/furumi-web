@@ -1046,7 +1046,18 @@ impl PlayerDeviceHub {
             .playback_state_by_user
             .get(&playback_user_id)
             .cloned()
-            .map(|playback_state| playback_state_at(playback_state, now))
+            .map(|playback_state| {
+                let mut playback_state = playback_state_at(playback_state, now);
+                if playback_user_id != user_id {
+                    for track in &mut playback_state.tracks {
+                        redact_podcast_track(track);
+                    }
+                    if let Some(track) = &mut playback_state.track {
+                        redact_podcast_track(track);
+                    }
+                }
+                playback_state
+            })
     }
 
     fn jam_dtos_locked(
@@ -1148,6 +1159,16 @@ impl PlayerDeviceHub {
 
 fn current_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+fn redact_podcast_track(track: &mut serde_json::Value) {
+    if track.get("podcast_source").is_none()
+        && track.get("podcast").and_then(serde_json::Value::as_bool) != Some(true)
+    {
+        return;
+    }
+    let id = track.get("id").cloned().unwrap_or(serde_json::json!(0));
+    *track = serde_json::json!({"id":id,"title":"Private item","artists":[],"featured_artists":[],"release_id":0,"release_title":"","cover_url":null,"stream_url":"","duration_seconds":0,"unavailable":true,"podcast_source":{"kind":"private"}});
 }
 
 fn fed_virtual_device_id(device_id: &str) -> String {
@@ -6657,13 +6678,14 @@ async fn search_handler(
     pool: &sqlx::PgPool,
     query: cot::request::extractors::UrlQuery<SearchQuery>,
 ) -> cot::Result<cot::response::Response> {
-    let Some(_user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
+    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
 
     let q = query.0.q.trim().to_lowercase();
     if q.is_empty() {
         return Json(SearchResults {
+            podcasts: Vec::new(),
             artists: Vec::new(),
             releases: Vec::new(),
             tracks: Vec::new(),
@@ -6968,6 +6990,9 @@ async fn search_handler(
         .collect();
 
     Json(SearchResults {
+        podcasts: crate::podcasts::search(pool, user.id, &q, limit)
+            .await
+            .map_err(|e| cot::Error::internal(e.to_string()))?,
         artists,
         releases,
         tracks,

@@ -5,9 +5,7 @@
 //! protocol as the TUI clients on `furumi/sync/1` and maps operations into
 //! user-scoped Postgres state.
 
-use music_dht::playback::{
-    Announcement, Checkpoint, CommandStamp, Config as PlaybackConfig, Engine,
-};
+use music_dht::playback::{Announcement, Checkpoint, Config as PlaybackConfig, Engine};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -27,7 +25,7 @@ use super::{TransportStats, record_stream_transport};
 pub const SYNC_ALPN: &[u8] = b"furumi/sync/2";
 
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub(super) const PROTOCOL_VERSION: u16 = 3;
+pub(super) const PROTOCOL_VERSION: u16 = 4;
 const INVITE_TTL_MS: i64 = 10 * 60 * 1000;
 const PAIRING_WAIT_MS: i64 = 5 * 60 * 1000;
 const PAIRING_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -125,220 +123,12 @@ struct DeviceProfileWire {
     updated_at_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct SyncedFedTrack {
-    item_id: String,
-    owner: String,
-    title: String,
-    #[serde(default)]
-    artist_names: Vec<String>,
-    #[serde(default)]
-    featured_artist_names: Vec<String>,
-    year: Option<i32>,
-    duration_seconds: Option<i64>,
-    content_id: String,
-    release_title: Option<String>,
-    track_number: Option<i32>,
-    disc_number: Option<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct PlaybackTrack {
-    id: i64,
-    title: String,
-    track_number: Option<i32>,
-    disc_number: Option<i32>,
-    duration_seconds: f64,
-    #[serde(default)]
-    artist_names: Vec<String>,
-    #[serde(default)]
-    featured_artist_names: Vec<String>,
-    release_id: i64,
-    release_title: String,
-    release_year: Option<i32>,
-    #[serde(default)]
-    file_path: String,
-    content_id: Option<String>,
-    audio_format: Option<String>,
-    audio_bitrate: Option<i32>,
-    audio_sample_rate: Option<i32>,
-    audio_bit_depth: Option<i32>,
-    file_size_bytes: Option<i64>,
-    #[serde(default)]
-    play_count: i64,
-    #[serde(default)]
-    fed: Option<SyncedFedTrack>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-enum PlaybackRepeat {
-    #[default]
-    Off,
-    One,
-    All,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct PlaybackStateWire {
-    #[serde(default)]
-    queue: Vec<PlaybackTrack>,
-    #[serde(default)]
-    queue_pos: usize,
-    playing: bool,
-    paused: bool,
-    #[serde(default)]
-    idle_since_ms: Option<i64>,
-    position_secs: f64,
-    #[serde(default)]
-    volume: u8,
-    shuffle: bool,
-    repeat: PlaybackRepeat,
-}
-
-type PlaybackSnapshot = music_dht::playback::Snapshot<PlaybackStateWire>;
-type PlaybackCommand = music_dht::playback::Command<PlaybackStateWire>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SyncOpWire {
-    op_id: String,
-    origin_device_id: String,
-    seq: i64,
-    hlc_ms: i64,
-    payload: SyncOpPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum SyncOpPayload {
-    TrackLikeSet {
-        content_id: String,
-        liked: bool,
-        #[serde(default)]
-        fed: Option<SyncedFedTrack>,
-    },
-    PlaylistCreated {
-        playlist_id: String,
-        title: String,
-    },
-    PlaylistRenamed {
-        playlist_id: String,
-        title: String,
-    },
-    PlaylistDeleted {
-        playlist_id: String,
-    },
-    PlaylistTrackAdded {
-        playlist_id: String,
-        content_id: String,
-        position: i64,
-        #[serde(default)]
-        fed: Option<SyncedFedTrack>,
-    },
-    PlaylistTrackRemoved {
-        playlist_id: String,
-        content_id: String,
-    },
-    DeviceProfileSet {
-        name: String,
-        client_version: String,
-        endpoint_ticket: String,
-        endpoint_id: String,
-    },
-    DeviceTrusted {
-        target_device_id: String,
-    },
-    DeviceRevoked {
-        target_device_id: String,
-        target_max_seq_seen: i64,
-    },
-    PlaybackCommand {
-        target_device_id: String,
-        command: PlaybackCommand,
-        #[serde(default)]
-        authority: Option<CommandStamp>,
-    },
-    ListenRecorded {
-        event: ListenEvent,
-    },
-}
-
-impl SyncOpPayload {
-    fn is_tombstone(&self) -> bool {
-        matches!(
-            self,
-            SyncOpPayload::TrackLikeSet { liked: false, .. }
-                | SyncOpPayload::PlaylistDeleted { .. }
-                | SyncOpPayload::PlaylistTrackRemoved { .. }
-                | SyncOpPayload::DeviceRevoked { .. }
-        )
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct SyncSnapshot {
-    #[serde(default)]
-    likes: Vec<SnapshotLike>,
-    #[serde(default)]
-    unlikes: Vec<SnapshotLikeTombstone>,
-    #[serde(default)]
-    playlists: Vec<SnapshotPlaylist>,
-    #[serde(default)]
-    deleted_playlists: Vec<SnapshotPlaylistTombstone>,
-    #[serde(default)]
-    removed_playlist_items: Vec<SnapshotPlaylistItemTombstone>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotLike {
-    content_id: String,
-    hlc_ms: i64,
-    op_id: String,
-    #[serde(default)]
-    fed: Option<SyncedFedTrack>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotLikeTombstone {
-    content_id: String,
-    hlc_ms: i64,
-    op_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotPlaylist {
-    playlist_id: String,
-    title: String,
-    hlc_ms: i64,
-    op_id: String,
-    #[serde(default)]
-    items: Vec<SnapshotPlaylistItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotPlaylistTombstone {
-    playlist_id: String,
-    hlc_ms: i64,
-    op_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotPlaylistItem {
-    content_id: String,
-    position: i64,
-    hlc_ms: i64,
-    op_id: String,
-    #[serde(default)]
-    fed: Option<SyncedFedTrack>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SnapshotPlaylistItemTombstone {
-    playlist_id: String,
-    content_id: String,
-    hlc_ms: i64,
-    op_id: String,
-}
+use music_dht::device_sync::{
+    PlaybackCommand, PlaybackRepeat, PlaybackSnapshot, PlaybackStateWire, PlaybackTrack,
+    SnapshotLike, SnapshotLikeTombstone, SnapshotPlaylist, SnapshotPlaylistItem,
+    SnapshotPlaylistItemTombstone, SnapshotPlaylistTombstone, SyncOpPayload, SyncOpWire,
+    SyncSnapshot, SyncedFedTrack,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1180,8 +970,9 @@ async fn try_connect_invite(
     let devices = device_profiles(pool, user_id).await?;
     let vector = vector(pool, user_id).await?;
     let ops = ops_for_peer(pool, user_id, &invite.device_id).await?;
-    let snapshot = snapshot(pool, user_id).await?;
+    let snapshot = snapshot_for_peer(pool, user_id, &invite.device_id).await?;
     let playback = local_playback_snapshot(pool, Arc::clone(&hub), user_id, &identity).await;
+    let playback = playback_for_peer(pool, user_id, &invite.device_id, playback).await?;
     let mut stream = service.open_stream(peer, SYNC_ALPN).await?;
     record_stream_transport(&transport_stats, "device-sync", "outbound", "open", &stream);
     write_msg(
@@ -1235,6 +1026,7 @@ async fn try_connect_invite(
             apply_device_profiles(pool, user_id, &devices).await?;
             apply_snapshot(pool, user_id, snapshot).await?;
             apply_ops(pool, Arc::clone(&hub), user_id, ops).await?;
+            crate::podcasts::sync::exchange_complete(pool, user_id, &invite.device_id).await?;
             record_local_op(
                 pool,
                 user_id,
@@ -1459,6 +1251,7 @@ async fn handle_pair_request(
     }
     apply_snapshot(pool, user_id, incoming_snapshot).await?;
     apply_ops(pool, Arc::clone(&hub), user_id, ops).await?;
+    crate::podcasts::sync::exchange_complete(pool, user_id, &profile.device_id).await?;
     apply_device_profiles(pool, user_id, &requester_group_devices).await?;
     note_peer_vector(pool, user_id, &profile.device_id, &incoming_vector).await?;
     sqlx::query("UPDATE furumusic__fed_device_invite SET used_at_ms = $2 WHERE invite_id = $1")
@@ -1476,8 +1269,9 @@ async fn handle_pair_request(
     let devices = device_profiles(pool, user_id).await?;
     let vector = vector(pool, user_id).await?;
     let ops = ops_for_peer(pool, user_id, &profile.device_id).await?;
-    let snapshot = snapshot(pool, user_id).await?;
+    let snapshot = snapshot_for_peer(pool, user_id, &profile.device_id).await?;
     let playback = local_playback_snapshot(pool, hub, user_id, &identity).await;
+    let playback = playback_for_peer(pool, user_id, &profile.device_id, playback).await?;
     write_msg(
         &mut stream,
         &WireMessage::PairResponse {
@@ -1522,8 +1316,9 @@ async fn handle_hello(
         return write_sync_reject(stream, "sync group mismatch").await;
     }
     profile.endpoint_id = stream.peer_id.to_string();
-    apply_device_profile(pool, user_id, &profile, false).await?;
     apply_device_profiles(pool, user_id, &devices).await?;
+    // A sender's own current report takes precedence over relayed profiles.
+    apply_device_profile(pool, user_id, &profile, false).await?;
     if let Some(playback) = playback {
         apply_playback_snapshot(
             Arc::clone(&hub),
@@ -1536,6 +1331,7 @@ async fn handle_hello(
     }
     apply_snapshot(pool, user_id, incoming_snapshot).await?;
     apply_ops(pool, Arc::clone(&hub), user_id, ops).await?;
+    crate::podcasts::sync::exchange_complete(pool, user_id, &profile.device_id).await?;
     note_peer_vector(pool, user_id, &profile.device_id, &incoming_vector).await?;
     mark_seen(
         pool,
@@ -1557,8 +1353,9 @@ async fn handle_hello(
     devices.push(own_profile);
     let vector = vector(pool, user_id).await?;
     let ops = ops_for_peer(pool, user_id, &profile.device_id).await?;
-    let snapshot = snapshot(pool, user_id).await?;
+    let snapshot = snapshot_for_peer(pool, user_id, &profile.device_id).await?;
     let playback = local_playback_snapshot(pool, hub, user_id, &identity).await;
+    let playback = playback_for_peer(pool, user_id, &profile.device_id, playback).await?;
     write_msg(
         &mut stream,
         &WireMessage::SyncResponse {
@@ -1592,8 +1389,9 @@ async fn sync_device(
     let devices = device_profiles(pool, user_id).await?;
     let vector = vector(pool, user_id).await?;
     let ops = ops_for_peer(pool, user_id, &device.device_id).await?;
-    let snapshot = snapshot(pool, user_id).await?;
+    let snapshot = snapshot_for_peer(pool, user_id, &device.device_id).await?;
     let playback = local_playback_snapshot(pool, Arc::clone(&hub), user_id, &identity).await;
+    let playback = playback_for_peer(pool, user_id, &device.device_id, playback).await?;
     let mut stream = service.open_stream(peer, SYNC_ALPN).await?;
     record_stream_transport(&transport_stats, "device-sync", "outbound", "open", &stream);
     write_msg(
@@ -1637,6 +1435,7 @@ async fn sync_device(
             }
             apply_snapshot(pool, user_id, snapshot).await?;
             apply_ops(pool, hub, user_id, ops).await?;
+            crate::podcasts::sync::exchange_complete(pool, user_id, &device.device_id).await?;
             note_peer_vector(pool, user_id, &device.device_id, &vector).await?;
             mark_seen(
                 pool,
@@ -2049,6 +1848,34 @@ async fn record_local_op(
     Ok(())
 }
 
+pub(crate) async fn record_podcast_op(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    payload: SyncOpPayload,
+) -> Result<()> {
+    let identity = ensure_identity(pool, user_id, "").await?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,7512))")
+        .bind(format!("podcast-sync:{user_id}"))
+        .execute(&mut *tx)
+        .await?;
+    let row=sqlx::query("UPDATE furumusic__fed_device_identity SET local_seq=local_seq+1,last_hlc_ms=GREATEST($2,last_hlc_ms+1) WHERE user_id=$1 RETURNING local_seq,last_hlc_ms").bind(user_id).bind(now_ms()).fetch_one(&mut *tx).await?;
+    let seq: i64 = row.get("local_seq");
+    let op = SyncOpWire {
+        op_id: format!("{}:{seq}", identity.device_id),
+        origin_device_id: identity.device_id,
+        seq,
+        hlc_ms: row.get("last_hlc_ms"),
+        payload,
+    };
+    op.validate_podcast()?;
+    sqlx::query("INSERT INTO furumusic__fed_sync_ops(user_id,op_id,origin_device_id,seq,kind,payload_json,hlc_ms,received_at_ms,tombstone) VALUES($1,$2,$3,$4,$5,$6,$7,$8,false)").bind(user_id).bind(&op.op_id).bind(&op.origin_device_id).bind(seq).bind(payload_kind(&op.payload)).bind(serde_json::to_value(&op.payload)?).bind(op.hlc_ms).bind(now_ms()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO furumusic__fed_sync_vector(user_id,device_id,max_seq) VALUES($1,$2,$3) ON CONFLICT(user_id,device_id) DO UPDATE SET max_seq=GREATEST(furumusic__fed_sync_vector.max_seq,EXCLUDED.max_seq)").bind(user_id).bind(&op.origin_device_id).bind(seq).execute(&mut *tx).await?;
+    crate::podcasts::sync::apply_op_tx(&mut tx, user_id, &op).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn apply_ops(
     pool: &sqlx::PgPool,
     hub: Arc<PlayerDeviceHub>,
@@ -2078,7 +1905,7 @@ async fn apply_ops(
         .execute(pool)
         .await?
         .rows_affected();
-        if inserted > 0 {
+        if inserted > 0 || op.payload.is_podcast() {
             let _ = apply_op(pool, Arc::clone(&hub), user_id, &op).await?;
         }
         sqlx::query(
@@ -2127,6 +1954,9 @@ async fn apply_op(
     user_id: i64,
     op: &SyncOpWire,
 ) -> Result<bool> {
+    if op.payload.is_podcast() {
+        return crate::podcasts::sync::apply_op(pool, user_id, op).await;
+    }
     match &op.payload {
         SyncOpPayload::TrackLikeSet {
             content_id,
@@ -2201,12 +2031,16 @@ async fn apply_op(
             client_version,
             endpoint_ticket,
             endpoint_id,
+            protocol_version,
         } => {
             let profile = DeviceProfileWire {
                 device_id: op.origin_device_id.clone(),
                 name: name.clone(),
                 client_version: client_version.clone(),
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version: music_dht::device_sync::profile_protocol_version(
+                    *protocol_version,
+                    Some(peer_protocol_version(pool, user_id, &op.origin_device_id).await?),
+                ),
                 endpoint_id: endpoint_id.clone(),
                 endpoint_ticket: endpoint_ticket.clone(),
                 revoked: false,
@@ -2240,6 +2074,7 @@ async fn apply_op(
         SyncOpPayload::ListenRecorded { event } => {
             apply_listen_event(pool, user_id, &op.origin_device_id, event).await
         }
+        _ => Ok(false),
     }
 }
 
@@ -2605,6 +2440,8 @@ async fn apply_playlist_item_state(
 }
 
 async fn apply_snapshot(pool: &sqlx::PgPool, user_id: i64, snapshot: SyncSnapshot) -> Result<()> {
+    crate::podcasts::sync::apply_snapshot(pool, user_id, &snapshot).await?;
+    crate::podcasts::sync::refresh_received(pool.clone());
     for like in snapshot.likes {
         apply_like_state(
             pool,
@@ -2690,7 +2527,12 @@ async fn apply_device_profiles(
     devices: &[DeviceProfileWire],
 ) -> Result<()> {
     for profile in devices {
-        apply_device_profile(pool, user_id, profile, false).await?;
+        let mut relayed = profile.clone();
+        relayed.protocol_version = music_dht::device_sync::relayed_protocol_version(
+            profile.protocol_version,
+            Some(peer_protocol_version(pool, user_id, &profile.device_id).await?),
+        );
+        apply_device_profile(pool, user_id, &relayed, false).await?;
     }
     Ok(())
 }
@@ -2846,6 +2688,14 @@ async fn apply_playback_command(
     };
     let authority = authority.as_ref();
     let origin = &op.origin_device_id;
+    if peer_protocol_version(pool, user_id, origin).await? < 4
+        && let Some(state) = hub.playback_state_json_for_commands(user_id)
+    {
+        let local = playback_state_from_browser_json(pool, state).await?;
+        if !music_dht::device_sync::playback_command_allowed_from_peer(&local, 3) {
+            return Ok(());
+        }
+    }
     let op_id = &op.op_id;
     let identity = ensure_identity(pool, user_id, "").await?;
     let Some(authority) = authority else {
@@ -3009,6 +2859,7 @@ pub async fn record_web_playback_command(
     ensure_web_playback_target(pool, user_id, target_device_id).await?;
     let next_state = browser_state_for_command(command, payload, current_state)?;
     let wire = playback_state_from_browser_json(pool, next_state.clone()).await?;
+    require_playback_peer(pool, user_id, target_device_id, &wire).await?;
     record_local_op(
         pool,
         user_id,
@@ -3037,6 +2888,7 @@ pub async fn record_web_active_transfer(
 ) -> Result<()> {
     ensure_web_playback_target(pool, user_id, target_device_id).await?;
     let wire = playback_state_from_browser_json(pool, state).await?;
+    require_playback_peer(pool, user_id, target_device_id, &wire).await?;
     let target_name = web_playback_target_name(pool, user_id, target_device_id).await?;
     let identity = ensure_identity(pool, user_id, "").await?;
     with_playback_engine(pool, user_id, &identity, |engine| {
@@ -3710,6 +3562,7 @@ async fn playback_state_from_browser_json(
         }
     }
     Ok(PlaybackStateWire {
+        playback_rate: Some(1.0),
         queue,
         queue_pos: state
             .get("index")
@@ -3754,6 +3607,20 @@ async fn playback_track_from_track_json(
     track_id: i64,
     track: &serde_json::Value,
 ) -> Result<PlaybackTrack> {
+    if let Some(source) = track.get("podcast_source") {
+        let source: music_dht::device_sync::PlaybackSource =
+            serde_json::from_value(source.clone())?;
+        match source {
+            music_dht::device_sync::PlaybackSource::PodcastEpisode(episode) => {
+                episode.validate()?;
+                return Ok(PlaybackTrack::podcast_episode(*episode));
+            }
+            music_dht::device_sync::PlaybackSource::Private => {
+                return Ok(PlaybackTrack::private_placeholder());
+            }
+            music_dht::device_sync::PlaybackSource::Music => {}
+        }
+    }
     Ok(PlaybackTrack {
         id: track_id,
         title: track
@@ -3819,6 +3686,7 @@ async fn playback_track_from_track_json(
             .and_then(serde_json::Value::as_i64),
         play_count: 0,
         fed: None,
+        source: None,
     })
 }
 
@@ -3842,6 +3710,12 @@ async fn resolve_playback_tracks(
 ) -> Result<Vec<serde_json::Value>> {
     let mut out = Vec::new();
     for (index, track) in tracks.iter().enumerate() {
+        if track.requires_podcast_support() {
+            let mut value = placeholder_playback_track(track, index, None);
+            value["podcast_source"] = serde_json::to_value(&track.source)?;
+            out.push(value);
+            continue;
+        }
         let content_id = track
             .content_id
             .as_deref()
@@ -4476,6 +4350,7 @@ async fn ops_for_peer(
     user_id: i64,
     peer_device_id: &str,
 ) -> Result<Vec<SyncOpWire>> {
+    let peer_version = peer_protocol_version(pool, user_id, peer_device_id).await?;
     let rows = sqlx::query(
         "SELECT o.op_id, o.origin_device_id, o.seq, o.hlc_ms, o.payload_json
          FROM furumusic__fed_sync_ops o
@@ -4485,6 +4360,7 @@ async fn ops_for_peer(
           AND a.origin_device_id = o.origin_device_id
          WHERE o.user_id = $1
            AND o.seq > COALESCE(a.max_seq, 0)
+           AND ($5 >= 4 OR o.kind NOT LIKE 'podcast_%')
            AND (
                 o.kind != 'playback_command'
                 OR (
@@ -4499,9 +4375,11 @@ async fn ops_for_peer(
     .bind(peer_device_id)
     .bind(now_ms().saturating_sub(PLAYBACK_COMMAND_TTL_MS))
     .bind(MAX_OPS_PER_BATCH)
+    .bind(peer_version as i32)
     .fetch_all(pool)
     .await?;
-    rows.into_iter()
+    let ops: Vec<SyncOpWire> = rows
+        .into_iter()
         .map(|row| {
             let payload_json: serde_json::Value = row.get("payload_json");
             Ok(SyncOpWire {
@@ -4512,7 +4390,58 @@ async fn ops_for_peer(
                 payload: serde_json::from_value(payload_json)?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ops
+        .into_iter()
+        .filter(|op| music_dht::device_sync::op_allowed_for_peer(&op.payload, peer_version))
+        .collect())
+}
+
+async fn peer_protocol_version(pool: &sqlx::PgPool, user_id: i64, device_id: &str) -> Result<u16> {
+    let version: Option<i32> = sqlx::query_scalar(
+        "SELECT protocol_version FROM furumusic__fed_device WHERE user_id=$1 AND device_id=$2",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(version.unwrap_or(3) as u16)
+}
+async fn snapshot_for_peer(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    device_id: &str,
+) -> Result<SyncSnapshot> {
+    Ok(snapshot(pool, user_id)
+        .await?
+        .for_peer(peer_protocol_version(pool, user_id, device_id).await?))
+}
+
+async fn playback_for_peer(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    device_id: &str,
+    playback: Option<PlaybackSnapshot>,
+) -> Result<Option<PlaybackSnapshot>> {
+    let version = peer_protocol_version(pool, user_id, device_id).await?;
+    Ok(playback.filter(|snapshot| {
+        music_dht::device_sync::playback_allowed_for_peer(&snapshot.state, version)
+    }))
+}
+
+async fn require_playback_peer(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    device_id: &str,
+    state: &PlaybackStateWire,
+) -> Result<()> {
+    if !music_dht::device_sync::playback_allowed_for_peer(
+        state,
+        peer_protocol_version(pool, user_id, device_id).await?,
+    ) {
+        anyhow::bail!("update the connected player to play podcast queues");
+    }
+    Ok(())
 }
 
 async fn snapshot(pool: &sqlx::PgPool, user_id: i64) -> Result<SyncSnapshot> {
@@ -4601,13 +4530,16 @@ async fn snapshot(pool: &sqlx::PgPool, user_id: i64) -> Result<SyncSnapshot> {
         op_id: row.get("op_id"),
     })
     .collect();
-    Ok(SyncSnapshot {
+    let mut result = SyncSnapshot {
         likes,
         unlikes,
         playlists,
         deleted_playlists,
         removed_playlist_items,
-    })
+        ..SyncSnapshot::default()
+    };
+    crate::podcasts::sync::append_snapshot(pool, user_id, &mut result).await?;
+    Ok(result)
 }
 
 async fn snapshot_playlist_items(
@@ -4852,6 +4784,11 @@ fn payload_kind(payload: &SyncOpPayload) -> &'static str {
         SyncOpPayload::DeviceRevoked { .. } => "device_revoked",
         SyncOpPayload::PlaybackCommand { .. } => "playback_command",
         SyncOpPayload::ListenRecorded { .. } => "listen_recorded",
+        SyncOpPayload::PodcastSubscriptionSet { .. } => "podcast_subscription_set",
+        SyncOpPayload::PodcastShareSet { .. } => "podcast_share_set",
+        SyncOpPayload::PodcastFeedAliasesAdded { .. } => "podcast_feed_aliases_added",
+        SyncOpPayload::PodcastProgressSet { .. } => "podcast_progress_set",
+        SyncOpPayload::PodcastListenRecorded { .. } => "podcast_listen_recorded",
     }
 }
 
