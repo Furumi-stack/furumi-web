@@ -61,6 +61,8 @@ retention and administrator actions:
 
 ```bash
 node --test tests/podcasts.test.cjs
+FURU_PODCAST_RENDER_FIXTURE=1 cargo test renders_podcast_navigation_and_views
+node tests/browser-podcast-ui.cjs
 FURU_PODCAST_TEST_DATABASE_URL=postgresql://... cargo test podcasts -- --include-ignored
 FURU_PODCAST_TEST_DATABASE_URL=postgresql://... cargo test admin_unicode_search -- --include-ignored
 ```
@@ -72,6 +74,12 @@ offline unsubscribe replay, legacy-peer filtering, and private Unicode search. T
 admin fixture exercises list counts, all three catalogue lists and the track picker
 with Cyrillic and Greek searches. Use a PostgreSQL build with ICU support; running
 these fixtures on a database created with locale `C` covers the locale regression.
+The browser UI fixture checks direct list/detail hashes on first load and reload,
+back navigation, RSS artwork and broken-image fallbacks, explicit subscriptions,
+compact search cards and mobile layout. It uses isolated API fixtures with the
+rendered application. Set `PLAYWRIGHT_MODULE` and `CHROME_PATH` as for the other
+browser tests. Optional `ALPINE_FIXTURE` points to a local Alpine.js bundle for
+offline browser runs; otherwise the page loads Alpine from its normal CDN.
 
 The access regression suite uses a disposable migrated database and a local OIDC
 provider with signed tokens and PKCE:

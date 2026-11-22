@@ -2,11 +2,19 @@
     document.addEventListener('alpine:init', () => {
         const labels = {
             podcasts: ['Podcasts', 'Подкасты'],
+            episodes: ['Episodes', 'Выпуски'],
+            subscribeHint: [
+                'Subscribe to listen and save episodes.',
+                'Подпишитесь, чтобы слушать и сохранять выпуски.',
+            ],
+            notFound: ['Podcast not found.', 'Подкаст не найден.'],
+            showMore: ['Show more', 'Подробнее'],
+            showLess: ['Show less', 'Свернуть'],
             add: ['Add', 'Добавить'],
             mine: ['My podcasts', 'Мои подкасты'],
             public: ['Public podcasts', 'Публичные подкасты'],
-            results: ['Podcast search results','Результаты поиска подкастов'],
-            noMatches: ['No matching podcasts.','Подходящих подкастов нет.'],
+            results: ['Podcast search results', 'Результаты поиска подкастов'],
+            noMatches: ['No matching podcasts.', 'Подходящих подкастов нет.'],
             empty: ['Add an RSS or Atom feed.', 'Добавьте RSS или Atom ленту.'],
             check: ['Check episodes', 'Проверить выпуски'],
             checkAll: ['Check all', 'Проверить все'],
@@ -65,6 +73,12 @@
             episodes: [],
             hasMore: false,
             selected: null,
+            selectedId: null,
+            loading: false,
+            adding: false,
+            failedArtwork: {},
+            descriptionExpanded: false,
+            _navigation: 0,
             url: '',
             query: '',
             filter: '',
@@ -105,32 +119,77 @@
             },
             async load() {
                 const data = await this.api('list');
-                this.mine = data.mine;
+                this.mine = data.mine.map((pod) => ({ ...pod, subscribed: true }));
                 this.public = data.public;
+                if (this.selected) {
+                    const current =
+                        this.mine.find((p) => p.id === this.selected.id) ||
+                        this.public.find((p) => p.id === this.selected.id);
+                    this.selected = {
+                        ...this.selected,
+                        ...current,
+                        subscribed: this.mine.some((p) => p.id === this.selected.id),
+                    };
+                }
             },
-            enter() {
-                if (location.hash !== '#podcasts')
-                    Alpine.store('library')._beginNavigation('#podcasts');
-                Alpine.store('library').view = 'podcasts';
+            artwork(pod) {
+                const url = pod?.metadata?.image_url;
+                return url && !this.failedArtwork[url] ? url : null;
+            },
+            artworkFailed(pod) {
+                const url = pod?.metadata?.image_url;
+                if (url) this.failedArtwork[url] = true;
+            },
+            description(pod) {
+                const text = pod?.metadata?.description || '';
+                return !this.descriptionExpanded && text.length > 360
+                    ? text.slice(0, 360).trimEnd() + '…'
+                    : text;
+            },
+            navigate(hash, view, options = {}) {
+                const library = Alpine.store('library');
+                library._beginNavigation(hash, options);
+                library.view = view;
+                library.currentArtist = null;
+                library.currentRelease = null;
+                library.currentPlaylist = null;
                 Alpine.store('mobile')?.closeLibrary();
-                const loading = this.task(async () => {
-                    await this.load();
-                    this.message = '';
-                });
+                this.ensurePolling();
+            },
+            ensurePolling() {
                 if (!this.poller)
                     this.poller = setInterval(() => {
-                        if (Alpine.store('library').view === 'podcasts' && !this.busy)
+                        if (
+                            ['podcasts', 'podcast_detail'].includes(Alpine.store('library').view) &&
+                            !this.busy &&
+                            !this.loading
+                        )
                             this.update().catch(() => {});
                     }, 5000);
-                return loading;
+            },
+            async enter(options = {}) {
+                const token = ++this._navigation;
+                this.navigate('#podcasts', 'podcasts', options);
+                this.selected = null;
+                this.selectedId = null;
+                this.episodes = [];
+                this.message = '';
+                this.loading = true;
+                try {
+                    await this.load();
+                } catch (error) {
+                    if (token === this._navigation) this.message = error.message;
+                } finally {
+                    if (token === this._navigation) {
+                        this.loading = false;
+                        Alpine.store('library')._afterNavigation(options);
+                    }
+                }
             },
             async update() {
                 await this.load();
-                if (this.selected && !this.mine.some((p) => p.id === this.selected.id)) {
-                    this.selected = null;
-                    this.episodes = [];
-                }
-                if (this.selected) await this.loadEpisodes();
+                if (this.selected?.subscribed) await this.loadEpisodes();
+                else this.episodes = [];
             },
             async loadEpisodes(append = false) {
                 const id = this.selected.id;
@@ -149,29 +208,63 @@
                     this.message = '';
                 });
             },
-            open(pod) {
-                this.selected = pod;
+            async open(pod, options = {}) {
+                const id = typeof pod === 'string' ? pod : pod.id;
+                const token = ++this._navigation;
+                this.selectedId = id;
+                this.descriptionExpanded = false;
+                const cached =
+                    this.mine.find((p) => p.id === id) ||
+                    this.public.find((p) => p.id === id) ||
+                    (typeof pod === 'object' ? pod : null);
+                this.selected = cached
+                    ? {
+                          ...cached,
+                          subscribed: this.mine.some((p) => p.id === id) || !!cached.subscribed,
+                      }
+                    : null;
                 this.episodes = [];
                 this.hasMore = false;
                 this.filter = '';
                 this.season = '';
-                this.task(async () => {
-                    await this.loadEpisodes();
-                    this.message = '';
-                });
+                this.message = '';
+                this.loading = true;
+                this.navigate('#podcast?id=' + encodeURIComponent(id), 'podcast_detail', options);
+                try {
+                    await this.load();
+                    if (token !== this._navigation) return;
+                    const detail =
+                        this.mine.find((p) => p.id === id) ||
+                        this.public.find((p) => p.id === id) ||
+                        this.selected ||
+                        (await this.api('detail', { id }));
+                    if (token !== this._navigation) return;
+                    this.selected = { ...detail, subscribed: this.mine.some((p) => p.id === id) };
+                    if (this.selected.subscribed) await this.loadEpisodes();
+                } catch (error) {
+                    if (token === this._navigation)
+                        this.message = error.message || this.text('notFound');
+                } finally {
+                    if (token === this._navigation) {
+                        this.loading = false;
+                        Alpine.store('library')._afterNavigation(options);
+                    }
+                }
             },
             openResult(pod) {
+                return this.open(pod);
+            },
+            subscribe(pod = this.selected) {
                 return this.task(async () => {
-                    if (!pod.subscribed) await this.api('add', { url: pod.url });
+                    await this.api('add', { url: pod.url || pod.metadata.feed_url });
                     await this.load();
-                    this.selected = this.mine.find((p) => p.id === pod.id) || pod;
-                    this.episodes = [];
-                    this.hasMore = false;
-                    this.filter = '';
-                    this.season = '';
-                    Alpine.store('library')._beginNavigation('#podcasts');
-                    Alpine.store('library').view = 'podcasts';
-                    await this.loadEpisodes();
+                    if (this.selectedId === pod.id) {
+                        this.selected = this.mine.find((p) => p.id === pod.id) || {
+                            ...pod,
+                            subscribed: true,
+                        };
+                        await this.loadEpisodes();
+                    }
                     this.message = '';
                 });
             },
@@ -180,6 +273,8 @@
                     const result = await this.api('add', { url: url || this.url });
                     this.url = '';
                     await this.load();
+                    this.adding = false;
+                    if (result.id) await this.open(result.id);
                     this.message = result.warning || this.text('done');
                 });
             },
@@ -188,8 +283,13 @@
                 this.task(async () => {
                     const result = await this.api('remove', { id: pod.id });
                     if (this.selected?.id === pod.id) {
+                        ++this._navigation;
+                        this.loading = false;
                         this.selected = null;
+                        this.selectedId = null;
                         this.episodes = [];
+                        this.navigate('#podcasts', 'podcasts');
+                        Alpine.store('library')._afterNavigation();
                     }
                     await this.load();
                     this.message = this.text(result.publication_pending ? 'pending' : 'done');
@@ -250,18 +350,28 @@
                 });
             },
             search() {
-                const query=this.query.trim();
+                const query = this.query.trim();
                 return this.task(async () => {
                     const data = await this.api('search', { query });
-                    if(this.query.trim()!==query){this.message='';return;}
+                    if (this.query.trim() !== query) {
+                        this.message = '';
+                        return;
+                    }
                     this.hits = data.hits;
-                    this.searched=true;
+                    this.searched = true;
                     this.message = this.text('done');
                 });
             },
-            resetSearch(){this.searched=false;this.hits=[];},
+            resetSearch() {
+                this.searched = false;
+                this.hits = [];
+            },
             publicCards() {
-                return [...new Map((this.searched?this.hits:this.public).map((p) => [p.id, p])).values()];
+                return [
+                    ...new Map(
+                        (this.searched ? this.hits : this.public).map((p) => [p.id, p]),
+                    ).values(),
+                ];
             },
             seasons() {
                 return [

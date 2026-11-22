@@ -1,0 +1,23 @@
+<template x-if="$store.podcasts.artwork(pod)">
+    <img
+        :src="$store.podcasts.artwork(pod)"
+        alt=""
+        aria-hidden="true"
+        loading="lazy"
+        decoding="async"
+        referrerpolicy="no-referrer"
+        @error="$store.podcasts.artworkFailed(pod)"
+    />
+</template>
+<template x-if="!$store.podcasts.artwork(pod)">
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        aria-hidden="true"
+    >
+        <rect x="9" y="2" width="6" height="13" rx="3" />
+        <path d="M5 10v2a7 7 0 0014 0v-2M12 19v3M8 22h8" />
+    </svg>
+</template>

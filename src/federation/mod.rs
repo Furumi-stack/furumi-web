@@ -722,7 +722,7 @@ impl Federation {
             .map(|r| Arc::clone(&r.podcast_dht))
             .context("federation is not running")?;
         let hits = overlay.search(query, 100).await?;
-        Ok(Value::Array(hits.into_iter().map(|hit| json!({"id":hit.podcast_id,"url":hit.feed_url,"metadata":{"title":hit.card.title,"author":hit.card.author,"description":hit.card.description}})).collect()))
+        Ok(Value::Array(hits.into_iter().map(|hit| json!({"id":hit.podcast_id,"url":hit.feed_url,"metadata":{"title":hit.card.title,"author":hit.card.author,"description":hit.card.description,"image_url":hit.card.image_url}})).collect()))
     }
 
     async fn similarity_services(&self) -> Result<(Arc<MusicDhtService>, Arc<SimilarityDht>)> {

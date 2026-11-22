@@ -4,11 +4,12 @@
 
 {% block head_extra %}
 {% include "player/styles.html" %}
+{% include "player/podcast_styles.html" %}
 {% endblock head_extra %}
 
 {% block body %}
 {% include "player/shell.html" %}
 {% include "player/modals.html" %}
-{% include "player/scripts.html" %}
 {% include "player/podcast_scripts.html" %}
+{% include "player/scripts.html" %}
 {% endblock body %}

@@ -33,6 +33,11 @@ fn renders_podcast_navigation_and_views() {
         2
     );
     assert!(html.contains("/api/podcasts/action"));
+    assert!(
+        html.find("Alpine.store('podcasts',").unwrap()
+            < html.find("Alpine.store('library',").unwrap(),
+        "podcast navigation must be registered before library.init restores the hash"
+    );
     if std::env::var_os("FURU_PODCAST_RENDER_FIXTURE").is_some() {
         std::fs::write("target/podcast-player-fixture.html", html).unwrap();
     }
@@ -187,6 +192,22 @@ async fn postgres_multiuser_progress_retention_and_admin() {
         1
     );
     let request = |value| serde_json::from_value::<Action>(value).unwrap();
+    let preview = action(
+        pool.clone(),
+        config.clone(),
+        99,
+        false,
+        request(json!({"action":"detail","id":podcast})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview["subscribed"], false);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM furumusic__podcast_subscription WHERE user_id=99")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
     action(
         pool.clone(),
         config.clone(),
@@ -196,6 +217,18 @@ async fn postgres_multiuser_progress_retention_and_admin() {
     )
     .await
     .unwrap();
+    assert!(
+        action(
+            pool.clone(),
+            config.clone(),
+            99,
+            false,
+            request(json!({"action":"detail","id":podcast}))
+        )
+        .await
+        .is_err(),
+        "private podcasts must not be exposed by the detail route"
+    );
     assert_eq!(
         list(&pool, 2, false).await.unwrap()["mine"]
             .as_array()

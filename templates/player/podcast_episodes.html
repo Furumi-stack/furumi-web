@@ -1,0 +1,61 @@
+<h2 class="podcast-section-title" x-text="$store.podcasts.text('episodes')"></h2>
+<div class="podcast-toolbar">
+    <input
+        type="text"
+        x-model="$store.podcasts.filter"
+        :placeholder="$store.podcasts.text('filter')"
+        :aria-label="$store.podcasts.text('filter')"
+    /><select x-model="$store.podcasts.season" :aria-label="$store.podcasts.text('season')">
+        <option value="" x-text="$store.podcasts.text('allSeasons')"></option>
+        <template x-for="season in $store.podcasts.seasons()" :key="season"
+            ><option :value="season" x-text="$store.podcasts.text('season')+' '+season"></option
+        ></template></select
+    ><label
+        ><input type="checkbox" x-model="$store.podcasts.unplayedOnly" />
+        <span x-text="$store.podcasts.text('unplayedOnly')"></span
+    ></label>
+</div>
+<p
+    x-show="!$store.podcasts.filteredEpisodes().length"
+    x-text="$store.podcasts.text('noEpisodes')"
+></p>
+<template x-for="episode in $store.podcasts.filteredEpisodes()" :key="episode.id"
+    ><article class="podcast-episode">
+        <h3 x-text="episode.metadata.title"></h3>
+        <div x-text="$store.podcasts.date(episode.metadata.published_at_ms)"></div>
+        <details x-show="episode.metadata.description">
+            <summary x-text="$store.podcasts.text('description')"></summary>
+            <p class="podcast-description" x-text="episode.metadata.description"></p>
+        </details>
+        <div class="podcast-toolbar">
+            <button
+                class="release-action-btn secondary"
+                @click="$store.podcasts.play(episode)"
+                x-text="$store.podcasts.text(episode.position_ms&&!episode.completed?'resume':'play')"
+            ></button
+            ><button
+                class="release-action-btn secondary"
+                @click="$store.podcasts.download(episode)"
+                :disabled="episode.cached||episode.downloading"
+                x-text="$store.podcasts.text(episode.cached?'saved':episode.downloading?'downloading':'download')"
+            ></button
+            ><button
+                class="release-action-btn secondary"
+                @click="$store.podcasts.mark(episode)"
+                x-text="$store.podcasts.text(episode.completed?'markUnplayed':'markPlayed')"
+            ></button
+            ><button
+                class="release-action-btn secondary"
+                x-show="episode.position_ms"
+                @click="$store.podcasts.restart(episode)"
+                x-text="$store.podcasts.text('restart')"
+            ></button>
+        </div>
+        <div role="status" x-show="episode.error" x-text="episode.error"></div></article></template
+><button
+    class="release-action-btn secondary"
+    x-show="$store.podcasts.hasMore"
+    @click="$store.podcasts.more()"
+    :disabled="$store.podcasts.busy"
+    x-text="$store.podcasts.text('loadMore')"
+></button>

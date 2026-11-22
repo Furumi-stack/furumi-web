@@ -4,7 +4,7 @@ const {test} = require('node:test');
 const vm = require('node:vm');
 const source = readFileSync(`${__dirname}/../templates/player/podcast_scripts.html`, 'utf8').replace(/<\/?script>/g, '');
 function setup(responder=()=>({})) {
-    const calls=[],stores={library:{view:'artists',_beginNavigation(){}},mobile:{closeLibrary(){}},player:{_playLocal(track,options){this.currentTrack=track;this.options=options;},seek(){}}};
+    const calls=[],stores={library:{view:'artists',_beginNavigation(){},_afterNavigation(){}},mobile:{closeLibrary(){}},player:{_playLocal(track,options){this.currentTrack=track;this.options=options;},seek(){}}};
     vm.runInNewContext(source,{
         document:{documentElement:{lang:'ru'},addEventListener(_,fn){fn();}},
         Alpine:{store(name,value){if(value)stores[name]=value;return stores[name];}},
@@ -74,7 +74,7 @@ test('opening podcast navigation starts polling and search results open existing
     const {store,stores,calls}=setup(body=>body.action==='list'?{mine:[podcast],public:[]}:body.action==='episodes'?{episodes:[],has_more:false}:{});
     await store.enter();assert.equal(store.poller,1);assert.equal(stores.library.view,'podcasts');
     stores.library.view='search';await store.openResult(podcast);
-    assert.equal(stores.library.view,'podcasts');assert.equal(store.selected.id,'show');
+    assert.equal(stores.library.view,'podcast_detail');assert.equal(store.selected.id,'show');
     assert.equal(calls.filter(c=>c.action==='add').length,0);
 });
 
@@ -83,4 +83,39 @@ test('podcast search displays matching results instead of retaining unrelated pu
     store.public=[{id:'unrelated'}];store.query='космос';await store.search();
     assert.deepEqual(Array.from(store.publicCards(),p=>p.id),['matching']);
     store.resetSearch();assert.deepEqual(Array.from(store.publicCards(),p=>p.id),['unrelated']);
+});
+
+test('public podcast cards preview details without subscribing; only the subscribe button adds the feed',async()=>{
+    const pod={id:'public',url:'https://example.test/feed',metadata:{title:'Public',image_url:'https://example.test/cover.jpg'}};
+    let subscribed=false;
+    const {store,stores,calls}=setup(body=>{
+        if(body.action==='add'){subscribed=true;return {id:pod.id};}
+        if(body.action==='list')return {mine:subscribed?[pod]:[],public:[pod]};
+        return {episodes:[],has_more:false};
+    });
+    await store.open(pod);assert.equal(stores.library.view,'podcast_detail');
+    assert.equal(store.selected.subscribed,false);assert.equal(calls.filter(c=>c.action==='add').length,0);
+    assert.equal(calls.filter(c=>c.action==='episodes').length,0);
+    await store.subscribe();assert.equal(store.selected.subscribed,true);
+    assert.equal(calls.filter(c=>c.action==='add').length,1);assert.equal(calls.filter(c=>c.action==='episodes').length,1);
+    assert.equal(store.artwork(pod),pod.metadata.image_url);store.artworkFailed(pod);assert.equal(store.artwork(pod),null);
+});
+
+test('back navigation wins over a slow detail request',async()=>{
+    let finish;
+    const {store,stores}=setup(body=>body.action==='detail'?new Promise(resolve=>{finish=resolve;}):{mine:[],public:[]});
+    const opened=store.open('slow');while(!finish)await new Promise(resolve=>setImmediate(resolve));
+    await store.enter();finish({id:'slow',metadata:{title:'Old'}});await opened;
+    assert.equal(stores.library.view,'podcasts');assert.equal(store.selected,null);assert.equal(store.loading,false);
+});
+
+test('hash routing restores both the podcast list and a selected podcast',()=>{
+    const script=readFileSync(`${__dirname}/../templates/player/scripts.html`,'utf8');
+    const start=script.indexOf('        _navigateFromHash(options = {}) {');const end=script.indexOf('        _scrollElement()',start);
+    const calls=[],location={hash:'#podcasts'};
+    const context=vm.createContext({GUEST:false,location,URLSearchParams,Alpine:{store(){return {enter(options){calls.push(['list',options]);},open(id,options){calls.push(['detail',id,options]);}};}}});
+    const library=vm.runInContext('({'+script.slice(start,end)+'})',context);library.goArtists=()=>{throw Error('unexpected artist navigation');};
+    library._navigateFromHash({fromHash:true});assert.equal(calls[0][0],'list');assert.equal(calls[0][1].fromHash,true);
+    location.hash='#podcast?id='+encodeURIComponent('pod1:fixture');library._navigateFromHash({fromHash:true});
+    assert.equal(calls[1][0],'detail');assert.equal(calls[1][1],'pod1:fixture');
 });

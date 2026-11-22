@@ -1,0 +1,18 @@
+<button
+    type="button"
+    class="card podcast-tile"
+    @click="$store.podcasts.open(pod)"
+    :title="pod.metadata.title"
+>
+    <div class="card-img podcast-artwork">{% include "player/podcast_artwork.html" %}</div>
+    <div class="card-title" x-text="pod.metadata.title"></div>
+    <div
+        class="card-subtitle"
+        x-text="pod.metadata.author || $store.podcasts.text('podcasts')"
+    ></div>
+    <div
+        class="card-subtitle"
+        x-show="pod.episodes != null"
+        x-text="(pod.episodes || 0) + ' ' + $store.podcasts.text('episodes') + (pod.new_episodes ? ' · ' + pod.new_episodes + ' ' + $store.podcasts.text('unplayed') : '')"
+    ></div>
+</button>

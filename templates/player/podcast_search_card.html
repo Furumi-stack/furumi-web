@@ -1,0 +1,15 @@
+<button
+    type="button"
+    class="search-release-card podcast-tile"
+    @click="$store.podcasts.open(pod)"
+    :title="pod.metadata.title"
+>
+    <div class="search-release-cover podcast-artwork">
+        {% include "player/podcast_artwork.html" %}
+    </div>
+    <div class="card-title" x-text="pod.metadata.title"></div>
+    <div
+        class="card-subtitle"
+        x-text="pod.metadata.author || $store.podcasts.text('podcasts')"
+    ></div>
+</button>

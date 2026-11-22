@@ -104,17 +104,22 @@ async fn action(
     }
     match body.action.as_str() {
         "list" => return list(&pool, user, false).await,
+        "detail" => {
+            let detail:Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',p.id,'url',p.origin_url,'metadata',p.metadata,'subscribed',EXISTS(SELECT 1 FROM furumusic__podcast_subscription s WHERE s.user_id=$1 AND s.podcast_id=p.id),'episodes',(SELECT count(*) FROM furumusic__podcast_episode e WHERE e.podcast_id=p.id)) FROM furumusic__podcast p WHERE p.id=$2 AND EXISTS(SELECT 1 FROM furumusic__podcast_subscription s WHERE s.podcast_id=p.id AND (s.user_id=$1 OR s.shared))").bind(user).bind(&body.id).fetch_optional(&pool).await?;
+            return detail.context("podcast not found");
+        }
         "admin_list" => return list(&pool, user, true).await,
         "add" => {
             let id = subscribe(&pool, user, &body.url).await?;
             sync::ensure_subscribed(&pool, user, &id).await?;
             sync::seed_user(&pool, user).await?;
             let checked = refresh(&pool, &id).await;
+            let download_id = id.clone();
             tokio::spawn(async move {
-                let _ = download_pending(&pool, &config, Some(&id)).await;
+                let _ = download_pending(&pool, &config, Some(&download_id)).await;
             });
             return Ok(
-                json!({"ok":true,"warning":checked.err().map(|_| "Feed check failed; the subscription was saved") }),
+                json!({"ok":true,"id":id,"warning":checked.err().map(|_| "Feed check failed; the subscription was saved") }),
             );
         }
         "remove" => {

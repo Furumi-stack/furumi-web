@@ -1,174 +1,211 @@
-<style>
-    .podcast-nav{appearance:none;border:0;background:transparent;width:100%;font:inherit;text-align:left}
-
-    .podcast-page{padding:20px;max-width:1100px;margin:auto}.podcast-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0}.podcast-toolbar input,.podcast-toolbar select{background:var(--bg-secondary,#171c28);color:inherit;border:1px solid var(--border,#384052);border-radius:8px;padding:10px;max-width:100%}.podcast-toolbar input[type=text]{flex:1;min-width:160px}.podcast-page button,.podcast-card button{border:1px solid var(--border,#384052);background:var(--bg-secondary,#171c28);color:inherit;border-radius:8px;padding:8px 12px;cursor:pointer}.podcast-page button:disabled,.podcast-card button:disabled{opacity:.5}.podcast-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:14px;margin:16px 0 28px}.podcast-card,.podcast-episode{border:1px solid var(--border,#384052);border-radius:12px;padding:16px;overflow-wrap:anywhere}.podcast-card h3,.podcast-episode h3{margin:0 0 8px}.podcast-description{color:var(--text-secondary,#a2a9b8);white-space:pre-line;margin:8px 0}.podcast-episode{margin:10px 0}.podcast-notice{padding:12px 0;color:var(--accent,#67e8f9)}@media(max-width:600px){.podcast-page{padding:12px}.podcast-page button,.podcast-page input,.podcast-page select{min-height:44px;font-size:16px}}
-</style>
 <template x-if="$store.library.view === 'podcasts'">
-    <section class="podcast-page">
-        <h1 x-text="$store.podcasts.text('podcasts')"></h1>
-        <form class="podcast-toolbar" @submit.prevent="$store.podcasts.add()">
+    <section>
+        <div class="podcast-heading">
+            <h1 class="section-title" x-text="$store.podcasts.text('podcasts')"></h1>
+            <div class="release-actions">
+                <button
+                    class="release-action-btn secondary"
+                    @click="$store.podcasts.refreshAll()"
+                    :disabled="$store.podcasts.busy || $store.podcasts.loading"
+                    x-text="$store.podcasts.text('checkAll')"
+                ></button>
+                <button
+                    class="release-action-btn primary"
+                    @click="$store.podcasts.adding=!$store.podcasts.adding"
+                    :aria-expanded="$store.podcasts.adding"
+                    aria-controls="podcast-add-feed"
+                    x-text="$store.podcasts.text('add')"
+                ></button>
+            </div>
+        </div>
+        <form
+            id="podcast-add-feed"
+            class="podcast-toolbar"
+            x-show="$store.podcasts.adding"
+            x-cloak
+            @submit.prevent="$store.podcasts.add()"
+        >
             <input
                 type="text"
                 x-model="$store.podcasts.url"
                 placeholder="RSS / Atom URL"
                 aria-label="RSS / Atom URL"
                 required
-            /><button :disabled="$store.podcasts.busy" x-text="$store.podcasts.text('add')"></button
-            ><button
-                type="button"
-                @click="$store.podcasts.refreshAll()"
+            />
+            <button
+                class="release-action-btn primary"
                 :disabled="$store.podcasts.busy"
-                x-text="$store.podcasts.text('checkAll')"
-            ></button>
-        </form>
-        <div
-            role="status"
-            aria-live="polite"
-            class="podcast-notice"
-            x-text="$store.podcasts.message"
-        ></div>
-        <h2 x-text="$store.podcasts.text('mine')"></h2>
-        <p x-show="!$store.podcasts.mine.length" x-text="$store.podcasts.text('empty')"></p>
-        <div class="podcast-grid">
-            <template x-for="pod in $store.podcasts.mine" :key="pod.id"
-                ><article class="podcast-card">
-                    <h3>
-                        <button
-                            @click="$store.podcasts.open(pod)"
-                            x-text="pod.metadata.title"
-                        ></button>
-                    </h3>
-                    <div x-text="pod.metadata.author"></div>
-                    <div
-                        class="podcast-description"
-                        x-text="pod.episodes+' · '+pod.new_episodes+' '+$store.podcasts.text('unplayed')"
-                    ></div>
-                    <div x-show="pod.error" x-text="pod.error"></div>
-                    <div class="podcast-toolbar">
-                        <button
-                            @click="$store.podcasts.refresh(pod)"
-                            :disabled="$store.podcasts.busy"
-                            x-text="$store.podcasts.text('check')"
-                        ></button
-                        ><button
-                            @click="$store.podcasts.share(pod)"
-                            :disabled="$store.podcasts.busy"
-                            x-text="$store.podcasts.text(pod.shared?'unpublish':'publish')"
-                        ></button
-                        ><button
-                            @click="$store.podcasts.remove(pod)"
-                            :disabled="$store.podcasts.busy"
-                            x-text="$store.podcasts.text('remove')"
-                        ></button>
-                    </div></article
-            ></template>
-        </div>
-        <template x-if="$store.podcasts.selected"
-            ><section>
-                <h2 x-text="$store.podcasts.selected.metadata.title"></h2>
-                <p
-                    class="podcast-description"
-                    x-text="$store.podcasts.selected.metadata.description"
-                ></p>
-                <div class="podcast-toolbar">
-                    <input
-                        type="text"
-                        x-model="$store.podcasts.filter"
-                        :placeholder="$store.podcasts.text('filter')"
-                        :aria-label="$store.podcasts.text('filter')"
-                    /><select
-                        x-model="$store.podcasts.season"
-                        :aria-label="$store.podcasts.text('season')"
-                    >
-                        <option value="" x-text="$store.podcasts.text('allSeasons')"></option>
-                        <template x-for="season in $store.podcasts.seasons()" :key="season"
-                            ><option
-                                :value="season"
-                                x-text="$store.podcasts.text('season')+' '+season"
-                            ></option
-                        ></template></select
-                    ><label
-                        ><input type="checkbox" x-model="$store.podcasts.unplayedOnly" />
-                        <span x-text="$store.podcasts.text('unplayedOnly')"></span
-                    ></label>
-                </div>
-                <p
-                    x-show="!$store.podcasts.filteredEpisodes().length"
-                    x-text="$store.podcasts.text('noEpisodes')"
-                ></p>
-                <template x-for="episode in $store.podcasts.filteredEpisodes()" :key="episode.id"
-                    ><article class="podcast-episode">
-                        <h3 x-text="episode.metadata.title"></h3>
-                        <div x-text="$store.podcasts.date(episode.metadata.published_at_ms)"></div>
-                        <details x-show="episode.metadata.description">
-                            <summary x-text="$store.podcasts.text('description')"></summary>
-                            <p
-                                class="podcast-description"
-                                x-text="episode.metadata.description"
-                            ></p>
-                        </details>
-                        <div class="podcast-toolbar">
-                            <button
-                                @click="$store.podcasts.play(episode)"
-                                x-text="$store.podcasts.text(episode.position_ms&&!episode.completed?'resume':'play')"
-                            ></button
-                            ><button
-                                @click="$store.podcasts.download(episode)"
-                                :disabled="episode.cached||episode.downloading"
-                                x-text="$store.podcasts.text(episode.cached?'saved':episode.downloading?'downloading':'download')"
-                            ></button
-                            ><button
-                                @click="$store.podcasts.mark(episode)"
-                                x-text="$store.podcasts.text(episode.completed?'markUnplayed':'markPlayed')"
-                            ></button
-                            ><button
-                                x-show="episode.position_ms"
-                                @click="$store.podcasts.restart(episode)"
-                                x-text="$store.podcasts.text('restart')"
-                            ></button>
-                        </div>
-                        <div
-                            role="status"
-                            x-show="episode.error"
-                            x-text="episode.error"
-                        ></div></article></template
-                ><button
-                    x-show="$store.podcasts.hasMore"
-                    @click="$store.podcasts.more()"
-                    :disabled="$store.podcasts.busy"
-                    x-text="$store.podcasts.text('loadMore')"
-                ></button></section
-        ></template>
-        <h2 x-text="$store.podcasts.text($store.podcasts.searched?'results':'public')"></h2>
-        <form class="podcast-toolbar" @submit.prevent="$store.podcasts.search()">
-            <input
-                type="text"
-                x-model="$store.podcasts.query"
-                @input="$store.podcasts.resetSearch()"
-                :placeholder="$store.podcasts.text('searchNetwork')"
-                :aria-label="$store.podcasts.text('searchNetwork')"
-                minlength="2"
-                maxlength="200"
-            /><button
-                :disabled="$store.podcasts.busy"
-                x-text="$store.podcasts.text('search')"
+                x-text="$store.podcasts.text('subscribe')"
             ></button>
         </form>
         <p
-            x-show="!$store.podcasts.publicCards().length"
-            x-text="$store.podcasts.text($store.podcasts.searched?'noMatches':'noPublic')"
+            class="podcast-notice"
+            role="status"
+            aria-live="polite"
+            x-show="$store.podcasts.message"
+            x-text="$store.podcasts.message"
         ></p>
-        <div class="podcast-grid">
-            <template x-for="pod in $store.podcasts.publicCards()" :key="pod.id"
-                ><article class="podcast-card">
-                    <h3 x-text="pod.metadata.title"></h3>
-                    <div x-text="pod.metadata.author"></div>
-                    <p class="podcast-description" x-text="pod.metadata.description"></p>
+        <h2 class="podcast-section-title" x-text="$store.podcasts.text('mine')"></h2>
+        <div
+            class="loading-spinner"
+            x-show="$store.podcasts.loading && !$store.podcasts.mine.length"
+        >
+            <div class="spinner"></div>
+        </div>
+        <div class="empty-state" x-show="!$store.podcasts.loading && !$store.podcasts.mine.length">
+            <p x-text="$store.podcasts.text('empty')"></p>
+        </div>
+        <div class="card-grid">
+            <template x-for="pod in $store.podcasts.mine" :key="pod.id"
+                >{% include "player/podcast_card.html" %}</template
+            >
+        </div>
+        <section class="podcast-section">
+            <h2
+                class="podcast-section-title"
+                x-text="$store.podcasts.text($store.podcasts.searched?'results':'public')"
+            ></h2>
+            <form class="podcast-toolbar" @submit.prevent="$store.podcasts.search()">
+                <input
+                    type="text"
+                    x-model="$store.podcasts.query"
+                    @input="$store.podcasts.resetSearch()"
+                    :placeholder="$store.podcasts.text('searchNetwork')"
+                    :aria-label="$store.podcasts.text('searchNetwork')"
+                    minlength="2"
+                    maxlength="200"
+                />
+                <button
+                    class="release-action-btn secondary"
+                    :disabled="$store.podcasts.busy"
+                    x-text="$store.podcasts.text('search')"
+                ></button>
+            </form>
+            <div
+                class="empty-state"
+                x-show="!$store.podcasts.loading && !$store.podcasts.publicCards().length"
+            >
+                <p
+                    x-text="$store.podcasts.text($store.podcasts.searched?'noMatches':'noPublic')"
+                ></p>
+            </div>
+            <div class="card-grid">
+                <template x-for="pod in $store.podcasts.publicCards()" :key="pod.id"
+                    >{% include "player/podcast_card.html" %}</template
+                >
+            </div>
+        </section>
+    </section>
+</template>
+<template x-if="$store.library.view === 'podcast_detail'">
+    <section class="podcast-detail">
+        <div class="breadcrumb">
+            <a
+                href="#podcasts"
+                @click.prevent="$store.podcasts.enter()"
+                x-text="$store.podcasts.text('podcasts')"
+            ></a
+            ><span>/</span>
+            <span
+                x-text="$store.podcasts.selected?.metadata.title || $store.podcasts.text($store.podcasts.loading?'working':'notFound')"
+            ></span>
+        </div>
+        <div class="loading-spinner" x-show="$store.podcasts.loading && !$store.podcasts.selected">
+            <div class="spinner"></div>
+        </div>
+        <p
+            class="podcast-notice"
+            role="status"
+            aria-live="polite"
+            x-show="$store.podcasts.message"
+            x-text="$store.podcasts.message"
+        ></p>
+        <template
+            x-for="pod in ($store.podcasts.selected ? [$store.podcasts.selected] : [])"
+            :key="pod.id"
+        >
+            <div>
+                <div class="release-header">
+                    <div class="release-cover podcast-artwork">
+                        {% include "player/podcast_artwork.html" %}
+                    </div>
+                    <div class="release-meta">
+                        <h1 class="release-title" x-text="pod.metadata.title"></h1>
+                        <div class="release-artists" x-text="pod.metadata.author"></div>
+                        <div class="artist-stats" x-show="pod.episodes != null">
+                            <span
+                                x-text="(pod.episodes || 0) + ' ' + $store.podcasts.text('episodes')"
+                            ></span
+                            ><span
+                                x-show="pod.subscribed && pod.new_episodes"
+                                x-text="' · ' + pod.new_episodes + ' ' + $store.podcasts.text('unplayed')"
+                            ></span>
+                        </div>
+                        <div class="release-actions">
+                            <template x-if="!pod.subscribed"
+                                ><button
+                                    class="release-action-btn primary"
+                                    @click="$store.podcasts.subscribe(pod)"
+                                    :disabled="$store.podcasts.busy"
+                                    x-text="$store.podcasts.text('subscribe')"
+                                ></button
+                            ></template>
+                            <template x-if="pod.subscribed"
+                                ><div class="podcast-detail-actions">
+                                    <button
+                                        class="release-action-btn secondary"
+                                        @click="$store.podcasts.refresh(pod)"
+                                        :disabled="$store.podcasts.busy"
+                                        x-text="$store.podcasts.text('check')"
+                                    ></button>
+                                    <button
+                                        class="release-action-btn secondary"
+                                        @click="$store.podcasts.share(pod)"
+                                        :disabled="$store.podcasts.busy"
+                                        x-text="$store.podcasts.text(pod.shared?'unpublish':'publish')"
+                                    ></button>
+                                    <button
+                                        class="release-action-btn secondary"
+                                        @click="$store.podcasts.remove(pod)"
+                                        :disabled="$store.podcasts.busy"
+                                        x-text="$store.podcasts.text('remove')"
+                                    ></button></div
+                            ></template>
+                        </div>
+                    </div>
+                </div>
+                <div class="podcast-description-section" x-show="pod.metadata.description">
+                    <p
+                        id="podcast-description"
+                        class="podcast-description"
+                        x-text="$store.podcasts.description(pod)"
+                    ></p>
                     <button
-                        @click="$store.podcasts.openResult(pod)"
-                        :disabled="$store.podcasts.busy"
-                        x-text="$store.podcasts.text(pod.subscribed||$store.podcasts.mine.some(p=>p.id===pod.id)?'open':'subscribe')"
-                    ></button></article
-            ></template>
-        </div></section
-></template>
+                        class="artist-top-tracks-toggle"
+                        x-show="(pod.metadata.description || '').length>360"
+                        @click="$store.podcasts.descriptionExpanded=!$store.podcasts.descriptionExpanded"
+                        :aria-expanded="$store.podcasts.descriptionExpanded"
+                        aria-controls="podcast-description"
+                        x-text="$store.podcasts.text($store.podcasts.descriptionExpanded?'showLess':'showMore')"
+                    ></button>
+                </div>
+                <p class="podcast-notice" x-show="pod.error" x-text="pod.error"></p>
+                <template x-if="pod.subscribed"
+                    ><section>
+                        <div class="loading-spinner" x-show="$store.podcasts.loading">
+                            <div class="spinner"></div>
+                        </div>
+                        <div x-show="!$store.podcasts.loading">
+                            {% include "player/podcast_episodes.html" %}
+                        </div>
+                    </section></template
+                >
+                <p
+                    class="podcast-notice"
+                    x-show="!pod.subscribed"
+                    x-text="$store.podcasts.text('subscribeHint')"
+                ></p>
+            </div>
+        </template>
+    </section>
+</template>
