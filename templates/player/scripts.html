@@ -3154,6 +3154,7 @@ document.addEventListener('alpine:init', () => {
         openTrackInfo(track) {
             const rows = this.trackInfoRows(track).map(row => GUEST && row.links
                 ? {...row, value: row.links.map(link => link.label).join(', '), links: null} : row);
+            rows.push({label:Alpine.store('lyrics').text('lyrics'), value:track.has_lyrics ? Alpine.store('lyrics').text('available') : Alpine.store('lyrics').text('unavailable'), run:()=>{Alpine.store('info').close();Alpine.store('lyrics').open(track,false);}});
             const actions = [{label:T.download, run:() => this.downloadTrack(track)}];
             if (!GUEST) actions.push({label:T.findSimilar, run:() => this.searchSimilar(track)});
             Alpine.store('info').openRows(T.trackInfoTitle, rows, actions);

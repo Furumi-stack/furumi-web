@@ -26,6 +26,7 @@
                                     <tr>
                                         <th x-text="row.label"></th>
                                         <td>
+                                            <template x-if="typeof row.run === 'function'"><button class="info-link" type="button" @click="row.run()" x-text="row.value"></button></template>
                                             <template x-if="row.links && row.links.length">
                                                 <div class="info-link-list">
                                                     <template x-for="link in row.links" :key="link.type + '-' + link.id + '-' + link.label">
@@ -33,7 +34,7 @@
                                                     </template>
                                                 </div>
                                             </template>
-                                            <template x-if="!row.links || !row.links.length">
+                                            <template x-if="(!row.links || !row.links.length) && !row.run">
                                                 <span x-text="row.value"></span>
                                             </template>
                                         </td>
@@ -1187,7 +1188,8 @@
                             </div>
                             <div class="history-date" x-text="$store.history.date(item.played_at)"></div>
                             <div class="track-actions">
-                                <button class="track-action-btn info-btn popularity-info-btn"
+                                <button class="track-action-btn lyrics-presence" type="button" x-show="item.track.has_lyrics" @click.stop="$store.lyrics.open(item.track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="track-action-btn info-btn popularity-info-btn"
                                         :class="{ 'has-popularity': $store.library.hasPopularity(item.track), 'no-popularity': !$store.library.hasPopularity(item.track) }"
                                         :style="$store.library.popularityStyle(item.track)"
                                         @click.stop="$store.library.openTrackInfo(item.track)"

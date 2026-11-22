@@ -3215,6 +3215,9 @@ async fn load_user_upload_tracks(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let track_ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let lyrics_ids = crate::lyrics::available_track_ids(pool, &track_ids)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
     let track_artists = if track_ids.is_empty() {
         Vec::new()
     } else {
@@ -3280,6 +3283,7 @@ async fn load_user_upload_tracks(
                     lastfm_playcount: row.lastfm_playcount,
                     lastfm_rating: row.lastfm_rating,
                     lastfm_updated_at: row.lastfm_updated_at,
+                    has_lyrics: lyrics_ids.contains(&track_id),
                 },
                 media_file_id: row.media_file_id,
                 is_hidden: row.is_hidden,
@@ -4098,6 +4102,9 @@ async fn artist_detail_handler(
         }
     }
 
+    let lyrics_ids = crate::lyrics::available_track_ids(pool, &featured_track_ids)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
     let featured_tracks: Vec<ArtistAppearanceTrack> = featured_rows
         .into_iter()
         .map(|t| {
@@ -4127,6 +4134,7 @@ async fn artist_detail_handler(
                 lastfm_playcount: t.lastfm_playcount,
                 lastfm_rating: t.lastfm_rating,
                 lastfm_updated_at: t.lastfm_updated_at,
+                has_lyrics: lyrics_ids.contains(&tid),
             }
         })
         .collect();
@@ -4479,6 +4487,9 @@ async fn build_track_items(
     pool: &sqlx::PgPool,
 ) -> cot::Result<Vec<TrackItem>> {
     let track_ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
+    let lyrics_ids = crate::lyrics::available_track_ids(pool, &track_ids)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
     let mut content_ids: HashMap<i64, String> = if track_ids.is_empty() {
         HashMap::new()
     } else {
@@ -4570,6 +4581,7 @@ async fn build_track_items(
                 lastfm_playcount: t.lastfm_playcount,
                 lastfm_rating: t.lastfm_rating,
                 lastfm_updated_at: t.lastfm_updated_at,
+                has_lyrics: lyrics_ids.contains(&tid),
             }
         })
         .collect())
@@ -6884,6 +6896,9 @@ async fn search_handler(
 
     // Collect track IDs for batch artist lookup
     let track_ids: Vec<i64> = track_rows.iter().map(|t| t.id).collect();
+    let lyrics_ids = crate::lyrics::available_track_ids(pool, &track_ids)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let track_artists = if track_ids.is_empty() {
         Vec::new()
@@ -6985,6 +7000,7 @@ async fn search_handler(
                 lastfm_playcount: t.lastfm_playcount,
                 lastfm_rating: t.lastfm_rating,
                 lastfm_updated_at: t.lastfm_updated_at,
+                has_lyrics: lyrics_ids.contains(&tid),
             }
         })
         .collect();
@@ -10023,6 +10039,29 @@ impl App for PlayerApp {
                 }), "player_shared_media",
             ),
             Route::with_handler_and_name(
+                "/lyrics/{track_id}", get({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |db: Database, auth_ctx: auth::AuthContext, session: Session, path: Path<PathTrackId>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            if auth::get_request_user(&auth_ctx,&session,&db).await.is_none() {
+                                return Ok(json_error(StatusCode::UNAUTHORIZED,"not authenticated"));
+                            }
+                            let pg_pool = pool.get_or_init(|| async {
+                                sqlx::postgres::PgPoolOptions::new().max_connections(5)
+                                    .connect(&pool_config.database_url).await.expect("player pool")
+                            }).await;
+                            match crate::lyrics::for_track(pg_pool,path.0.track_id,true).await.map_err(|e|cot::Error::internal(e.to_string()))? {
+                                Some(value)=>Json(value).into_response(),
+                                None=>Ok(json_error(StatusCode::NOT_FOUND,"track not found")),
+                            }
+                        }
+                    }
+                }), "player_lyrics",
+            ),
+            Route::with_handler_and_name(
                 "/download/{track_id}", get({
                     let pool = Arc::clone(&pool);
                     let pool_config = Arc::clone(&pool_config);
@@ -10713,6 +10752,19 @@ impl App for PlayerApp {
                     },
                 ),
                 "player_federation_artist_events",
+            ),
+            Route::with_handler_and_name(
+                "/federation/tracks/lyrics", get(
+                    move |auth_ctx: auth::AuthContext, session: Session, db: Database, query: UrlQuery<FederationLyricsQuery>| async move {
+                        if auth::get_request_user(&auth_ctx,&session,&db).await.is_none() {
+                            return Ok(json_error(StatusCode::UNAUTHORIZED,"not authenticated"));
+                        }
+                        match crate::federation::handle().track_lyrics(&query.0.owner,&query.0.content_id).await {
+                            Ok(value)=>Json(value).into_response(),
+                            Err(error)=>Ok(json_error(StatusCode::BAD_REQUEST,&error.to_string())),
+                        }
+                    }
+                ), "player_federation_lyrics",
             ),
             Route::with_handler_and_name(
                 "/federation/tracks/artwork",

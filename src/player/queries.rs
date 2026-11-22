@@ -94,6 +94,12 @@ pub(super) struct PathTrackId {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct FederationLyricsQuery {
+    pub(super) owner: String,
+    pub(super) content_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct PathMediaFileId {
     pub(super) media_file_id: i64,
 }

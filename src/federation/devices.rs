@@ -2786,21 +2786,37 @@ async fn apply_playback_snapshot(
     let Some(coordination) = &snapshot.coordination else {
         return Ok(());
     };
-    let owner = with_playback_engine(pool, user_id, &identity, |engine| {
-        if !engine.observe(&snapshot.device_id, coordination, playback_clock()) {
-            return None;
-        }
-        engine
-            .announcement_is_current(&snapshot.device_id, coordination)
-            .then(|| snapshot.device_id.clone())
-    })
-    .await?;
+    // Materialization can be slower than the next peer poll. Do not advance
+    // the accepted heartbeat until this snapshot's queue is ready: otherwise
+    // every arriving snapshot can invalidate the previous projection forever.
     let payload = web_playback_payload(pool, &snapshot.state).await?;
-    let active = owner.as_deref() == Some(snapshot.device_id.as_str())
-        && with_playback_engine(pool, user_id, &identity, |engine| {
-            engine.announcement_is_current(&snapshot.device_id, coordination)
-        })
-        .await?;
+    with_playback_engine_after(
+        pool,
+        user_id,
+        &identity,
+        |engine| engine.observe(&snapshot.device_id, coordination, playback_clock()),
+        |engine, accepted| {
+            if !accepted {
+                return Ok(());
+            }
+            project_ready_playback_snapshot(engine, &hub, user_id, &snapshot, payload)
+        },
+    )
+    .await??;
+    Ok(())
+}
+
+// Runs under the per-account coordinator lock, after its checkpoint committed.
+fn project_ready_playback_snapshot(
+    engine: &Engine,
+    hub: &PlayerDeviceHub,
+    user_id: i64,
+    snapshot: &PlaybackSnapshot,
+    payload: serde_json::Value,
+) -> Result<()> {
+    let active = snapshot.coordination.as_ref().is_some_and(|coordination| {
+        engine.announcement_is_current(&snapshot.device_id, coordination)
+    });
     hub.apply_fed_playback_state_json(
         user_id,
         &snapshot.device_id,
@@ -2808,8 +2824,7 @@ async fn apply_playback_snapshot(
         active,
         payload,
     )
-    .map_err(|message| anyhow::anyhow!(message))?;
-    Ok(())
+    .map_err(|message| anyhow::anyhow!(message))
 }
 
 async fn enqueue_web_transfer(
@@ -3483,6 +3498,18 @@ async fn with_playback_engine<R>(
     identity: &Identity,
     f: impl FnOnce(&mut Engine) -> R,
 ) -> Result<R> {
+    with_playback_engine_after(pool, user_id, identity, f, |_, result| result).await
+}
+
+// Keep projection serialized with observation and durable ownership, without
+// holding the coordinator lock while resolving the audio catalog.
+async fn with_playback_engine_after<R, T>(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    identity: &Identity,
+    f: impl FnOnce(&mut Engine) -> R,
+    after_commit: impl FnOnce(&Engine, R) -> T,
+) -> Result<T> {
     static SESSIONS: std::sync::OnceLock<PlaybackSessions> = std::sync::OnceLock::new();
     let session = {
         let mut sessions = SESSIONS
@@ -3535,7 +3562,7 @@ async fn with_playback_engine<R>(
             *engine = previous; return Err(error.into());
         }
     }
-    Ok(result)
+    Ok(after_commit(engine, result))
 }
 
 fn playback_clock() -> u64 {

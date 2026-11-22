@@ -521,7 +521,8 @@
                                             </div>
                                             <span></span>
                                             <div class="track-actions">
-                                                <button class="track-action-btn info-btn popularity-info-btn"
+                                                <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics" @click.stop="$store.lyrics.open(track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="track-action-btn info-btn popularity-info-btn"
                                                         :class="{ 'has-popularity': $store.library.hasPopularity(track), 'no-popularity': !$store.library.hasPopularity(track) }"
                                                         :style="$store.library.popularityStyle(track)"
                                                         @click.stop="$store.library.openTrackInfo(track)"
@@ -894,7 +895,8 @@
                                     </div>
                                     <span></span>
                                     <div class="track-actions">
-                                        <button class="track-action-btn info-btn popularity-info-btn"
+                                        <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics" @click.stop="$store.lyrics.open(track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="track-action-btn info-btn popularity-info-btn"
                                                 :class="{ 'has-popularity': $store.library.hasPopularity(track), 'no-popularity': !$store.library.hasPopularity(track) }"
                                                 :style="$store.library.popularityStyle(track)"
                                                 @click.stop="$store.library.openTrackInfo(track)"
@@ -1123,7 +1125,8 @@
                                     </div>
                                     <span></span>
                                     <div class="track-actions">
-                                        <button class="track-action-btn info-btn popularity-info-btn"
+                                        <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics" @click.stop="$store.lyrics.open(track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="track-action-btn info-btn popularity-info-btn"
                                                 :class="{ 'has-popularity': $store.library.hasPopularity(track), 'no-popularity': !$store.library.hasPopularity(track) }"
                                                 :style="$store.library.popularityStyle(track)"
                                                 @click.stop="$store.library.openTrackInfo(track)"
@@ -1303,7 +1306,8 @@
                             </div>
                             <span></span>
                             <div class="track-actions">
-                                <button class="track-action-btn info-btn popularity-info-btn"
+                                <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics" @click.stop="$store.lyrics.open(track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="track-action-btn info-btn popularity-info-btn"
                                         :class="{ 'has-popularity': $store.library.hasPopularity(track), 'no-popularity': !$store.library.hasPopularity(track) }"
                                         :style="$store.library.popularityStyle(track)"
                                         @click.stop="track.federation_pending ? $store.library.openFederationTrackInfo(track._federationTrack) : $store.library.openTrackInfo(track)"
@@ -1470,7 +1474,8 @@
                             </div>
                             <span></span>
                             <div class="track-actions">
-                                <button class="track-action-btn info-btn popularity-info-btn"
+                                <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics" @click.stop="$store.lyrics.open(track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="track-action-btn info-btn popularity-info-btn"
                                         :class="{ 'has-popularity': $store.library.hasPopularity(track), 'no-popularity': !$store.library.hasPopularity(track) }"
                                         :style="$store.library.popularityStyle(track)"
                                         @click.stop="track.federation_pending ? $store.library.openFederationTrackInfo(track._federationTrack) : $store.library.openTrackInfo(track)"
@@ -1599,7 +1604,8 @@
                             </div>
                         </div>
                         <div class="queue-track-actions">
-                            <button class="queue-track-remove info-btn popularity-info-btn"
+                            <button class="track-action-btn lyrics-presence" type="button" x-show="item.track.has_lyrics" @click.stop="$store.lyrics.open(item.track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+<button class="queue-track-remove info-btn popularity-info-btn"
                                     :class="{ 'has-popularity': $store.library.hasPopularity(item.track), 'no-popularity': !$store.library.hasPopularity(item.track) }"
                                     :style="$store.library.popularityStyle(item.track)"
                                     @click.stop="item.track.federation_pending ? $store.library.openFederationTrackInfo(item.track._federationTrack) : $store.library.openTrackInfo(item.track)"
@@ -1680,6 +1686,9 @@
                 <button class="player-btn" :class="{ active: $store.player.shuffle }" @click="$store.player.toggleShuffle()" title="{{ t.player_shuffle }}">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
                 </button>
+            <button class="player-btn lyrics-toggle lyrics-toggle-mobile" type="button" @click.stop="$store.lyrics.open($store.player.currentTrack,true)" :disabled="!$store.player.currentTrack || !!$store.player.currentTrack.podcast" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>
+            </button>
                 <button class="player-btn player-btn-prev" @click="$store.player.prev()" title="{{ t.player_previous }}">
                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
                 </button>
@@ -1724,6 +1733,9 @@
             </div>
 
             <div class="player-right">
+            <button class="player-btn lyrics-toggle" type="button" @click.stop="$store.lyrics.open($store.player.currentTrack,true)" :disabled="!$store.player.currentTrack || !!$store.player.currentTrack.podcast" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>
+            </button>
             <div class="volume-control">
                 <button class="volume-btn" @click="$store.player.toggleMute()">
                     <template x-if="$store.player.volume === 0">

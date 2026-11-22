@@ -1,4 +1,11 @@
 <style>
+.lyrics-editor {grid-column:1 / -1;gap:12px}
+.lyrics-editor-version {border:1px solid var(--border-color);border-radius:10px;padding:16px;margin:12px 0;display:grid;gap:12px}
+.lyrics-editor-version label {display:grid;gap:6px}
+.lyrics-editor label:has(input[type=checkbox]) {display:flex;align-items:center;gap:8px}
+.lyrics-editor input[type=checkbox] {width:18px;height:18px;min-height:18px;flex:0 0 18px;padding:0;margin:0;accent-color:var(--accent)}
+.lyrics-editor-head {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.lyrics-editor-version textarea {width:100%;resize:vertical;min-height:100px;font-family:inherit;font-weight:400;line-height:1.5;text-transform:none}
 :root {
     --bg-primary: #121212;
     --bg-secondary: #181818;

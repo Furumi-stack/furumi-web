@@ -135,3 +135,102 @@ async fn localhost_tui_peer() {
     .await
     .expect("TUI/web exchange timed out");
 }
+
+fn projected_snapshot(
+    owner: &mut Engine,
+    title: &str,
+    now: u64,
+) -> (PlaybackSnapshot, serde_json::Value) {
+    owner.heartbeat(now);
+    let snapshot = PlaybackSnapshot {
+        device_id: "tui".into(),
+        device_name: "TUI".into(),
+        active: true,
+        updated_at_ms: now as i64,
+        state: serde_json::from_value(serde_json::json!({
+            "playing": true, "paused": false, "position_secs": 0.0,
+            "shuffle": false, "repeat": "off"
+        }))
+        .unwrap(),
+        coordination: Some(owner.announcement()),
+    };
+    let track = serde_json::json!({"id": now, "title": title});
+    let payload = serde_json::json!({
+        "track": track, "tracks": [track], "index": 0,
+        "position_seconds": 0.0, "duration_seconds": 200.0,
+        "paused": false, "shuffle": false, "repeat_mode": "off", "volume": 0.74
+    });
+    (snapshot, payload)
+}
+
+fn projection_engines() -> (Engine, Engine) {
+    let mut tui = Engine::new(
+        "tui".into(),
+        PlaybackConfig::default(),
+        Default::default(),
+        0,
+    );
+    tui.set_output(true, true);
+    assert!(tui.transfer("tui", 0));
+    let web = Engine::new(
+        "web".into(),
+        PlaybackConfig::passive(),
+        Default::default(),
+        0,
+    );
+    (tui, web)
+}
+
+#[test]
+fn control_projection_advances_while_newer_snapshots_are_still_materializing() {
+    let (mut tui, mut web) = projection_engines();
+    let hub = PlayerDeviceHub::default();
+    let (initial, initial_payload) = projected_snapshot(&mut tui, "Gabriela", 1);
+    assert!(web.observe("tui", initial.coordination.as_ref().unwrap(), 1));
+    project_ready_playback_snapshot(&web, &hub, 1, &initial, initial_payload).unwrap();
+
+    // Every slow catalog conversion overlaps the arrival of the next poll.
+    // Arrival must not call observe: ownership/liveness and hub projection
+    // advance together only once that snapshot has finished materializing.
+    let mut ready = projected_snapshot(&mut tui, "Track 2", 2);
+    for now in 3..8 {
+        let pending = projected_snapshot(&mut tui, &format!("Track {now}"), now);
+        assert!(web.observe("tui", ready.0.coordination.as_ref().unwrap(), now));
+        project_ready_playback_snapshot(&web, &hub, 1, &ready.0, ready.1).unwrap();
+        let state = hub.playback_state_json_for_commands(1).unwrap();
+        assert_eq!(state["track"]["title"], format!("Track {}", now - 1));
+        assert_eq!(state["tracks"][0]["title"], state["track"]["title"]);
+        assert_eq!(
+            hub.active_device_id_for_commands(1).as_deref(),
+            Some("fed:tui")
+        );
+        ready = pending;
+    }
+}
+
+#[test]
+fn delayed_projection_cannot_replace_a_newer_track_or_owner() {
+    let (mut tui, mut web) = projection_engines();
+    let hub = PlayerDeviceHub::default();
+    let (old, old_payload) = projected_snapshot(&mut tui, "Old", 1);
+    let (new, new_payload) = projected_snapshot(&mut tui, "Current", 2);
+    assert!(web.observe("tui", new.coordination.as_ref().unwrap(), 2));
+    project_ready_playback_snapshot(&web, &hub, 1, &new, new_payload).unwrap();
+    assert!(web.observe("tui", old.coordination.as_ref().unwrap(), 3));
+    project_ready_playback_snapshot(&web, &hub, 1, &old, old_payload.clone()).unwrap();
+    assert_eq!(
+        hub.playback_state_json_for_commands(1).unwrap()["track"]["title"],
+        "Current"
+    );
+
+    // A user can change ownership during catalog preparation. Recheck after
+    // preparation and keep the previous projection instead of applying it.
+    assert!(web.transfer("another-output", 4));
+    assert!(web.observe("tui", new.coordination.as_ref().unwrap(), 5));
+    project_ready_playback_snapshot(&web, &hub, 1, &new, old_payload).unwrap();
+    assert_eq!(
+        hub.playback_state_json_for_commands(1).unwrap()["track"]["title"],
+        "Current"
+    );
+    assert_eq!(web.owner(), Some("another-output"));
+}

@@ -1849,8 +1849,6 @@ dependencies = [
 [[package]]
 name = "federation-net"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e5c2e6e5af020dc202d4924125ef57719aa21f8d2567e2d943914386bc8980"
 dependencies = [
  "blake3",
  "data-encoding",
@@ -3906,9 +3904,7 @@ dependencies = [
 
 [[package]]
 name = "music-dht"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ce81f361952228654c28a46e41555f2c3d1520bf8c6c76562e7a53f70dd38e1"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "blake3",

@@ -10,6 +10,7 @@ mod jobs;
 mod lastfm;
 mod library_cleanup;
 mod local_uploads;
+mod lyrics;
 mod media_paths;
 mod metrics;
 mod music;
@@ -61,6 +62,7 @@ fn build_registry() -> Arc<JobRegistry> {
     registry.register(jobs::inbox_process::FileProcessJob);
     registry.register(jobs::archive_cleanup::ArchiveCleanupJob);
     registry.register(jobs::artwork_backfill::ArtworkBackfillJob);
+    registry.register(jobs::lyrics_backfill::LyricsBackfillJob);
     registry.register(jobs::metadata_backfill::MetadataBackfillJob);
     registry.register(jobs::lastfm_popularity::LastfmPopularityJob);
     registry.register(jobs::lastfm_scrobble::LastfmScrobbleJob);

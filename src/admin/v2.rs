@@ -128,6 +128,7 @@ pub(super) struct UpdateLibraryItemRequest {
     disc_number: Option<String>,
     artist_ids: Option<Vec<i64>>,
     release_tracks: Option<Vec<ReleaseTrackUpdateRequest>>,
+    lyrics: Option<crate::lyrics::LyricsEdit>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,6 +509,8 @@ struct AdminSettingsValues {
     swagger_enabled: bool,
     lastfm_api_key: String,
     lastfm_shared_secret: String,
+    #[serde(default = "default_true")]
+    lyrics_enrichment_enabled: bool,
     agent_enabled: bool,
     agent_inbox_dir: String,
     agent_storage_dir: String,
@@ -592,6 +595,7 @@ struct AdminSettingsSources {
     swagger_enabled: &'static str,
     lastfm_api_key: &'static str,
     lastfm_shared_secret: &'static str,
+    lyrics_enrichment_enabled: &'static str,
     agent_enabled: &'static str,
     agent_inbox_dir: &'static str,
     agent_storage_dir: &'static str,
@@ -630,6 +634,8 @@ pub(super) struct UpdateSettingsRequest {
     swagger_enabled: bool,
     lastfm_api_key: String,
     lastfm_shared_secret: String,
+    #[serde(default = "default_true")]
+    lyrics_enrichment_enabled: bool,
     agent_enabled: bool,
     agent_inbox_dir: String,
     agent_storage_dir: String,
@@ -741,6 +747,7 @@ struct LibraryItemDetailDto {
     release_tracks: Vec<ReleaseTrackDto>,
     available_covers: Vec<AvailableCoverDto>,
     metadata_tags: Vec<MetadataTagDto>,
+    lyrics: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1344,6 +1351,10 @@ pub async fn update_settings(
             "agent_concurrency",
             body.agent_concurrency.trim().to_string(),
         ),
+        (
+            "lyrics_enrichment_enabled",
+            body.lyrics_enrichment_enabled.to_string(),
+        ),
         ("federation_enabled", body.federation_enabled.to_string()),
         (
             "federation_network_id",
@@ -1691,6 +1702,7 @@ fn settings_dto(
             swagger_enabled: config.swagger_enabled,
             lastfm_api_key: config.lastfm_api_key,
             lastfm_shared_secret: config.lastfm_shared_secret,
+            lyrics_enrichment_enabled: config.lyrics_enrichment_enabled,
             agent_enabled: config.agent_enabled,
             agent_inbox_dir: config.agent_inbox_dir,
             agent_storage_dir: config.agent_storage_dir,
@@ -1727,6 +1739,7 @@ fn settings_dto(
             swagger_enabled: sources.swagger_enabled.code(),
             lastfm_api_key: sources.lastfm_api_key.code(),
             lastfm_shared_secret: sources.lastfm_shared_secret.code(),
+            lyrics_enrichment_enabled: sources.lyrics_enrichment_enabled.code(),
             agent_enabled: sources.agent_enabled.code(),
             agent_inbox_dir: sources.agent_inbox_dir.code(),
             agent_storage_dir: sources.agent_storage_dir.code(),
@@ -2074,6 +2087,12 @@ pub async fn update_library_item(
         return Ok(response);
     }
 
+    if let Some(lyrics) = &body.lyrics
+        && let Err(error) = crate::lyrics::validate_edit(lyrics)
+    {
+        return Ok(json_error(StatusCode::BAD_REQUEST, &error.to_string()));
+    }
+
     let kind = normalize_library_kind(Some(body.kind.as_str()));
     let title = body.title.trim();
     if title.is_empty() {
@@ -2229,6 +2248,13 @@ pub async fn update_library_item(
                 .await
                 .map_err(|e| cot::Error::internal(e.to_string()))?;
         }
+    }
+
+    if kind == "tracks"
+        && let Some(lyrics) = &body.lyrics
+        && let Err(error) = crate::lyrics::edit(pool, body.id, lyrics).await
+    {
+        return Ok(json_error(StatusCode::BAD_REQUEST, &error.to_string()));
     }
 
     let Some(item) = fetch_library_item(pool, &kind, body.id)
@@ -3662,6 +3688,11 @@ async fn load_library_item_detail(
         release_tracks: Vec::new(),
         available_covers: Vec::new(),
         metadata_tags: load_metadata_tags(pool, kind, item.id).await?,
+        lyrics: if kind == "tracks" {
+            serde_json::to_value(crate::lyrics::for_track(pool, item.id, false).await?)?
+        } else {
+            serde_json::Value::Null
+        },
         item,
     };
 
@@ -4812,6 +4843,24 @@ fn size_display(bytes: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::parse_merge_optional_i32;
+
+    #[test]
+    fn renders_lyrics_admin_settings_and_editor() {
+        use cot::Template;
+        let html = super::AdminV2Template {
+            t: crate::i18n::Translations::for_lang(crate::i18n::Lang::En),
+            user_name: "Admin".into(),
+            user_role: "admin".into(),
+            version: "test",
+        }
+        .render()
+        .unwrap();
+        assert!(html.contains("settingsDraft.lyrics_enrichment_enabled"));
+        assert!(html.contains("editorLyrics"));
+        if std::env::var_os("FURU_LYRICS_RENDER_FIXTURE").is_some() {
+            std::fs::write("target/lyrics-admin-fixture.html", html).unwrap();
+        }
+    }
 
     #[test]
     fn merge_numbers_preserve_empty_values_and_reject_invalid_input() {

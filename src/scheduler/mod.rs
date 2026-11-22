@@ -1311,6 +1311,7 @@ async fn run_scheduled_job(
         && job_name != "lastfm_scrobble"
         && job_name != "archive_cleanup"
         && job_name != "artwork_backfill"
+        && job_name != "lyrics_backfill"
     {
         tracing::warn!(job = job_name, "Skipping: agent_enabled=false");
         return;

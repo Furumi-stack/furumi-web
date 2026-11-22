@@ -90,6 +90,12 @@ pub(super) async fn media_handler(
         return Ok(json_error(StatusCode::NOT_FOUND, "shared track not found"));
     }
     match p.action.as_str() {
+        "lyrics" => {
+            let value = crate::lyrics::for_track(pool, p.track_id, true)
+                .await
+                .map_err(|e| cot::Error::internal(e.to_string()))?;
+            Json(value).into_response()
+        }
         "stream" | "download" => {
             audio_response(pool, config, request, p.track_id, p.action == "download").await
         }

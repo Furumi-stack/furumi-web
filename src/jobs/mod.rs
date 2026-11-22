@@ -4,6 +4,7 @@ pub mod inbox_discover;
 pub mod inbox_process;
 pub mod lastfm_popularity;
 pub mod lastfm_scrobble;
+pub mod lyrics_backfill;
 pub mod metadata_backfill;
 pub mod musicbrainz;
 

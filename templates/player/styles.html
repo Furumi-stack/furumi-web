@@ -1,4 +1,48 @@
 <style>
+.lyrics-overlay {position:fixed;inset:0;z-index:1600;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7);padding:24px;backdrop-filter:blur(14px)}
+.lyrics-dialog {position:relative;display:flex;flex-direction:column;width:min(800px,100%);height:min(820px,90dvh);border-radius:20px;background:linear-gradient(155deg,#294943,#132a28 65%,#0d1d1b);color:#f5faf7;box-shadow:0 20px 100px #0006;overflow:hidden;outline:none}
+.lyrics-fullscreen {padding:0}
+.lyrics-fullscreen .lyrics-dialog {width:100%;height:100dvh;border-radius:0}
+.lyrics-header {display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:28px 36px 12px;flex-shrink:0}
+.lyrics-heading {min-width:0}
+.lyrics-heading small {font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+.lyrics-heading h2 {margin:8px 0 4px;font-size:24px;overflow-wrap:anywhere}
+.lyrics-heading p {margin:0;color:#b7cbc5;font-size:14px}
+.lyrics-dialog button {color:inherit;cursor:pointer;font-family:inherit}
+.lyrics-close {background:#ffffff12;border:0;border-radius:50%;width:42px;height:42px;flex-shrink:0;font-size:22px}
+.lyrics-close:hover {background:#ffffff25}
+.lyrics-version {padding:8px 36px;display:flex;align-items:center;gap:12px;font-size:13px;flex-shrink:0}
+.lyrics-version select {max-width:80%;background:#19332e;border:1px solid #ffffff30;border-radius:6px;color:inherit;padding:6px}
+.lyrics-scroll {position:relative;overflow:auto;overscroll-behavior:contain;flex:1;padding:18px max(36px,calc((100% - 1000px)/2));scrollbar-width:thin;scrollbar-color:#ffffff30 transparent}
+.lyrics-lines {padding:12vh 0 35vh}
+.lyrics-line {display:block;width:100%;text-align:left;background:none;border:0;padding:12px 0;font-size:clamp(26px,3.5vw,52px);font-weight:750;line-height:1.3;color:#94b1a8!important;transition:color .3s,transform .3s;overflow-wrap:anywhere}
+.lyrics-line.active {color:#fff!important;transform:translateX(6px)}
+.lyrics-line.past {color:#bdd0c9!important}
+.lyrics-line:hover:not(:disabled) {color:#fff!important}
+.lyrics-line:disabled {cursor:default;opacity:1}
+.lyrics-plain {font-family:inherit;font-size:clamp(23px,3vw,40px);font-weight:650;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;padding:3vh 0 12vh;margin:0}
+.lyrics-message {padding:10vh 0;color:#c1d2cb;font-size:20px;line-height:1.6}
+.lyrics-footer {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 36px max(18px,env(safe-area-inset-bottom));font-size:12px;background:#0d1d1b80;flex-shrink:0}
+.lyrics-footer small {opacity:.6}
+.lyrics-footer button,.lyrics-message button {background:#ffffff12;border:1px solid #ffffff20;border-radius:20px;padding:8px 14px}
+.lyrics-transport {display:flex;gap:10px}
+.lyrics-dialog :focus-visible {outline:2px solid #e5fff4;outline-offset:4px}
+.lyrics-toggle-mobile {display:none!important}
+.lyrics-presence {color:var(--accent,#80bda6)!important;width:24px!important;min-width:24px!important;padding:3px!important}
+.lyrics-presence svg {width:15px;height:15px}
+@media(max-width:768px) {
+ .lyrics-overlay {padding:12px}
+ .lyrics-fullscreen {padding:0}
+ .lyrics-dialog {height:85dvh;border-radius:16px}
+ .lyrics-header {padding:calc(18px + env(safe-area-inset-top)) 20px 12px;gap:12px}
+ .lyrics-heading h2 {font-size:21px}
+ .lyrics-version {padding:8px 20px}
+ .lyrics-scroll {padding:12px 24px}
+ .lyrics-line {font-size:30px;padding:10px 0}
+ .lyrics-footer {padding-left:20px;padding-right:20px;gap:8px;flex-wrap:wrap}
+ .lyrics-toggle-mobile {display:inline-flex!important}
+}
+@media(prefers-reduced-motion:reduce) {.lyrics-line {transition:none}}
 :root {
     --bg-primary: #121212;
     --bg-secondary: #181818;

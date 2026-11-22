@@ -21,6 +21,8 @@ the Furumi federated network.
 - **Welcome your people.** Use password login or SSO. Instance admins can approve
   new users without needing access to the identity provider.
 - **Discover more.** Find similar tracks and connect Last.fm for scrobbling.
+- **Read along.** View synchronized or plain lyrics, choose a text version, and
+  enrich your collection with LRCLIB or edit texts manually. See [lyrics](docs/lyrics.md).
 - **Connect your players.** Pair trusted Furumi devices to synchronize playlists,
   likes, playback state, and playback controls.
 - **Join a network.** Discover and stream music from other participating peers

@@ -1,0 +1,115 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    Alpine.store('lyrics', {
+        visible:false, follow:false, track:null, versions:[], selected:0,
+        lines:[], active:-1, loading:false, error:false, generation:0,
+        loadedKey:null, holdUntil:0, previousFocus:null, previousOverflow:'',
+        text(key) {
+            const labels={lyrics:['Lyrics','Текст песни'],available:['Available · view','Есть · посмотреть'],unavailable:['Not available','Нет текста'],
+                loading:['Loading lyrics…','Загрузка текста…'],missing:['No lyrics for this track yet.','Для этого трека текста пока нет.'],
+                instrumental:['Instrumental','Инструментальная композиция'],error:['Could not load lyrics.','Не удалось загрузить текст.'],
+                retry:['Retry','Повторить'],close:['Close','Закрыть'],version:['Version','Версия'],following:['Following playback','Следует за воспроизведением'],
+                preview:['Track lyrics','Просмотр текста'],resume:['Follow lyrics','Следить за текстом'],play:['Play / pause','Играть / пауза'],previous:['Previous track','Предыдущий трек'],next:['Next track','Следующий трек']};
+            return labels[key]?.[document.documentElement.lang.startsWith('ru')?1:0] || key;
+        },
+        key(track) {
+            if (!track || track.podcast || String(track.id).startsWith('ep1:')) return '';
+            return track.content_id || track.key?.content_id || track._federationTrack?.key?.content_id || String(track.id || '');
+        },
+        open(track,follow=true) {
+            if (!this.visible) {
+                this.previousFocus=document.activeElement;
+                this.previousOverflow=document.body.style.overflow;
+                document.body.style.overflow='hidden';
+            }
+            this.visible=true; this.follow=follow; this.loadedKey=null; this.holdUntil=0;
+            Alpine.store('info')?.close();
+            this.load(follow?Alpine.store('player').currentTrack:track);
+        },
+        close() {
+            this.visible=false; this.generation++; this.loadedKey=null;
+            document.body.style.overflow=this.previousOverflow;
+            this.previousFocus?.focus?.();
+        },
+        async load(track) {
+            const generation=++this.generation;
+            this.track=track; this.loadedKey=this.key(track); this.versions=[]; this.lines=[]; this.selected=0;this.active=-1;this.error=false;
+            if (!this.loadedKey) {this.loading=false;return;}
+            this.loading=true;
+            try {
+                const source=track.availability?.federation?.[0] || track._federationTrack?.availability?.federation?.[0];
+                const remote=source && (!Number.isInteger(track.id) || track.id<1 || track.federation_pending);
+                const endpoint=GUEST?`/api/player/shares/${SHARE_TOKEN}/lyrics/${track.id}`:remote
+                    ? `/api/player/federation/tracks/lyrics?owner=${encodeURIComponent(source.owner)}&content_id=${encodeURIComponent(this.key(track))}`
+                    : `/api/player/lyrics/${track.id}`;
+                const response=await fetch(endpoint);
+                if (!response.ok) throw new Error('lyrics request failed');
+                const data=await response.json();
+                if (generation!==this.generation || !this.visible) return;
+                this.versions=(data?.versions || []).slice().sort((a,b)=>Number(this.parse(b.synced_lrc).length>0)-Number(this.parse(a.synced_lrc).length>0));
+                // Availability follows current database state, including manual edits.
+                track.has_lyrics=this.versions.length>0;
+                this.choose(0);
+            } catch (_) {if (generation===this.generation) this.error=true;}
+            finally {if (generation===this.generation) this.loading=false;}
+        },
+        parse(value) {
+            if (!value) return [];
+            const offset=Number(value.match(/^\s*\[offset:\s*(-?\d+)\s*\]\s*$/mi)?.[1] || 0);
+            const shift=Math.max(-3600000,Math.min(3600000,offset));
+            const lines=[];
+            for (const raw of value.split(/\r?\n/)) {
+                let rest=raw.trim(), times=[];
+                while (true) {
+                    const match=rest.match(/^\[(\d{1,4}):(\d{1,2}(?:\.\d+)?)\]/);
+                    if (!match || Number(match[2])>=60 || Number(match[1])>1440) break;
+                    times.push(Math.max(0,Math.round((Number(match[1])*60+Number(match[2]))*1000)+shift));
+                    rest=rest.slice(match[0].length);
+                }
+                for (const ms of times) lines.push({ms,text:rest.trim()});
+            }
+            return lines.sort((a,b)=>a.ms-b.ms);
+        },
+        choose(index) {
+            this.selected=Number(index); this.lines=this.parse(this.versions[this.selected]?.synced_lrc);this.active=-1;this.holdUntil=0;
+            this.tick(Alpine.store('player').currentTrack,Alpine.store('player').currentTime);
+        },
+        currentVersion() {return this.versions[this.selected] || null;},
+        plain() {
+            const version=this.currentVersion();
+            return version?.plain_text || (this.lines.length?this.lines.map(v=>v.text).join('\n'):version?.synced_lrc || '');
+        },
+        sameTrack(track) {return !!this.loadedKey && this.loadedKey===this.key(track);},
+        tick(track,time) {
+            if (!this.visible) return;
+            if (this.follow && this.key(track)!==this.loadedKey) {this.load(track);return;}
+            if (!this.sameTrack(track) || !this.lines.length) {this.active=-1;return;}
+            const ms=Number(time || 0)*1000;
+            let low=0,high=this.lines.length;
+            while(low<high){const mid=(low+high)>>>1;if(this.lines[mid].ms<=ms)low=mid+1;else high=mid;}
+            const next=low-1;
+            if (next!==this.active) {this.active=next;this.scroll();}
+        },
+        scroll(force=false) {
+            if (!force && Date.now()<this.holdUntil) return;
+            if (force) this.holdUntil=0;
+            requestAnimationFrame(()=>{
+                if (!this.visible || this.active<0) return;
+                const line=document.querySelector(`[data-lyrics-line="${this.active}"]`);
+                const scroller=line?.closest('.lyrics-scroll');
+                if (!line || !scroller) return;
+                scroller.scrollTo({top:line.offsetTop-scroller.clientHeight*0.4,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+            });
+        },
+        seek(line) {const player=Alpine.store('player');if(this.sameTrack(player.currentTrack)){this.holdUntil=0;player.seek(line.ms/1000);}},
+        trap(event,root) {
+            if(event.key!=='Tab') return;
+            const elements=[...root.querySelectorAll('button,select,[tabindex="0"]')].filter(el=>!el.disabled&&el.getClientRects().length);
+            if(!elements.length){event.preventDefault();return;}
+            const first=elements[0],last=elements[elements.length-1];
+            if(event.shiftKey&&(document.activeElement===first||document.activeElement===root)){event.preventDefault();last.focus();}
+            else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+        },
+    });
+});
+</script>

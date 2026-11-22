@@ -135,6 +135,7 @@ pub struct ConfigSources {
     pub agent_concurrency: ConfigSource,
     pub lastfm_api_key: ConfigSource,
     pub lastfm_shared_secret: ConfigSource,
+    pub lyrics_enrichment_enabled: ConfigSource,
     pub federation_enabled: ConfigSource,
     pub federation_network_id: ConfigSource,
     pub federation_save_on_listen: ConfigSource,
@@ -176,6 +177,7 @@ impl Default for ConfigSources {
             agent_concurrency: ConfigSource::Default,
             lastfm_api_key: ConfigSource::Default,
             lastfm_shared_secret: ConfigSource::Default,
+            lyrics_enrichment_enabled: ConfigSource::Default,
             federation_enabled: ConfigSource::Default,
             federation_network_id: ConfigSource::Default,
             federation_save_on_listen: ConfigSource::Default,
@@ -376,6 +378,8 @@ pub struct AppConfig {
     pub lastfm_api_key: String,
     /// Last.fm shared secret for authenticated scrobbling calls.
     pub lastfm_shared_secret: String,
+    /// Automatically fetch lyrics from LRCLIB; stored lyrics remain available when disabled.
+    pub lyrics_enrichment_enabled: bool,
     /// Whether this server participates in the furumi federation (publishes
     /// its library into the shared DHT and serves audio to peers).
     pub federation_enabled: bool,
@@ -434,6 +438,7 @@ impl Default for AppConfig {
             agent_concurrency: 2,
             lastfm_api_key: String::new(),
             lastfm_shared_secret: String::new(),
+            lyrics_enrichment_enabled: true,
             federation_enabled: false,
             federation_network_id: String::new(),
             federation_save_on_listen: false,
@@ -479,6 +484,7 @@ impl_env_overrides!(
     agent_concurrency,
     lastfm_api_key,
     lastfm_shared_secret,
+    lyrics_enrichment_enabled,
     federation_enabled,
     federation_network_id,
     federation_save_on_listen,
@@ -622,6 +628,7 @@ impl AppConfig {
         apply_db_field!(agent_concurrency);
         apply_db_field!(lastfm_api_key);
         apply_db_field!(lastfm_shared_secret);
+        apply_db_field!(lyrics_enrichment_enabled);
         apply_db_field!(federation_enabled);
         apply_db_field!(federation_network_id);
         apply_db_field!(federation_save_on_listen);

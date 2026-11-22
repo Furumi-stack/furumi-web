@@ -1031,6 +1031,14 @@
                             </div>
                         </section>
 
+                        <section class="panel settings-section" id="settings-lyrics">
+                            <div class="panel-head"><div class="panel-title"><strong>Lyrics · LRCLIB</strong><span>Automatic library enrichment</span></div></div>
+                            <div class="setting-toggle">
+                                <label class="setting-toggle-row"><span>Fetch lyrics automatically</span><input type="checkbox" x-model="settingsDraft.lyrics_enrichment_enabled" /></label>
+                                <div class="setting-help">Requests to the external LRCLIB API reveal track metadata from this library. Disabling stops automatic requests; saved lyrics remain available.</div>
+                                <span class="source-pill" :class="sourceClass('lyrics_enrichment_enabled')" x-text="settingSource('lyrics_enrichment_enabled')"></span>
+                            </div>
+                        </section>
                         <section class="panel settings-section settings-developer" id="settings-developer">
                             <div class="panel-head">
                                 <div class="panel-title">
@@ -1695,6 +1703,22 @@
                     </div>
 
                     <div class="editor-grid" x-show="isTrackEditor()">
+                        <section class="field lyrics-editor" x-show="isTrackEditor()">
+                            <label>Lyrics</label>
+                            <p class="muted">Stored with this audio content. Plain text or LRC timestamps; saved locally only.</p>
+                            <template x-for="(version,index) in editorLyrics" :key="version.id">
+                                <div class="lyrics-editor-version">
+                                    <div class="lyrics-editor-head"><strong x-text="version.source === 'lrclib' ? 'LRCLIB · ' + (version.source_id || '') : 'Manual version'"></strong><button class="btn danger" type="button" @click="editorLyrics.splice(index,1)">Remove</button></div>
+                                    <label>Version label<input x-model="version.label" maxlength="512" /></label>
+                                    <label>Language (optional)<input x-model="version.language" maxlength="64" placeholder="en, ru, …" /></label>
+                                    <label><input type="checkbox" x-model="version.instrumental" @change="if(version.instrumental){version.plain_text='';version.synced_lrc='';}" /> Instrumental</label>
+                                    <label x-show="!version.instrumental">Plain text<textarea x-model="version.plain_text" rows="7" maxlength="262144"></textarea></label>
+                                    <label x-show="!version.instrumental">Synced text (LRC)<textarea x-model="version.synced_lrc" rows="7" maxlength="262144" placeholder="[00:12.50] A line of lyrics"></textarea></label>
+                                </div>
+                            </template>
+                            <button class="btn" type="button" @click="addLyricsVersion()" :disabled="editorLyrics.length>=16">Add version</button>
+                            <label><input type="checkbox" x-model="editorLyricsRetry" /> Retry LRCLIB lookup on the next run (when enrichment is enabled)</label>
+                        </section>
                         <div class="field">
                             <label>Track #</label>
                             <input type="number" min="1" max="9999" x-model="editorDraft.track_number" />
@@ -2118,6 +2142,8 @@ function adminV2() {
         releaseTrackSearchLoading: false,
         releaseTrackSearchToken: 0,
         editorDetail: null,
+        editorLyrics: [],
+        editorLyricsRetry: false,
         editorDraft: { title: '', hidden: 'false', release_type: 'album', year: '', release_id: null, track_number: '', disc_number: '', artist_ids: [], release_tracks: [] },
         mergeOpen: false,
         mergeLoading: false,
@@ -2158,6 +2184,7 @@ function adminV2() {
             swagger_enabled: false,
             lastfm_api_key: '',
             lastfm_shared_secret: '',
+            lyrics_enrichment_enabled: true,
             agent_enabled: false,
             agent_inbox_dir: '',
             agent_storage_dir: '',
@@ -3470,6 +3497,8 @@ function adminV2() {
                 const detail = await this.request(`${this.apiBase}/library/item/detail?${params.toString()}`);
                 if (!this.activeLibraryItem || `${this.activeLibraryItem.kind}:${this.activeLibraryItem.id}` !== key) return;
                 this.editorDetail = detail;
+                this.editorLyrics = (detail.lyrics?.versions || []).map(v=>({...v}));
+                this.editorLyricsRetry = false;
                 this.editorDraft = {
                     title: detail.title || '',
                     hidden: detail.hidden ? 'true' : 'false',
@@ -4178,6 +4207,11 @@ function adminV2() {
             }
         },
 
+        addLyricsVersion() {
+            if(this.editorLyrics.length >= 16) return;
+            const id=globalThis.crypto?.randomUUID?.() || Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+            this.editorLyrics.push({id:'manual:' + id,label:'Original',source:'manual',source_id:null,language:null,plain_text:'',synced_lrc:'',instrumental:false});
+        },
         async saveLibraryItem() {
             if (this.isTrackEditor() && String(this.editorReleaseToAdd || '').trim()) {
                 if (!this.selectEditorRelease()) {
@@ -4202,13 +4236,14 @@ function adminV2() {
                         track_number: this.editorDraft.track_number || '',
                         disc_number: this.editorDraft.disc_number || '',
                         artist_ids: this.editorDraft.artist_ids || [],
-                        release_tracks: this.isReleaseEditor() ? this.releaseTrackPayload() : null
+                        release_tracks: this.isReleaseEditor() ? this.releaseTrackPayload() : null,
+                        lyrics: this.isTrackEditor() ? {versions:this.editorLyrics.map(v=>({...v,plain_text:v.plain_text?.trim()?v.plain_text:null,synced_lrc:v.synced_lrc?.trim()?v.synced_lrc:null})),retry_lookup:this.editorLyricsRetry} : null
                     })
                 });
                 this.replaceLibraryItem(updated);
                 this.activeLibraryItem = updated;
                 if (this.editorDetail) this.editorDetail.item = updated;
-                if (this.isReleaseEditor()) await this.loadEditorDetail(updated);
+                if (this.isReleaseEditor() || this.isTrackEditor()) await this.loadEditorDetail(updated);
                 this.showToast(wasNewRelease ? 'Release created' : 'Saved');
                 await this.refreshCountsOnly();
             } catch (error) {

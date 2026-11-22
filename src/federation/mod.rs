@@ -17,6 +17,7 @@
 mod capabilities;
 pub mod client;
 pub mod devices;
+mod lyrics;
 mod receive;
 mod serve;
 mod similarity;
@@ -500,6 +501,7 @@ impl Federation {
             .schema_independent_stream_protocol(SIMILARITY_ALPN)
             .schema_independent_stream_protocol(SIMILARITY_DHT_ALPN)
             .schema_independent_stream_protocol(CAPABILITIES_ALPN)
+            .schema_independent_stream_protocol(music_dht::lyrics::LYRICS_ALPN)
             .schema_independent_stream_protocol(PODCAST_DHT_ALPN)
             .build()
             .map_err(|err| anyhow::anyhow!("invalid federation config: {err}"))?;
@@ -606,6 +608,8 @@ impl Federation {
             Arc::clone(&device_hub),
             Arc::clone(&self.transport_stats),
         ));
+        let lyrics_acceptor = service.stream_acceptor(music_dht::lyrics::LYRICS_ALPN)?;
+        let lyrics_task = tokio::spawn(lyrics::serve(lyrics_acceptor, pool.clone()));
         let device_sync_task = tokio::spawn(devices::sync_loop(
             pool,
             Arc::clone(&service),
@@ -642,6 +646,7 @@ impl Federation {
                 device_task,
                 device_sync_task,
                 capabilities_task,
+                lyrics_task,
                 similarity_task,
                 similarity_dht_serve_task,
                 similarity_dht_maintenance_task,

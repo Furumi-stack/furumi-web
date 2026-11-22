@@ -73,6 +73,7 @@ pub(super) struct TrackItem {
     pub(super) lastfm_playcount: Option<i64>,
     pub(super) lastfm_rating: Option<f64>,
     pub(super) lastfm_updated_at: Option<String>,
+    pub(super) has_lyrics: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -106,6 +107,7 @@ pub(super) struct ArtistAppearanceTrack {
     pub(super) lastfm_playcount: Option<i64>,
     pub(super) lastfm_rating: Option<f64>,
     pub(super) lastfm_updated_at: Option<String>,
+    pub(super) has_lyrics: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

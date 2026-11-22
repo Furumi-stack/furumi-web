@@ -1,0 +1,45 @@
+<div x-data>
+<template x-if="$store.lyrics.visible">
+    <div class="lyrics-overlay" :class="{'lyrics-fullscreen':$store.lyrics.follow}" @click.self="$store.lyrics.close()">
+        <section class="lyrics-dialog" role="dialog" aria-modal="true" aria-labelledby="lyrics-title" tabindex="-1"
+                 x-init="$nextTick(()=>$el.focus())" @keydown.escape.stop.prevent="$store.lyrics.close()" @keydown="$store.lyrics.trap($event,$el)"
+                 x-effect="$store.lyrics.tick($store.player.currentTrack,$store.player.currentTime)">
+            <header class="lyrics-header">
+                <div class="lyrics-heading"><small x-text="$store.lyrics.follow?$store.lyrics.text('following'):$store.lyrics.text('preview')"></small>
+                    <h2 id="lyrics-title" x-text="$store.lyrics.track?.title || $store.lyrics.text('lyrics')"></h2>
+                    <p x-text="($store.lyrics.track?.artists || []).map(a=>a.name || a.label).join(', ')"></p>
+                </div>
+                <button class="lyrics-close" type="button" @click="$store.lyrics.close()" :aria-label="$store.lyrics.text('close')">✕</button>
+            </header>
+            <div class="lyrics-version" x-show="$store.lyrics.versions.length>1">
+                <label for="lyrics-version" x-text="$store.lyrics.text('version')"></label>
+                <select id="lyrics-version" :value="$store.lyrics.selected" @change="$store.lyrics.choose($event.target.value)">
+                    <template x-for="(version,index) in $store.lyrics.versions" :key="version.id"><option :value="index" x-text="version.label + (version.language?' · '+version.language:'')"></option></template>
+                </select>
+            </div>
+            <div class="lyrics-scroll" @wheel.passive="$store.lyrics.holdUntil=Date.now()+5000" @touchstart.passive="$store.lyrics.holdUntil=Date.now()+5000">
+                <p class="lyrics-message" x-show="$store.lyrics.loading" role="status" x-text="$store.lyrics.text('loading')"></p>
+                <div class="lyrics-message" x-show="$store.lyrics.error"><p x-text="$store.lyrics.text('error')"></p><button @click="$store.lyrics.load($store.lyrics.track)" x-text="$store.lyrics.text('retry')"></button></div>
+                <p class="lyrics-message" x-show="!$store.lyrics.loading && !$store.lyrics.error && !$store.lyrics.versions.length" x-text="$store.lyrics.text('missing')"></p>
+                <p class="lyrics-message" x-show="$store.lyrics.currentVersion()?.instrumental" x-text="$store.lyrics.text('instrumental')"></p>
+                <div class="lyrics-lines" x-show="$store.lyrics.lines.length>0">
+                    <template x-for="(line,index) in $store.lyrics.lines" :key="index">
+                        <button class="lyrics-line" :data-lyrics-line="index" :class="{active:index===$store.lyrics.active,past:index<$store.lyrics.active}"
+                                :disabled="!$store.lyrics.sameTrack($store.player.currentTrack)" @click="$store.lyrics.seek(line)" x-text="line.text || '♪'"></button>
+                    </template>
+                </div>
+                <pre class="lyrics-plain" x-show="!$store.lyrics.lines.length && !$store.lyrics.currentVersion()?.instrumental" x-text="$store.lyrics.plain()"></pre>
+            </div>
+            <footer class="lyrics-footer">
+                <small x-text="$store.lyrics.currentVersion()?.source==='lrclib'?'LRCLIB':$store.lyrics.currentVersion()?.label || ''"></small>
+                <div class="lyrics-transport" x-show="$store.lyrics.follow">
+                    <button @click="$store.player.prev()" :aria-label="$store.lyrics.text('previous')">⏮</button>
+                    <button @click="$store.player.toggle()" :aria-label="$store.lyrics.text('play')" x-text="$store.player.isPlaying?'Ⅱ':'▶'"></button>
+                    <button @click="$store.player.next()" :aria-label="$store.lyrics.text('next')">⏭</button>
+                </div>
+                <button x-show="$store.lyrics.lines.length && $store.lyrics.active>=0" @click="$store.lyrics.scroll(true)" x-text="$store.lyrics.text('resume')"></button>
+            </footer>
+        </section>
+    </div>
+</template>
+</div>

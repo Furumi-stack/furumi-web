@@ -19,6 +19,10 @@ fn local_manifest() -> CapabilityManifest {
         .with_protocol(DEVICE_SYNC_ID, super::devices::PROTOCOL_VERSION)
         .with_protocol("audio", AUDIO_PROTOCOL_VERSION)
         .with_protocol(
+            music_dht::lyrics::LYRICS_ID,
+            music_dht::lyrics::LYRICS_PROTOCOL_VERSION,
+        )
+        .with_protocol(
             SIMILARITY_ID,
             music_dht::similarity::SIMILARITY_PROTOCOL_VERSION,
         )

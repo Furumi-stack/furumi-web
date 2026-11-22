@@ -2887,7 +2887,30 @@ pub mod db_migrations {
         const OPERATIONS: &'static [Operation] = &[Operation::custom(create_podcast_sync).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_lyrics(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        for statement in include_str!("../lyrics/schema.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        Ok(())
+    }
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0056CreateLyrics;
+    impl migrations::Migration for M0056CreateLyrics {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0056_create_lyrics";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0055_podcast_sync_unicode_search",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(create_lyrics).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0056CreateLyrics,
         &M0006CreateMediaFile,
         &M0007CreateArtist,
         &M0008CreateRelease,
