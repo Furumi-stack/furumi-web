@@ -55,6 +55,18 @@ FURUMUSIC_LASTFM_TEST_DATABASE_URL=postgres://user:pass@localhost/test_db \
 
 ## Access and sharing tests
 
+Podcast regressions include browser-store tests in `tests/podcasts.test.cjs` and an
+isolated PostgreSQL fixture for multiuser subscriptions, progress generations,
+retention and administrator actions:
+
+```bash
+node --test tests/podcasts.test.cjs
+FURU_PODCAST_TEST_DATABASE_URL=postgresql://... cargo test podcasts -- --include-ignored
+```
+
+Use a disposable database. The PostgreSQL test creates and drops a unique schema;
+its audio files use a unique temporary directory. Normal podcast tests need no network.
+
 The access regression suite uses a disposable migrated database and a local OIDC
 provider with signed tokens and PKCE:
 

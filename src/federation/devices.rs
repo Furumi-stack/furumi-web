@@ -27,7 +27,7 @@ use super::{TransportStats, record_stream_transport};
 pub const SYNC_ALPN: &[u8] = b"furumi/sync/2";
 
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PROTOCOL_VERSION: u16 = 3;
+pub(super) const PROTOCOL_VERSION: u16 = 3;
 const INVITE_TTL_MS: i64 = 10 * 60 * 1000;
 const PAIRING_WAIT_MS: i64 = 5 * 60 * 1000;
 const PAIRING_RETRY_DELAY: Duration = Duration::from_secs(1);

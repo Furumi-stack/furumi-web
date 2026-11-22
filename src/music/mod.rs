@@ -2838,6 +2838,33 @@ pub mod db_migrations {
             &[Operation::custom(add_import_playlist_destinations).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_podcasts(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        for statement in include_str!("../podcasts/schema.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        Ok(())
+    }
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0054CreatePodcasts;
+    impl migrations::Migration for M0054CreatePodcasts {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0054_create_podcasts";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] = &[
+            migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0052_add_import_playlist_destinations",
+            ),
+            migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0053_local_approval_and_public_shares",
+            ),
+        ];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(create_podcasts).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0006CreateMediaFile,
         &M0007CreateArtist,
@@ -2881,5 +2908,6 @@ pub mod db_migrations {
         &M0050CreateMetadataFixHistory,
         &M0051AddListenStatisticsIndexes,
         &M0052AddImportPlaylistDestinations,
+        &M0054CreatePodcasts,
     ];
 }

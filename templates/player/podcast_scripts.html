@@ -1,0 +1,358 @@
+<script>
+    document.addEventListener('alpine:init', () => {
+        const labels = {
+            podcasts: ['Podcasts', 'Подкасты'],
+            add: ['Add', 'Добавить'],
+            mine: ['My podcasts', 'Мои подкасты'],
+            public: ['Public podcasts', 'Публичные подкасты'],
+            empty: ['Add an RSS or Atom feed.', 'Добавьте RSS или Atom ленту.'],
+            check: ['Check episodes', 'Проверить выпуски'],
+            checkAll: ['Check all', 'Проверить все'],
+            publish: ['Publish', 'Опубликовать'],
+            unpublish: ['Unpublish', 'Снять публикацию'],
+            remove: ['Unsubscribe', 'Отписаться'],
+            subscribe: ['Subscribe', 'Подписаться'],
+            play: ['Play', 'Слушать'],
+            resume: ['Resume', 'Продолжить'],
+            download: ['Save on server', 'Сохранить на сервере'],
+            saved: ['Saved on server', 'Сохранено на сервере'],
+            downloading: ['Downloading…', 'Скачивается…'],
+            markPlayed: ['Mark played', 'Прослушано'],
+            markUnplayed: ['Mark unplayed', 'Не прослушано'],
+            restart: ['Start over', 'С начала'],
+            filter: ['Filter episodes', 'Поиск выпусков'],
+            season: ['Season', 'Сезон'],
+            allSeasons: ['All seasons', 'Все сезоны'],
+            unplayed: ['unplayed', 'не прослушано'],
+            unplayedOnly: ['Unplayed only', 'Только непрослушанные'],
+            description: ['Description', 'Описание'],
+            noEpisodes: ['No episodes in this filter.', 'В этом фильтре нет выпусков.'],
+            noPublic: ['No public podcasts yet.', 'Публичных подкастов пока нет.'],
+            searchNetwork: ['Search Frid podcasts', 'Поиск подкастов в Frid'],
+            search: ['Search', 'Найти'],
+            working: ['Working…', 'Выполняется…'],
+            done: ['Done', 'Готово'],
+            removeConfirm: [
+                'Remove only your subscription? Other subscribers keep access.',
+                'Удалить только вашу подписку? Доступ других подписчиков сохранится.',
+            ],
+            shareConfirm: [
+                'Publish this feed URL to other users and Frid?',
+                'Опубликовать ссылку на ленту для других пользователей и Frid?',
+            ],
+            privateConfirm: [
+                'This URL may contain private access credentials. Publish these exact URLs?',
+                'Ссылка может содержать приватный токен доступа. Опубликовать именно эти ссылки?',
+            ],
+            pending: [
+                'Saved. Frid publication will retry when federation is available.',
+                'Сохранено. Публикация в Frid повторится, когда федерация будет доступна.',
+            ],
+            checked: ['New episodes: ', 'Новых выпусков: '],
+            failed: [
+                'Operation failed. Please try again.',
+                'Не удалось выполнить действие. Повторите попытку.',
+            ],
+        };
+        Alpine.store('podcasts', {
+            mine: [],
+            public: [],
+            hits: [],
+            episodes: [],
+            hasMore: false,
+            selected: null,
+            url: '',
+            query: '',
+            filter: '',
+            season: '',
+            unplayedOnly: false,
+            busy: false,
+            message: '',
+            poller: null,
+            lastCheckpoint: 0,
+            text(key) {
+                if (key === 'loadMore')
+                    return document.documentElement.lang.startsWith('ru')
+                        ? 'Загрузить ещё выпуски'
+                        : 'Load more episodes';
+                return labels[key]?.[document.documentElement.lang.startsWith('ru') ? 1 : 0] || key;
+            },
+            async api(action, body = {}) {
+                const res = await fetch('/api/podcasts/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, ...body }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || this.text('failed'));
+                return data;
+            },
+            async task(fn) {
+                if (this.busy) return;
+                this.busy = true;
+                this.message = this.text('working');
+                try {
+                    await fn();
+                } catch (e) {
+                    this.message = e.message || this.text('failed');
+                } finally {
+                    this.busy = false;
+                }
+            },
+            async load() {
+                const data = await this.api('list');
+                this.mine = data.mine;
+                this.public = data.public;
+            },
+            enter() {
+                Alpine.store('library').view = 'podcasts';
+                Alpine.store('mobile')?.closeLibrary();
+                this.task(async () => {
+                    await this.load();
+                    this.message = '';
+                });
+                if (!this.poller)
+                    this.poller = setInterval(() => {
+                        if (Alpine.store('library').view === 'podcasts' && !this.busy)
+                            this.update().catch(() => {});
+                    }, 5000);
+            },
+            async update() {
+                await this.load();
+                if (this.selected && !this.mine.some((p) => p.id === this.selected.id)) {
+                    this.selected = null;
+                    this.episodes = [];
+                }
+                if (this.selected) await this.loadEpisodes();
+            },
+            async loadEpisodes(append = false) {
+                const id = this.selected.id;
+                const offset = append ? this.episodes.length : 0;
+                const data = await this.api('episodes', { id, offset });
+                if (this.selected?.id !== id) return;
+                const old = this.episodes;
+                this.episodes = append
+                    ? [...old, ...data.episodes]
+                    : [
+                          ...new Map(
+                              [...data.episodes, ...old].map((e) => [e.id, e]),
+                          ).values(),
+                      ];
+                if (append || old.length <= 200) this.hasMore = !!data.has_more;
+            },
+            more() {
+                return this.task(async () => {
+                    await this.loadEpisodes(true);
+                    this.message = '';
+                });
+            },
+            open(pod) {
+                this.selected = pod;
+                this.episodes = [];
+                this.hasMore = false;
+                this.filter = '';
+                this.season = '';
+                this.task(async () => {
+                    await this.loadEpisodes();
+                    this.message = '';
+                });
+            },
+            add(url) {
+                this.task(async () => {
+                    const result = await this.api('add', { url: url || this.url });
+                    this.url = '';
+                    await this.load();
+                    this.message = result.warning || this.text('done');
+                });
+            },
+            remove(pod) {
+                if (!confirm(this.text('removeConfirm'))) return;
+                this.task(async () => {
+                    const result = await this.api('remove', { id: pod.id });
+                    if (this.selected?.id === pod.id) {
+                        this.selected = null;
+                        this.episodes = [];
+                    }
+                    await this.load();
+                    this.message = this.text(result.publication_pending ? 'pending' : 'done');
+                });
+            },
+            share(pod) {
+                if (
+                    !pod.shared &&
+                    !confirm(this.text('shareConfirm') + '\n' + pod.metadata.feed_url)
+                )
+                    return;
+                this.task(async () => {
+                    let result = await this.api('share', { id: pod.id, shared: !pod.shared });
+                    if (result.confirmation_required) {
+                        if (
+                            !confirm(
+                                this.text('privateConfirm') +
+                                    '\n' +
+                                    result.urls.filter(Boolean).join('\n'),
+                            )
+                        ) {
+                            this.message = '';
+                            return;
+                        }
+                        result = await this.api('share', {
+                            id: pod.id,
+                            shared: true,
+                            confirmed: true,
+                        });
+                    }
+                    await this.load();
+                    this.message = this.text(result.publication_pending ? 'pending' : 'done');
+                });
+            },
+            refresh(pod) {
+                this.task(async () => {
+                    const data = await this.api('refresh', { id: pod.id });
+                    await this.update();
+                    this.message = this.text('checked') + data.added;
+                });
+            },
+            refreshAll() {
+                this.task(async () => {
+                    let count = 0;
+                    for (const pod of this.mine) {
+                        const data = await this.api('refresh', { id: pod.id });
+                        count += data.added;
+                    }
+                    await this.update();
+                    this.message = this.text('checked') + count;
+                });
+            },
+            download(episode) {
+                this.task(async () => {
+                    await this.api('download', { id: episode.id });
+                    episode.downloading = true;
+                    this.message = this.text('downloading');
+                });
+            },
+            search() {
+                this.task(async () => {
+                    const data = await this.api('search', { query: this.query });
+                    this.hits = data.hits;
+                    this.message = this.text('done');
+                });
+            },
+            publicCards() {
+                return [...new Map([...this.public, ...this.hits].map((p) => [p.id, p])).values()];
+            },
+            seasons() {
+                return [
+                    ...new Set(
+                        this.episodes.map((e) => e.metadata.season).filter((s) => s != null),
+                    ),
+                ].sort((a, b) => a - b);
+            },
+            filteredEpisodes() {
+                const filter = this.filter.toLocaleLowerCase();
+                return this.episodes.filter(
+                    (e) =>
+                        (!filter || e.metadata.title.toLocaleLowerCase().includes(filter)) &&
+                        (!this.season || String(e.metadata.season) === String(this.season)) &&
+                        (!this.unplayedOnly || !e.completed),
+                );
+            },
+            date(ms) {
+                return ms ? new Date(ms).toLocaleDateString() : '';
+            },
+            play(episode) {
+                return this.task(async () => {
+                    const devices = Alpine.store('devices');
+                    if (devices && !devices.isActive()) await devices.select(devices.id);
+                    const position = episode.completed ? 0 : episode.position_ms;
+                    const session = await this.api('progress', {
+                        id: episode.id,
+                        position_ms: position,
+                        explicit: true,
+                    });
+                    const player = Alpine.store('player');
+                    player._playLocal(
+                        {
+                            id: episode.id,
+                            podcast: true,
+                            podcast_generation: session.generation,
+                            podcast_id: episode.metadata.podcast_id,
+                            title: episode.metadata.title,
+                            artists: [{ id: null, name: this.selected.metadata.title }],
+                            featured_artists: [],
+                            release_id: null,
+                            release_title: this.selected.metadata.title,
+                            duration_seconds: (episode.metadata.duration_ms || 0) / 1000,
+                            stream_url: '/api/podcasts/media/' + encodeURIComponent(episode.id),
+                            cover_url:
+                                episode.metadata.image_url || this.selected.metadata.image_url,
+                        },
+                        { position_seconds: position / 1000 },
+                    );
+                    this.lastCheckpoint = Date.now();
+                    this.message = '';
+                });
+            },
+            checkpoint(player, completed = false, unloading = false) {
+                const track = player.currentTrack;
+                if (!track?.podcast) return;
+                const payload = {
+                    action: 'progress',
+                    id: track.id,
+                    position_ms: Math.round((player.currentTime || 0) * 1000),
+                    completed,
+                    generation: track.podcast_generation,
+                    sequence: Date.now(),
+                };
+                const episode = this.episodes.find((e) => e.id === track.id);
+                if (episode) {
+                    episode.position_ms = payload.position_ms;
+                    episode.completed = completed;
+                }
+                if (unloading) {
+                    navigator.sendBeacon(
+                        '/api/podcasts/action',
+                        new Blob([JSON.stringify(payload)], { type: 'application/json' }),
+                    );
+                } else {
+                    this.api('progress', payload).catch(() => {});
+                }
+                this.lastCheckpoint = Date.now();
+            },
+            tick(player) {
+                if (
+                    player.currentTrack?.podcast &&
+                    player.isPlaying &&
+                    Date.now() - this.lastCheckpoint > 10000
+                )
+                    this.checkpoint(player, !!player.currentTrack.podcast_completed);
+            },
+            mark(episode) {
+                return this.task(async () => {
+                    const completed = !episode.completed;
+                    const position = completed ? episode.position_ms : 0;
+                    const result = await this.api('progress', {
+                        id: episode.id,
+                        position_ms: position,
+                        completed,
+                        explicit: true,
+                    });
+                    episode.completed = completed;
+                    episode.position_ms = position;
+                    const player = Alpine.store('player');
+                    if (player.currentTrack?.id === episode.id) {
+                        player.currentTrack.podcast_generation = result.generation;
+                        player.currentTrack.podcast_completed = completed;
+                        if (!completed) player.seek(0);
+                    }
+                    this.message = this.text('done');
+                });
+            },
+            restart(episode) {
+                episode.position_ms = 0;
+                episode.completed = false;
+                return this.play(episode);
+            },
+        });
+    });
+</script>

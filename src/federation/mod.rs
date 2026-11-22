@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use music_dht::capabilities::CAPABILITIES_ALPN;
+use music_dht::podcast_dht::{PODCAST_DHT_ALPN, PodcastDht};
 use music_dht::similarity_dht::SimilarityDht;
 use music_dht::similarity_lsh::SIMILARITY_DHT_ALPN;
 use music_dht::{
@@ -60,6 +61,7 @@ const TRANSPORT_SAMPLE_LIMIT: usize = 16;
 struct Running {
     service: Arc<MusicDhtService>,
     similarity_dht: Arc<SimilarityDht>,
+    podcast_dht: Arc<PodcastDht>,
     network_name: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -498,6 +500,7 @@ impl Federation {
             .schema_independent_stream_protocol(SIMILARITY_ALPN)
             .schema_independent_stream_protocol(SIMILARITY_DHT_ALPN)
             .schema_independent_stream_protocol(CAPABILITIES_ALPN)
+            .schema_independent_stream_protocol(PODCAST_DHT_ALPN)
             .build()
             .map_err(|err| anyhow::anyhow!("invalid federation config: {err}"))?;
         let (service, mut events) =
@@ -510,6 +513,30 @@ impl Federation {
             network = %network_name,
             "federation started"
         );
+
+        let podcast_dht = PodcastDht::open(
+            Arc::clone(&service),
+            self.data_dir.join("podcast-routing.sqlite3"),
+        )
+        .await?;
+        let podcast_acceptor = service.stream_acceptor(PODCAST_DHT_ALPN)?;
+        let podcast_serve_task = tokio::spawn(Arc::clone(&podcast_dht).serve(podcast_acceptor));
+        let podcast_maintenance_task = tokio::spawn(Arc::clone(&podcast_dht).maintenance());
+        let podcast_pool = pool.clone();
+        let podcast_overlay = Arc::clone(&podcast_dht);
+        let podcast_sync_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SYNC_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if crate::podcasts::reconcile(&podcast_pool, &podcast_overlay)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("podcast publication reconciliation failed; will retry");
+                }
+            }
+        });
 
         let similarity_dht = SimilarityDht::open(
             Arc::clone(&service),
@@ -602,8 +629,12 @@ impl Federation {
         *guard = Some(Running {
             service,
             similarity_dht,
+            podcast_dht,
             network_name,
             tasks: vec![
+                podcast_serve_task,
+                podcast_maintenance_task,
+                podcast_sync_task,
                 event_task,
                 sync_task,
                 audio_task,
@@ -669,6 +700,29 @@ impl Federation {
             .as_ref()
             .map(|running| Arc::clone(&running.service))
             .context("federation is not running")
+    }
+
+    pub async fn sync_podcasts(&self) -> Result<()> {
+        let overlay = self
+            .running
+            .lock()
+            .await
+            .as_ref()
+            .map(|r| Arc::clone(&r.podcast_dht))
+            .context("federation is not running")?;
+        crate::podcasts::reconcile(&self.pool().await?, &overlay).await
+    }
+
+    pub async fn search_podcasts(&self, query: &str) -> Result<Value> {
+        let overlay = self
+            .running
+            .lock()
+            .await
+            .as_ref()
+            .map(|r| Arc::clone(&r.podcast_dht))
+            .context("federation is not running")?;
+        let hits = overlay.search(query, 100).await?;
+        Ok(Value::Array(hits.into_iter().map(|hit| json!({"id":hit.podcast_id,"url":hit.feed_url,"metadata":{"title":hit.card.title,"author":hit.card.author,"description":hit.card.description}})).collect()))
     }
 
     async fn similarity_services(&self) -> Result<(Arc<MusicDhtService>, Arc<SimilarityDht>)> {

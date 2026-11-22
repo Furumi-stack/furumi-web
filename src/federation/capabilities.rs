@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::Result;
 use music_dht::StreamAcceptor;
 use music_dht::capabilities::{
-    CAPABILITIES_PROTOCOL_VERSION, CapabilityManifest, CapabilityMessage, JAM_ID, SIMILARITY_ID,
-    read_message, write_message,
+    CAPABILITIES_PROTOCOL_VERSION, CapabilityManifest, CapabilityMessage, DEVICE_SYNC_ID, JAM_ID,
+    SIMILARITY_ID, read_message, write_message,
 };
 
 use super::serve::AUDIO_PROTOCOL_VERSION;
@@ -15,6 +15,8 @@ fn local_manifest() -> CapabilityManifest {
     CapabilityManifest::frid("furumusic", env!("CARGO_PKG_VERSION"))
         // The web server does not expose federation Jam yet.
         .without_protocol(JAM_ID)
+        // Podcast discovery is supported, but personal device sync remains v3.
+        .with_protocol(DEVICE_SYNC_ID, super::devices::PROTOCOL_VERSION)
         .with_protocol("audio", AUDIO_PROTOCOL_VERSION)
         .with_protocol(
             SIMILARITY_ID,

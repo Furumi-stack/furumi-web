@@ -2,6 +2,38 @@
 
 [Project overview](../README.md) · [Installation](setup.md) · [Development and tests](development.md)
 
+## Podcasts
+
+The player's **Podcasts** entry below **My uploads** manages RSS/Atom subscriptions.
+Subscriptions start private. Publishing shares a feed card with other instance users
+and, while federation is enabled, the Frid podcast discovery overlay. Network search
+uses the same overlay as Furumi TUI; subscribing fetches the origin feed itself rather
+than trusting a publisher's claimed redirect or episode metadata. Feed URLs that may
+contain private access tokens require an additional confirmation before publication.
+
+The catalogue and downloaded audio are shared by the instance. Unsubscribing removes
+only that user's subscription and publication; other subscribers keep their access.
+Listening position and played status are personal. Playback can begin from the source
+while a separate download saves the episode on the server. Cached episodes play from
+the server even when the publisher is unavailable; a connection to this server is
+still required.
+
+The internal **podcast_refresh** job checks subscribed feeds every 30 minutes and
+downloads missing episodes, retrying failed downloads on later runs. Its schedule can
+be changed in the normal job settings. A manual check makes new episode metadata
+available before the audio download finishes. Up to three downloads run concurrently;
+each episode is limited to 2 GiB. Podcast sources must resolve to public HTTP(S)
+addresses, including after redirects.
+
+**Settings → Podcasts → Manage podcasts** lists every known podcast, subscriber and
+publication counts, and saved episode counts. Administrators can check a feed, remove
+its publications, clear saved audio, or delete the podcast for every user. Audio
+retention is disabled by default. When enabled, its day count is measured from the
+download time; the periodic job removes old audio while keeping episode descriptions
+and listening progress. Removed audio is downloaded again only on an explicit save
+or playback request. Podcast personal state is not replicated to trusted Frid devices
+yet; device synchronization continues to advertise protocol v3.
+
 ## Access and public sharing
 
 OIDC identifies accounts by issuer and subject. Matching admin groups take

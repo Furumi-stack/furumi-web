@@ -631,9 +631,10 @@
             <div class="settings-page">
                 <label class="section-jump">Settings section
                     <select class="search" @change="jumpToSettings($event.target.value)">
-                        <option value="access">Access</option><option value="oidc">SSO</option><option value="agent">Import agent</option><option value="similarity">Similarity</option><option value="downloads">Downloads</option><option value="federation">Federation</option><option value="lastfm">Last.fm</option><option value="developer">Developer</option>
+                        <option value="access">Access</option><option value="oidc">SSO</option><option value="agent">Import agent</option><option value="similarity">Similarity</option><option value="downloads">Downloads</option><option value="podcasts">Podcasts</option><option value="federation">Federation</option><option value="lastfm">Last.fm</option><option value="developer">Developer</option>
                     </select>
                 </label>
+                {% include "admin/podcasts.html" %}
                 <form class="settings-layout" @submit.prevent="saveSettings()">
                     <div class="settings-column">
                         <section class="panel settings-section settings-section-wide settings-oidc" id="settings-oidc">

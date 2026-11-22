@@ -5467,7 +5467,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn parse_range(header: &str, file_size: u64) -> Option<(u64, u64)> {
+pub(crate) fn parse_range(header: &str, file_size: u64) -> Option<(u64, u64)> {
     if file_size == 0 {
         return None;
     }

@@ -1,0 +1,193 @@
+<section
+    class="panel settings-section"
+    id="settings-podcasts"
+    x-data="podcastAdmin()"
+    x-effect="if(activeView!=='settings')visible=false"
+>
+    <div class="panel-head">
+        <div class="panel-title">
+            <strong>Podcasts</strong><span>Shared catalogue, publications and audio retention</span>
+        </div>
+        <button type="button" class="btn" @click="open()">Manage podcasts</button>
+    </div>
+    <div
+        class="modal-backdrop"
+        x-show="visible"
+        x-cloak
+        x-effect="adminOverlay.sync($el, visible)"
+        @keydown="adminOverlay.keydown($event, $el)"
+        @keydown.escape.window="visible=false"
+        @click.self="visible=false"
+    >
+        <section
+            class="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="podcast-admin-title"
+            tabindex="-1"
+            style="width:min(1000px,95vw);max-height:90vh;overflow:auto"
+        >
+            <header class="modal-head">
+                <h2 id="podcast-admin-title">Instance podcasts</h2>
+                <button
+                    class="btn"
+                    data-dialog-close
+                    aria-label="Close podcasts"
+                    @click="visible=false"
+                >
+                    Close
+                </button>
+            </header>
+            <div class="modal-body">
+                <p>
+                    Shared catalogue for all users. Clearing audio keeps subscriptions and listening
+                    progress. Deleting a podcast removes it for every subscriber.
+                </p>
+                <form class="toolbar" @submit.prevent="save()">
+                    <label
+                        ><input type="checkbox" x-model="retention" /> Automatically remove saved
+                        audio</label
+                    ><label
+                        >Keep for
+                        <input
+                            class="search"
+                            type="number"
+                            min="1"
+                            max="36500"
+                            required
+                            x-model.number="days"
+                            :disabled="!retention"
+                            style="width:100px"
+                        />
+                        days after download</label
+                    ><button class="btn" :disabled="busy">Save retention</button>
+                </form>
+                <p class="muted">
+                    Disabled by default. Episode metadata remains available; expired audio can be
+                    saved again manually. Feed checks run in the internal “podcast_refresh”
+                    scheduled job.
+                </p>
+                <div role="status" aria-live="polite" x-text="message"></div>
+                <input
+                    class="search"
+                    x-model="filter"
+                    placeholder="Filter podcasts"
+                    aria-label="Filter podcasts"
+                    style="margin:12px 0;width:100%"
+                />
+                <p x-show="!items.length">No known podcasts.</p>
+                <template
+                    x-for="pod in items.filter(p=>(p.metadata.title+' '+p.metadata.feed_url).toLowerCase().includes(filter.toLowerCase()))"
+                    :key="pod.id"
+                    ><article
+                        class="panel"
+                        style="padding:16px;margin:12px 0;overflow-wrap:anywhere"
+                    >
+                        <h3 x-text="pod.metadata.title"></h3>
+                        <p x-text="pod.metadata.feed_url"></p>
+                        <p
+                            x-text="pod.subscribers+' subscribers · '+pod.public+' publications · '+pod.cached+' saved episodes'"
+                        ></p>
+                        <p x-show="pod.error" x-text="pod.error"></p>
+                        <div class="toolbar">
+                            <button class="btn" :disabled="busy" @click="run('admin_refresh',pod)">
+                                Check episodes</button
+                            ><button
+                                class="btn"
+                                :disabled="busy"
+                                @click="run('admin_unpublish',pod)"
+                            >
+                                Unpublish</button
+                            ><button class="btn" :disabled="busy" @click="run('admin_clear',pod)">
+                                Clear saved audio</button
+                            ><button
+                                class="btn danger"
+                                :disabled="busy"
+                                @click="run('admin_delete',pod)"
+                            >
+                                Delete for all users
+                            </button>
+                        </div>
+                    </article></template
+                >
+            </div>
+        </section>
+    </div>
+</section>
+<script>
+    function podcastAdmin() {
+        return {
+            visible: false,
+            busy: false,
+            items: [],
+            filter: '',
+            retention: false,
+            days: 30,
+            message: '',
+            async api(action, body = {}) {
+                const res = await fetch('/api/podcasts/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, ...body }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Podcast operation failed');
+                return data;
+            },
+            async load() {
+                const data = await this.api('admin_list');
+                this.items = data.all;
+                this.retention = data.retention_days !== null;
+                this.days = data.retention_days || 30;
+            },
+            async open() {
+                this.visible = true;
+                this.busy = true;
+                try {
+                    await this.load();
+                    this.message = '';
+                } catch (e) {
+                    this.message = e.message;
+                } finally {
+                    this.busy = false;
+                }
+            },
+            async save() {
+                this.busy = true;
+                try {
+                    await this.api('admin_settings', {
+                        retention_days: this.retention ? Number(this.days) : null,
+                    });
+                    this.message = 'Retention settings saved';
+                } catch (e) {
+                    this.message = e.message;
+                } finally {
+                    this.busy = false;
+                }
+            },
+            async run(action, pod) {
+                if (
+                    action !== 'admin_refresh' &&
+                    !confirm(
+                        action === 'admin_delete'
+                            ? 'Delete this podcast and ALL users’ subscriptions and progress?'
+                            : 'Apply this action to the shared podcast for every user?',
+                    )
+                )
+                    return;
+                this.busy = true;
+                try {
+                    const result = await this.api(action, { id: pod.id });
+                    await this.load();
+                    this.message = result.publication_pending
+                        ? 'Saved; Frid publication reconciliation is pending.'
+                        : 'Done';
+                } catch (e) {
+                    this.message = e.message;
+                } finally {
+                    this.busy = false;
+                }
+            },
+        };
+    }
+</script>

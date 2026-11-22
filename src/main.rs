@@ -15,6 +15,7 @@ mod metrics;
 mod music;
 mod oidc;
 mod player;
+mod podcasts;
 mod scheduler;
 mod similarity;
 mod torrents;
@@ -63,6 +64,7 @@ fn build_registry() -> Arc<JobRegistry> {
     registry.register(jobs::metadata_backfill::MetadataBackfillJob);
     registry.register(jobs::lastfm_popularity::LastfmPopularityJob);
     registry.register(jobs::lastfm_scrobble::LastfmScrobbleJob);
+    registry.register(podcasts::PodcastRefreshJob);
     Arc::new(registry)
 }
 
@@ -579,6 +581,10 @@ impl Project for FuruProject {
             "/admin",
         );
         apps.register_with_views(api::ApiApp, "/api");
+        apps.register_with_views(
+            podcasts::PodcastApp::new(Arc::clone(&self.app_config)),
+            "/api/podcasts",
+        );
         apps.register_with_views(
             player::PlayerApp::new(
                 Arc::clone(&self.app_config),

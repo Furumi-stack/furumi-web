@@ -775,11 +775,18 @@ document.addEventListener('alpine:init', () => {
                 this.currentTime = audio.currentTime;
                 this.duration = audio.duration || 0;
                 this.progress = this.duration > 0 ? (this.currentTime / this.duration) * 100 : 0;
+                Alpine.store('podcasts')?.tick(this);
                 this._trackListenedDelta();
                 this._maybePrefetchNext();
             });
 
             audio.addEventListener('ended', () => {
+                if (this.currentTrack?.podcast) {
+                    this.isPlaying = false;
+                    this.currentTrack.podcast_completed = true;
+                    Alpine.store('podcasts')?.checkpoint(this, true);
+                    return;
+                }
                 this._trackListenedDelta();
                 this._recordHistory('finished');
                 if (Alpine.store('devices')?.shouldPlayJamLocally()) {
@@ -796,6 +803,7 @@ document.addEventListener('alpine:init', () => {
                 this._sendNowPlaying();
             });
             audio.addEventListener('pause', () => {
+                if (this.currentTrack?.podcast) Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed);
                 this._trackListenedDelta();
                 this.isPlaying = false;
                 this._lastAudioTime = audio.currentTime || 0;
@@ -884,6 +892,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _maybePrefetchNext() {
+            if (this.currentTrack?.podcast) return;
             if (this.progress < 90 || !this.isPlaying) return;
             const queue = Alpine.store('queue');
             const nextIndex = queue?.currentIndex + 1;
@@ -900,6 +909,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _playLocal(track, options = {}) {
+            if (this.currentTrack?.podcast) Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed);
             this._recordHistory('replaced');
             this.currentTrack = track;
             this._historyTrack = track;
@@ -910,6 +920,9 @@ document.addEventListener('alpine:init', () => {
             this._resetPlaybackTracking();
             audio.src = track.stream_url;
             const seekSeconds = Number(options.position_seconds || 0);
+            this.currentTime = seekSeconds;
+            this.duration = Number(track.duration_seconds || 0);
+            this.progress = this.duration > 0 ? seekSeconds / this.duration * 100 : 0;
             if (seekSeconds > 0) {
                 const onLoaded = () => {
                     audio.currentTime = seekSeconds;
@@ -1208,6 +1221,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _devicePlaybackStatePayload() {
+            if (this.currentTrack?.podcast) return null;
             const queue = Alpine.store('queue');
             const track = this.currentTrack || queue?.tracks?.[queue.currentIndex] || null;
             if (!track && (!queue || queue.tracks.length === 0)) return null;
@@ -1406,6 +1420,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _saveState() {
+            if (this.currentTrack?.podcast) { Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed); return; }
             if (GUEST) return;
             const queue = Alpine.store('queue');
             if (!this.currentTrack && queue.tracks.length === 0) return;
@@ -1418,6 +1433,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _saveStateSync() {
+            if (this.currentTrack?.podcast) { Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed, true); return; }
             if (GUEST) return;
             const queue = Alpine.store('queue');
             if (!this.currentTrack && queue.tracks.length === 0) return;
