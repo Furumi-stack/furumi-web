@@ -1849,6 +1849,8 @@ dependencies = [
 [[package]]
 name = "federation-net"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01e5c2e6e5af020dc202d4924125ef57719aa21f8d2567e2d943914386bc8980"
 dependencies = [
  "blake3",
  "data-encoding",
@@ -1992,7 +1994,7 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "furumusic"
-version = "0.12.5"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3905,6 +3907,8 @@ dependencies = [
 [[package]]
 name = "music-dht"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f66490c90836afebfd75394d527f47abf8f0675f1eeb4b41dadbd94c13836521"
 dependencies = [
  "async-trait",
  "blake3",

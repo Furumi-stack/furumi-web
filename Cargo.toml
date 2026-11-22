@@ -56,4 +56,4 @@ uuid = "1"
 librqbit = { version = "8.1.1", features = ["disable-upload"] }
 # P2P federation: publishes the library into a shared DHT and serves audio /
 # catalogs to furumi peers (TUI clients) over the frid stack.
-music-dht = { version = "0.7.0", path = "../frid/crates/music-dht", features = ["podcast-feed"] }
+music-dht = { version = "0.7.0", features = ["podcast-feed"] }
