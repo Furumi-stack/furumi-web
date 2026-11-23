@@ -288,6 +288,7 @@ impl Federation {
         };
         let _download_guard = download_lock.lock().await;
         if let Some(track_id) = local_track_id(&pool, &content_id).await? {
+            self.refresh_track_lyrics(track_id, Some(owner.to_owned()));
             progress(DownloadProgress {
                 phase: "ready",
                 received: 1,
@@ -393,6 +394,7 @@ impl Federation {
             total: 0,
         });
         let track_id = materialize(&pool, &storage_root, &content_id, downloaded).await?;
+        self.refresh_track_lyrics(track_id, Some(owner.to_string()));
         // Materialization is the playback boundary: return the local track
         // immediately so the browser can replace the pending queue entry and
         // start it. Publishing must not keep the prepare stream stuck at 100%

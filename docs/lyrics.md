@@ -38,15 +38,17 @@ saved. Requests and provider search results are never sent from the browser.
 Successful and empty searches are cached durably, shared across equal metadata
 signatures. A completed content binding is skipped on later runs. Changing
 title, main artist, album or rounded duration makes the content eligible again.
-Network failures, malformed responses and HTTP errors remain retryable with
-exponential backoff. A durable service cooldown stops the run on such errors;
-`Retry-After` is honored with jitter. A transaction advisory lock prevents
-overlapping enrichment runs. Cancelled runs release the lock, and completed
-lookup results survive interruption before attachment to content.
+Malformed search records are skipped individually. If an incomplete response
+yields no usable match, or the request fails for an individual track, that
+signature is deferred for retry with exponential backoff and the run advances
+to the next track. Connection failures and HTTP 429/503 persist a service-wide
+cooldown and pause the run. Numeric `Retry-After` delays receive jitter.
+A transaction advisory lock prevents overlapping runs. Cancelled runs release
+the lock, and completed lookup results survive interruption before attachment.
 
 Manual runs bypass saved global cooldown and individual retry delays, while
-still skipping completed searches. A fresh API failure stops the run and saves
-backoff for subsequent automatic runs; request throttling remains in effect.
+still skipping completed searches. A deferred track is eligible again on the
+next manual run. Request throttling remains in effect.
 
 ## Manual editing and playback
 
@@ -71,8 +73,13 @@ the same stored texts, restricted to visible tracks in that share.
   `{ "content_id": "b3:…" | null, "versions": […] }`.
 - Public share: `GET /api/player/shares/{token}/lyrics/{track_id}` has the same
   membership and visibility checks as shared audio.
-- Federated web playback: `GET /api/player/federation/tracks/lyrics` accepts
-  `owner` and `content_id`, fetching from that peer's optional lyrics protocol.
+- Federated web playback: `GET /api/player/federation/tracks/lyrics` discovers
+  alternatives by `content_id`, with an optional preferred `owner`. The player
+  displays saved local versions while that lookup runs. With Save on listen
+  enabled, imported or listened-to tracks also look up versions in the background.
+  Verified alternatives are saved for locally available audio with a visible
+  catalog entry and are eligible to serve to other peers. Guest shares read the
+  local library.
 - Frid: `music_dht::lyrics` defines ALPN `furumi/lyrics/1`, capability `lyrics: 1`,
   DTOs, validation and bounded JSON read/write helpers. Each direction carries
   one JSON document terminated by EOF. Requests include protocol version and

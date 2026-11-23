@@ -38,19 +38,39 @@ document.addEventListener('alpine:init', () => {
             this.loading=true;
             try {
                 const source=track.availability?.federation?.[0] || track._federationTrack?.availability?.federation?.[0];
-                const remote=source && (!Number.isInteger(track.id) || track.id<1 || track.federation_pending);
-                const endpoint=GUEST?`/api/player/shares/${SHARE_TOKEN}/lyrics/${track.id}`:remote
-                    ? `/api/player/federation/tracks/lyrics?owner=${encodeURIComponent(source.owner)}&content_id=${encodeURIComponent(this.key(track))}`
-                    : `/api/player/lyrics/${track.id}`;
-                const response=await fetch(endpoint);
-                if (!response.ok) throw new Error('lyrics request failed');
-                const data=await response.json();
-                if (generation!==this.generation || !this.visible) return;
-                this.versions=(data?.versions || []).slice().sort((a,b)=>Number(this.parse(b.synced_lrc).length>0)-Number(this.parse(a.synced_lrc).length>0));
-                // Availability follows current database state, including manual edits.
-                track.has_lyrics=this.versions.length>0;
-                this.choose(0);
-            } catch (_) {if (generation===this.generation) this.error=true;}
+                const remote=track.federation_pending || !Number.isSafeInteger(Number(track.id)) || Number(track.id)<1;
+                let contentId=this.key(track);
+                const showing=()=>generation===this.generation && this.visible;
+                const read=async endpoint=>{
+                    const response=await fetch(endpoint);
+                    if (!response.ok) throw new Error('lyrics request failed');
+                    return response.json();
+                };
+                const append=versions=>{
+                    const ordered=(versions || []).slice().sort((a,b)=>Number(this.parse(b.synced_lrc).length>0)-Number(this.parse(a.synced_lrc).length>0));
+                    const hadVersions=this.versions.length>0;
+                    for (const entry of ordered) {
+                        if (!this.versions.some(existing=>existing.plain_text===entry.plain_text && existing.synced_lrc===entry.synced_lrc && existing.instrumental===entry.instrumental)) {
+                            this.versions.push(entry);
+                        }
+                    }
+                    track.has_lyrics=this.versions.length>0;
+                    if (!hadVersions && this.versions.length) this.choose(0);
+                };
+                if (GUEST || !remote) {
+                    const endpoint=GUEST?`/api/player/shares/${SHARE_TOKEN}/lyrics/${track.id}`:`/api/player/lyrics/${track.id}`;
+                    const local=await read(endpoint);
+                    if (!showing()) return;
+                    contentId=local?.content_id || contentId;
+                    append(local?.versions);
+                }
+                if (!GUEST && /^b3:[0-9a-f]{64}$/.test(contentId)) {
+                    const query=new URLSearchParams({content_id:contentId});
+                    if (source?.owner) query.set('owner',source.owner);
+                    const peers=await read('/api/player/federation/tracks/lyrics?'+query);
+                    if (showing()) append(peers?.versions);
+                }
+            } catch (_) {if (generation===this.generation && !this.versions.length) this.error=true;}
             finally {if (generation===this.generation) this.loading=false;}
         },
         parse(value) {
