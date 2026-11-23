@@ -12,15 +12,109 @@ const overview = {
     tracks: { ...seeder, plays:5, detail:'Singer' },
     releases: { ...seeder, title:'Dawn', plays:5, detail:'Singer' },
 };
+const daily = [
+    {day:'2024-02-29',plays:1,listened_seconds:6000},
+    {day:'2024-03-30',plays:1,listened_seconds:4000},
+    {day:'2024-03-31',plays:8,listened_seconds:1800},
+    {day:'2024-04-01',plays:16,listened_seconds:900},
+    {day:'2024-04-02',plays:1,listened_seconds:80},
+];
+
+async function checkCalendar(page, queries, width, showEmpty) {
+    const content = page.locator('.my-listening');
+    const mode = name => content.locator('.listening-chart-switch [data-mode="' + name + '"]');
+    const cell = day => content.locator('.listening-heatmap-day[data-day="' + day + '"]');
+    const waitDays = count => page.waitForFunction(count =>
+        document.querySelectorAll('.listening-heatmap-day').length === count, count);
+    const waitFocused = day => page.waitForFunction(day => document.activeElement?.dataset.day === day, day);
+    assert.equal(await mode('bars').getAttribute('aria-pressed'), 'true');
+    const requests = queries.length;
+    if (width < 600) await mode('heatmap').tap();
+    else await mode('heatmap').click();
+    await waitDays(7);
+    assert.equal(await mode('heatmap').getAttribute('aria-pressed'), 'true');
+    assert.equal(await content.locator('.listening-chart:visible').count(), 0);
+    assert.equal(queries.length, requests, 'switching charts uses the loaded daily totals');
+    assert.equal(await cell('2024-04-01').getAttribute('data-level'), '4');
+    assert.equal(await cell('2024-03-28').getAttribute('data-level'), '0');
+    assert.match(await cell('2024-04-01').getAttribute('aria-label'), /\b16\b/);
+    const saturday = await cell('2024-03-30').boundingBox();
+    const sunday = await cell('2024-03-31').boundingBox();
+    const monday = await cell('2024-04-01').boundingBox();
+    assert.ok(Math.abs(saturday.x - sunday.x) < 1 && sunday.y > saturday.y);
+    assert.ok(monday.x > sunday.x && monday.y < saturday.y, 'the new week starts in the next column');
+    assert.equal(queries.at(-1).to, '2024-04-02', 'period ends on local time after the DST transition');
+
+    await content.locator('select').selectOption('365');
+    await waitDays(365);
+    assert.equal(queries.at(-1).from, '2023-04-04');
+    assert.equal(await cell('2024-02-29').count(), 1);
+    const viewport = await content.locator('.listening-heatmap-scroll').boundingBox();
+    await page.waitForFunction(() => {
+        const last = document.querySelector('.listening-heatmap-day[data-day="2024-04-02"]').getBoundingClientRect();
+        const scroll = document.querySelector('.listening-heatmap-scroll').getBoundingClientRect();
+        return last.left >= scroll.left - 1 && last.right <= scroll.right + 1;
+    });
+    assert.ok(viewport.x >= 0 && viewport.x + viewport.width <= width + 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    if (width >= 1366) {
+        assert.ok(await content.locator('.listening-heatmap-scroll').evaluate(el => el.scrollWidth <= el.clientWidth + 1),
+            'the whole year fits the desktop panel');
+    }
+    const tabbable = content.locator('.listening-heatmap-day[tabindex="0"]');
+    assert.equal(await tabbable.count(), 1);
+    await tabbable.focus();
+    await page.keyboard.press('End');
+    await waitFocused('2024-04-02');
+    await page.keyboard.press('ArrowLeft');
+    await waitFocused('2024-03-26');
+    await page.keyboard.press('ArrowUp');
+    await waitFocused('2024-03-25');
+    await page.keyboard.press('Home');
+    await page.keyboard.press('ArrowUp');
+    await waitFocused('2023-04-04');
+
+    const yearRequests = queries.length;
+    await mode('bars').click();
+    await page.waitForFunction(() => document.querySelectorAll('.listening-day').length === 365);
+    assert.ok(await content.locator('.listening-chart').isVisible());
+    await mode('heatmap').click();
+    await waitDays(365);
+    assert.equal(queries.length, yearRequests);
+    await page.reload();
+    await waitDays(30);
+    assert.equal(await mode('heatmap').getAttribute('aria-pressed'), 'true');
+    if (width < 600) await cell('2024-04-01').tap();
+    else await cell('2024-04-01').click();
+    await page.waitForURL('**/#listening/history?day=2024-04-01');
+    await content.locator('.listening-history-row').waitFor();
+    assert.equal(queries.at(-1).to, '2024-04-01');
+    await page.goBack();
+    await waitDays(30);
+    await cell('2024-03-29').click();
+    await page.waitForURL('**/#listening/history?day=2024-03-29');
+    await content.locator('.listening-notice:visible').filter({hasText:/No plays on this day|В этот день/}).waitFor();
+
+    showEmpty();
+    await content.locator('.listening-tabs a').first().click();
+    await page.waitForFunction(() => document.querySelectorAll('.listening-heatmap-day[data-level="0"]').length === 30);
+    assert.equal(await mode('bars').isVisible(), true);
+    await mode('bars').click();
+    await page.reload();
+    assert.equal(await mode('bars').getAttribute('aria-pressed'), 'true');
+}
 
 async function run(browser, width, locale) {
-    const page = await browser.newPage({viewport:{width, height:850}, timezoneId:'Europe/Madrid', locale});
+    const page = await browser.newPage({viewport:{width, height:850}, timezoneId:'Europe/Madrid', locale,
+        hasTouch:width < 600, isMobile:width < 600});
     page.setDefaultTimeout(6000);
+    await page.clock.setFixedTime(new Date('2024-04-01T22:30:00Z'));
     const errors = [];
     const queries = [];
     const coverRequests = [];
     let artistCover = '/api/player/cover/10/small';
     let fail = false;
+    let empty = false;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -44,11 +138,13 @@ async function run(browser, width, locale) {
             if (fail) return route.fulfill({status:503,json:{}});
             if (query.view === 'overview') {
                 const item = query.kind === 'artists' ? {...overview.artists, cover_url:artistCover} : overview[query.kind];
-                return send({plays:5, tracks:1, listened_seconds:900, ranking:[item],
-                    daily:[{day:query.to,plays:5,listened_seconds:900}]});
+                const rows = empty ? [] : daily.filter(row => row.day >= query.from && row.day <= query.to);
+                return send({plays:rows.reduce((sum,row)=>sum + row.plays, 0), tracks:rows.length ? 1 : 0,
+                    listened_seconds:rows.reduce((sum,row)=>sum + row.listened_seconds, 0), ranking:rows.length ? [item] : [], daily:rows});
             }
             const selected = query.from !== 'all';
             const date = selected ? query.from : '2026-03-28';
+            if (selected && !daily.some(row => row.day === date)) return send({page:1,limit:25,total:0,items:[]});
             return send({page:+query.page, limit:25, total:selected ? 1 : 26, items:[{...seeder,
                 id:'event-'+query.page, title:'Hours '+query.page, started_at_ms: Date.parse(date+'T18:05:00Z')}]});
         }
@@ -93,7 +189,7 @@ async function run(browser, width, locale) {
     await page.waitForFunction(() => window.lastPlayed === 3);
     await content.locator('.listening-rank-kinds button').nth(2).click();
     assert.equal(await content.getByRole('link',{name:'Dawn',exact:true}).getAttribute('href'), '#release/7');
-    await content.locator('.listening-day:not(:disabled)').click();
+    await content.locator('.listening-day:not(:disabled)').last().click();
     await page.waitForURL('**/#listening/history?day=' + expectedDay);
     await content.locator('.listening-history-row').waitFor();
     assert.equal(queries.at(-1).from, expectedDay);
@@ -112,6 +208,7 @@ async function run(browser, width, locale) {
     fail = false;
     await content.locator('[role=alert] button').click();
     await content.locator('.listening-totals').waitFor();
+    await checkCalendar(page, queries, width, () => {empty = true;});
     assert.deepEqual(errors, []);
     await page.close();
 }
@@ -121,6 +218,6 @@ async function run(browser, width, locale) {
     try {
         await run(browser, 1366, 'en');
         await run(browser, 320, 'ru');
-        console.log('Personal listening overview, playback, day drill-down, history and retry passed on desktop and mobile.');
+        console.log('Personal listening overview, calendar heatmap, playback, day drill-down, history and retry passed on desktop and mobile.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,5 +1,5 @@
 <style>
-.my-listening { max-width: 1150px; margin: 0 auto; padding: 0 0 20px; }
+.my-listening { max-width: 1150px; margin: 0 auto; padding: 0 0 20px; container: listening-page / inline-size; }
 .my-listening button, .my-listening select, .my-listening input { font: inherit; color: inherit; }
 .my-listening button, .my-listening summary { cursor: pointer; }
 .my-listening button:disabled { cursor: default; }
@@ -20,14 +20,56 @@
 .listening-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(240px, 1fr); gap: 16px; }
 .listening-panel { min-width: 0; padding: clamp(12px, 2vw, 20px); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; }
 .listening-panel h2, .listening-history-group h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: -.015em; }
+.listening-daily-panel { container-type: inline-size; }
+.listening-chart-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.listening-chart-header h2 { margin: 0; }
+.listening-chart-switch { display: inline-flex; flex: none; padding: 2px; gap: 2px; border: 1px solid var(--border-color); border-radius: 7px; }
+.listening-chart-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 12px; }
+.listening-chart-switch button svg { width: 13px; height: 13px; }
+.listening-chart-switch button:hover, .listening-chart-switch button:focus-visible { color: var(--text-primary); }
+.listening-chart-switch button[aria-pressed=true] { background: var(--bg-active); color: var(--text-primary); }
+@container (max-width: 340px) {
+    .listening-chart-switch button { min-width: 30px; min-height: 30px; }
+    .listening-chart-switch button span { display: none; }
+}
+.listening-heatmap { --heat-cell: 18px; --heat-gap: 3px; width: fit-content; max-width: 100%; }
+.listening-heatmap-year { --heat-cell: clamp(8px, calc((100cqi - 56px) / 53 - 2px), 12px); --heat-gap: 2px; width: 100%; }
+.listening-heatmap-scroll { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+.listening-heatmap-grid {
+    display: grid; grid-template-columns: max-content repeat(var(--weeks), var(--heat-cell));
+    grid-template-rows: 1.4em repeat(7, var(--heat-cell)); gap: var(--heat-gap); align-items: center;
+    width: max-content; padding: 4px 22px 5px 2px; color: var(--text-secondary); font-size: 11px;
+}
+.listening-heatmap-grid::before { content: ''; grid-area: 1 / 1; position: sticky; left: 0; z-index: 1; align-self: stretch; background: var(--bg-secondary); }
+.listening-heatmap-month { grid-row: 1; white-space: nowrap; }
+.listening-heatmap-weekday { grid-column: 1; position: sticky; left: 0; z-index: 1; align-self: stretch; display: flex; align-items: center; margin-block: calc(-.5 * var(--heat-gap)); padding-right: 5px; background: var(--bg-secondary); }
+.listening-heatmap [data-level] { display: block; border-radius: 2px; background: #292e2b; box-shadow: inset 0 0 0 1px #ffffff0c; }
+.listening-heatmap [data-level="1"] { background: #16422a; }
+.listening-heatmap [data-level="2"] { background: #19753e; }
+.listening-heatmap [data-level="3"] { background: #25a650; }
+.listening-heatmap [data-level="4"] { background: #62d57d; }
+.listening-heatmap-day { width: var(--heat-cell); height: var(--heat-cell); }
+.listening-heatmap-day:hover, .my-listening .listening-heatmap-day:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 0; z-index: 2; }
+.listening-heatmap-legend { display: flex; justify-content: flex-end; align-items: center; gap: 3px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+.listening-heatmap-legend span { padding-inline: 2px; }
+.listening-heatmap-legend i { width: 10px; height: 10px; }
+@media (pointer: coarse), (max-width: 540px) {
+    .listening-heatmap, .listening-heatmap-year { --heat-cell: 20px; --heat-gap: 4px; }
+    .listening-chart-switch button { min-height: 34px; min-width: 34px; }
+}
 .listening-chart-scroll { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
 .listening-chart { display: grid; grid-template-columns: repeat(var(--days), minmax(11px, 1fr)); width: 100%; min-width: calc(var(--days) * 11px); height: 180px; margin: 12px 0 24px; border-bottom: 1px solid var(--border-color); background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--border-color) calc(25% - 1px), var(--border-color) 25%); }
+.listening-chart-year { grid-template-columns: repeat(var(--days), minmax(1.5px, 1fr)); min-width: calc(var(--days) * 1.5px); }
+.listening-chart-year .listening-day { min-width: 0; padding: 0; }
+.listening-chart-year .listening-tick { left: 0; }
 .listening-day { display: flex; align-items: flex-end; justify-content: center; position: relative; border: 0; background: transparent; }
 .listening-day:hover:not(:disabled) .listening-bar, .listening-day:focus-visible .listening-bar { background: var(--accent-hover); }
 .listening-bar { display: block; width: 75%; max-width: 32px; border-radius: 3px 3px 0 0; background: var(--accent); }
 .listening-bar.has-plays { min-height: 3px; }
 .listening-tick { position: absolute; top: calc(100% + 4px); color: var(--text-secondary); font-size: 10px; }
 .listening-chart-dates { justify-content: space-between; margin-top: 8px; font-size: 12px; }
+.listening-chart-dates.compact { justify-content: flex-start; flex-wrap: wrap; gap: 4px; }
+.listening-chart-dates.compact span + span::before { content: '– '; }
 .listening-rank-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
 .listening-rank-kinds button, .listening-pager button { padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 5px; background: transparent; color: var(--text-secondary); font-size: 13px; }
 .listening-rank-kinds button[aria-pressed=true] { background: var(--bg-active); color: var(--text-primary); }
@@ -70,6 +112,12 @@
 .listening-pager { margin-top: 18px; justify-content: center; }
 @media (max-width: 1080px) {
     .listening-panels { grid-template-columns: minmax(0, 1fr); }
+}
+@container listening-page (min-width: 980px) {
+    .listening-panels-year { grid-template-columns: minmax(730px, 2fr) minmax(0, 1fr); }
+}
+@container listening-page (max-width: 979px) {
+    .listening-panels-year { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 540px) {
     .my-listening { width: 100%; }

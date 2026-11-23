@@ -10,6 +10,12 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.15.3 — 2026-11-24
+
+- Listening by day can display a calendar heatmap shaded by daily play count.
+  Select a day to open its history, or select the last 365 days for a full year.
+  The player remembers the chart style in the browser.
+
 ## v0.15.2 — 2026-11-24
 
 - Reorder pinned sidebar shortcuts by dragging or using the arrow keys. The

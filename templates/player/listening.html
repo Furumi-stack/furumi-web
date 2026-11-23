@@ -8,6 +8,7 @@
                 <option value="7" x-text="listens.text('week')"></option>
                 <option value="30" x-text="listens.text('month')"></option>
                 <option value="90" x-text="listens.text('quarter')"></option>
+                <option value="365" x-text="listens.text('year')"></option>
             </select>
         </header>
         <nav class="listening-tabs" :aria-label="listens.text('title')">
@@ -37,30 +38,79 @@
                     <div><dt x-text="listens.text('tracksMetric')"></dt><dd x-text="listens.number(listens.overview.tracks)"></dd></div>
                 </dl>
                 <p class="listening-notice" x-show="!listens.overview.plays" x-text="listens.text('emptyOverview')"></p>
-                <div class="listening-panels" x-show="listens.overview.plays">
-                    <section class="listening-panel">
-                        <h2 x-text="listens.text('daily')"></h2>
-                        <div class="listening-chart-scroll" :aria-label="listens.text('daily')">
-                            <div class="listening-chart" :style="'--days:' + listens.chart.length">
-                                <template x-for="(point, index) in listens.chart" :key="point.day">
-                                    <button type="button" class="listening-day" :disabled="!point.plays"
-                                            :aria-label="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
-                                            :title="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
-                                            @click="$store.library.openListening('history', {day:point.day})">
-                                        <span class="listening-bar" :style="{height: point.height + '%'}" :class="{'has-plays':point.plays}"></span>
-                                        <span class="listening-tick" aria-hidden="true"
-                                              x-show="index === 0 || listens.chart.length === 7 || point.day.endsWith('-01') || (index % 5 === 0 && index !== listens.chart.length-1)"
-                                              x-text="Number(point.day.slice(-2))"></span>
-                                    </button>
-                                </template>
+                <div class="listening-panels" :class="{'listening-panels-year':listens.chartMode === 'heatmap' && listens.period === 365}">
+                    <section class="listening-panel listening-daily-panel">
+                        <header class="listening-chart-header">
+                            <h2 x-text="listens.text('daily')"></h2>
+                            <div class="listening-chart-switch" role="group" :aria-label="listens.text('chartView')">
+                                <button type="button" data-mode="bars" :aria-label="listens.text('bars')" :title="listens.text('bars')"
+                                        :aria-pressed="listens.chartMode === 'bars'" @click="listens.setChartMode('bars')">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M1 8h3v6H1zm5-6h3v12H6zm5 3h3v9h-3z"/></svg>
+                                    <span x-text="listens.text('bars')"></span>
+                                </button>
+                                <button type="button" data-mode="heatmap" :aria-label="listens.text('heatmap')" :title="listens.text('heatmap')"
+                                        :aria-pressed="listens.chartMode === 'heatmap'" @click="listens.setChartMode('heatmap')">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4h-4zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4h-4zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4h-4z"/></svg>
+                                    <span x-text="listens.text('heatmap')"></span>
+                                </button>
                             </div>
-                        </div>
-                        <div class="listening-chart-dates">
+                        </header>
+                        <template x-if="listens.chartMode === 'bars' && listens.overview.plays">
+                            <div class="listening-chart-scroll" :aria-label="listens.text('daily')"
+                                 x-init="if (listens.chart.length > 90) $nextTick(() => { $el.scrollLeft = $el.scrollWidth })">
+                                <div class="listening-chart" :style="'--days:' + listens.chart.length" :class="{'listening-chart-year':listens.chart.length > 90}">
+                                    <template x-for="(point, index) in listens.chart" :key="point.day">
+                                        <button type="button" class="listening-day" :disabled="!point.plays"
+                                                :aria-label="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
+                                                :title="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
+                                                @click="$store.library.openListening('history', {day:point.day})">
+                                            <span class="listening-bar" :style="{height: point.height + '%'}" :class="{'has-plays':point.plays}"></span>
+                                            <template x-if="listens.chart.length > 90 ? point.day.endsWith('-01') && index < listens.chart.length - 12
+                                                               : index === 0 || listens.chart.length === 7 || point.day.endsWith('-01') || (index % 5 === 0 && index !== listens.chart.length-1)">
+                                                <span class="listening-tick" aria-hidden="true" x-text="listens.chart.length > 90 ? listens.month(point.day) : Number(point.day.slice(-2))"></span>
+                                            </template>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="listens.chartMode === 'heatmap'">
+                            <div class="listening-heatmap" :class="{'listening-heatmap-year':listens.heatmap.weeks > 20}">
+                                <div class="listening-heatmap-scroll" x-init="$nextTick(() => { $el.scrollLeft = $el.scrollWidth })">
+                                    <div class="listening-heatmap-grid" :style="{'--weeks':listens.heatmap.weeks}"
+                                         @keydown="listens.moveHeatFocus($event)">
+                                        <template x-for="month in listens.heatmap.months" :key="month.week">
+                                            <span aria-hidden="true" class="listening-heatmap-month" :style="{gridColumn:month.week+2}" x-text="month.label"></span>
+                                        </template>
+                                        <template x-for="(label, weekday) in listens.heatmap.weekdays" :key="weekday">
+                                            <span aria-hidden="true" class="listening-heatmap-weekday" :style="{gridRow:weekday+2}"
+                                                  x-text="weekday === 0 || weekday === 2 || weekday === 4 ? label : ''"></span>
+                                        </template>
+                                        <template x-for="point in listens.heatmap.days" :key="point.day">
+                                            <a class="listening-heatmap-day" :data-day="point.day" :data-level="point.level"
+                                               :style="{gridColumn:point.week+2, gridRow:point.weekday+2}"
+                                               :href="'#listening/history?day=' + point.day"
+                                               :aria-label="listens.heatDayLabel(point)" :title="listens.heatDayLabel(point)"
+                                               :tabindex="point.day === listens.heatFocusDay ? 0 : -1" @focus="listens.heatFocusDay = point.day"></a>
+                                        </template>
+                                    </div>
+                                </div>
+                                <div class="listening-heatmap-legend">
+                                    <span x-text="listens.text('less')"></span>
+                                    <template x-for="level in [0,1,2,3,4]" :key="level">
+                                        <i aria-hidden="true" :data-level="level"></i>
+                                    </template>
+                                    <span x-text="listens.text('moreActivity')"></span>
+                                </div>
+                            </div>
+                        </template>
+                        <div class="listening-chart-dates" :class="{'compact':listens.chartMode === 'heatmap' && listens.period < 365}"
+                             x-show="listens.overview.plays || listens.chartMode === 'heatmap'">
                             <span x-text="listens.date(listens.chart[0].day)"></span>
                             <span x-text="listens.date(listens.chart[listens.chart.length-1].day)"></span>
                         </div>
                     </section>
-                    <section class="listening-panel listening-rank-panel">
+                    <section class="listening-panel listening-rank-panel" x-show="listens.overview.plays">
                         <h2 x-text="listens.text('top')"></h2>
                         <div class="listening-rank-kinds" role="group" :aria-label="listens.text('rankBy')">
                             <template x-for="kind in ['artists','tracks','releases']" :key="kind">

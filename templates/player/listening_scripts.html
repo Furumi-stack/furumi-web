@@ -4,9 +4,12 @@ document.addEventListener('alpine:init', () => {
         title: ['My listening', 'Мои прослушивания'], overview: ['Overview', 'Обзор'],
         history: ['History', 'История'], period: ['Period', 'Период'], date: ['Date', 'Дата'],
         week: ['Last 7 days', 'Последние 7 дней'], month: ['Last 30 days', 'Последние 30 дней'],
+        year: ['Last 365 days', 'Последние 365 дней'],
         quarter: ['Last 90 days', 'Последние 90 дней'], allDates: ['All dates', 'Все даты'],
         time: ['Listening time', 'Время прослушивания'], plays: ['Plays', 'Прослушивания'],
         tracksMetric: ['Different tracks', 'Разных треков'], daily: ['Listening by day', 'По дням'],
+        chartView: ['Chart view', 'Вид графика'], bars: ['Bars', 'Столбцы'], heatmap: ['Heatmap', 'Календарь'],
+        less: ['Less', 'Меньше'], moreActivity: ['More', 'Больше'],
         top: ['In heavy rotation', 'Чаще всего'], artists: ['Artists', 'Артисты'],
         tracks: ['Tracks', 'Треки'], releases: ['Albums', 'Альбомы'], rankBy: ['Rank by', 'Рейтинг'],
         emptyOverview: ['No plays in this period.', 'За этот период прослушиваний нет.'],
@@ -22,6 +25,18 @@ document.addEventListener('alpine:init', () => {
     const numbers = new Intl.NumberFormat(locale);
     const dates = new Intl.DateTimeFormat(locale, {day:'numeric', month:'long', year:'numeric'});
     const times = new Intl.DateTimeFormat(locale, {hour:'2-digit', minute:'2-digit'});
+    const months = new Intl.DateTimeFormat(locale, {month:'short'});
+    const weekdays = new Intl.DateTimeFormat(locale, {weekday:'short'});
+    const weekLabels = Array.from({length:7}, (_, i) => weekdays.format(new Date(2024, 0, 1 + i, 12))); // Jan 1 was a Monday.
+    const plurals = new Intl.PluralRules(locale);
+    const playWords = locale.startsWith('ru')
+        ? {one:'прослушивание', few:'прослушивания', many:'прослушиваний', other:'прослушивания'}
+        : {one:'play', other:'plays'};
+    const chartModeKey = 'furumusic.listening.chartMode';
+    let chartMode = 'bars';
+    try {
+        if (localStorage.getItem(chartModeKey) === 'heatmap') chartMode = 'heatmap';
+    } catch {}
     const calendar = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
     const localDate = day => new Date(day + 'T12:00:00');
     const validDay = day => /^\d{4}-\d{2}-\d{2}$/.test(day || '') && calendar(localDate(day)) === day;
@@ -29,12 +44,14 @@ document.addEventListener('alpine:init', () => {
     let playRequest = 0;
     let pending;
     Alpine.store('listening', {
-        tab: 'overview', period: 30, kind: 'artists', day: '', page: 1,
+        tab: 'overview', period: 30, kind: 'artists', day: '', page: 1, chartMode,
         overview: null, overviewPeriod: 0, rankedKind: '', history: null, chart: [], groups: [],
+        heatmap: {weeks:0, days:[], months:[], weekdays:weekLabels}, heatFocusDay: '',
         loading: false, error: '', actionError: '',
         text(key) { return labels[key][locale.startsWith('ru') ? 1 : 0]; },
         number(value) { return numbers.format(value || 0); },
         date(day) { return dates.format(localDate(day)); },
+        month(day) { return months.format(localDate(day)); },
         clock(ms) { return times.format(new Date(ms)); },
         coverFailed(image) {
             image.setAttribute('data-unavailable', '');
@@ -78,6 +95,56 @@ document.addEventListener('alpine:init', () => {
             }
             return points;
         },
+        setChartMode(mode) {
+            if (mode !== 'bars' && mode !== 'heatmap') return;
+            this.chartMode = mode;
+            try { localStorage.setItem(chartModeKey, mode); } catch {}
+        },
+        buildHeatmap(points) {
+            const result = {weeks:0, days:[], months:[], weekdays:weekLabels};
+            if (!points.length) return result;
+            const offset = (localDate(points[0].day).getDay() + 6) % 7;
+            result.weeks = Math.ceil((offset + points.length) / 7);
+            // Compare active days in this period. A single unusually busy day
+            // should not give every other active day the same colour.
+            const counts = points.map(p => p.plays).filter(n => n > 0).sort((a, b) => a - b);
+            const cutoffs = [0.25, 0.5, 0.75].map(q => counts[Math.ceil(q * counts.length) - 1]);
+            for (const [index, point] of points.entries()) {
+                const slot = offset + index;
+                const week = Math.floor(slot / 7);
+                let level = 0;
+                if (point.plays > 0) {
+                    level = point.plays === counts.at(-1) ? 4 : 1 + cutoffs.filter(c => point.plays > c).length;
+                }
+                result.days.push({day:point.day, plays:point.plays, week, weekday:slot % 7, level});
+                if (index === 0 || point.day.endsWith('-01')) {
+                    // Drop a sliver of the first month if the labels would overlap.
+                    if (result.months.length && week - result.months.at(-1).week < 3) result.months.pop();
+                    result.months.push({week, label:this.month(point.day)});
+                }
+            }
+            return result;
+        },
+        heatDayLabel(point) {
+            const unit = playWords[plurals.select(point.plays)] || playWords.other;
+            return this.date(point.day) + ' · ' + this.number(point.plays) + ' ' + unit;
+        },
+        moveHeatFocus(event) {
+            const delta = {ArrowUp:-1, ArrowDown:1, ArrowLeft:-7, ArrowRight:7};
+            if (!(event.key in delta) && event.key !== 'Home' && event.key !== 'End') return;
+            event.preventDefault();
+            event.stopPropagation();
+            const days = this.heatmap.days;
+            const button = event.target.closest('[data-day]');
+            if (!button) return;
+            const index = days.findIndex(p => p.day === button.dataset.day);
+            if (index < 0) return;
+            let next = index + delta[event.key];
+            if (event.key === 'Home') next = 0;
+            if (event.key === 'End') next = days.length - 1;
+            if (!days[next]) return;
+            button.closest('.listening-heatmap-grid').querySelector('[data-day="' + days[next].day + '"]').focus();
+        },
         historyDays(items) {
             const groups = [];
             for (const item of items) {
@@ -106,6 +173,10 @@ document.addEventListener('alpine:init', () => {
                     this.overviewPeriod = this.period;
                     this.rankedKind = this.kind;
                     this.chart = this.dailyPoints(data.daily, range);
+                    this.heatmap = this.buildHeatmap(this.chart);
+                    if (!this.chart.some(point => point.day === this.heatFocusDay)) {
+                        this.heatFocusDay = range.to;
+                    }
                 } else {
                     this.history = data;
                     this.page = data.page;
