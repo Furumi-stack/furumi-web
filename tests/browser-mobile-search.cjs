@@ -20,9 +20,15 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
    const original=await input.boundingBox(),panelBefore=await panel.boundingBox(),buttonBefore=await page.locator('.torrent-import-btn').boundingBox();
    await input.focus();
    if(width<=560){
-    await page.waitForFunction(()=>{const input=document.querySelector('#search-input').getBoundingClientRect(),panel=document.querySelector('.content-topbar').getBoundingClientRect();return Math.abs(input.width-panel.width)<1;});
+    await page.waitForFunction(()=>{const input=document.querySelector('#search-input').getBoundingClientRect(),panel=document.querySelector('.content-topbar').getBoundingClientRect();return Math.abs(input.width-panel.width)<1;}).catch(async error=>{console.error({width,errors,state:await page.locator('.search-bar').evaluate(el=>({style:el.getAttribute('style'),classes:el.className,focused:document.activeElement.id,input:document.querySelector('#search-input').getBoundingClientRect().toJSON(),panel:el.closest('.content-topbar').getBoundingClientRect().toJSON()}))});throw error;});
     const expanded=await input.boundingBox();near(expanded.x,panelBefore.x,'expanded left edge');near(expanded.width,panelBefore.width,'expanded width');
     assert.ok(expanded.width>original.width+80,'search gains the space of neighboring controls');
+    // Account data may arrive after the user has already focused the input.
+    // Changing header controls must not shrink the expanded search again.
+    await page.evaluate(()=>Alpine.store('user').profile=null);
+    await page.waitForFunction(()=>{const input=document.querySelector('#search-input').getBoundingClientRect(),panel=document.querySelector('.content-topbar').getBoundingClientRect();return Math.abs(input.width-panel.width)<1;});
+    await page.evaluate(()=>Alpine.store('user').profile={name:'Listener'});
+    await page.waitForFunction(()=>{const input=document.querySelector('#search-input').getBoundingClientRect(),panel=document.querySelector('.content-topbar').getBoundingClientRect();return Math.abs(input.width-panel.width)<1;});
     const topmost=await page.evaluate(()=>{const panel=document.querySelector('.content-topbar').getBoundingClientRect();return document.elementFromPoint(panel.right-10,panel.top+panel.height/2)?.id;});
     assert.equal(topmost,'search-input','search overlays account and download controls');
     const duration=await page.locator('.search-field').evaluate(el=>parseFloat(getComputedStyle(el).transitionDuration));assert.ok(duration>0&&duration<=0.2);

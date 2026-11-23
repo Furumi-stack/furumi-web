@@ -322,7 +322,7 @@
                 </div>
                 {% endif %}
                 <div class="search-bar"
-                     x-data="{ expanded:false, left:0, right:0, measure() { const bar=$el.getBoundingClientRect(); const panel=$el.closest('.content-topbar').getBoundingClientRect(); this.left=Math.max(0,bar.left-panel.left); this.right=Math.max(0,panel.right-bar.right); } }"
+                     x-data="{ expanded:false, left:0, right:0, observer:null, init() { this.observer=new ResizeObserver(()=>this.measure()); this.observer.observe($el); }, destroy() { this.observer?.disconnect(); }, measure() { const bar=$el.getBoundingClientRect(); const panel=$el.closest('.content-topbar').getBoundingClientRect(); this.left=Math.max(0,bar.left-panel.left); this.right=Math.max(0,panel.right-bar.right); } }"
                      :class="{ 'search-expanded':expanded }"
                      :style="{ '--search-expand-left':left+'px', '--search-expand-right':right+'px' }"
                      @focusin="measure(); expanded=true; $store.user.menuOpen=false"
