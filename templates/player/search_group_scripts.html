@@ -1,0 +1,54 @@
+<script>
+document.addEventListener('alpine:init',()=>{
+    Alpine.store('searchGroups',{
+        expanded:{},
+        reset(){this.expanded={};},
+        normalize(value){return String(value || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();},
+        key(track,source){
+            const metadata=track.metadata || track;
+            const artists=(metadata.artists || []).map(a=>this.normalize(a.name || a.label || a)).filter(Boolean).sort();
+            // Keep different artists, live/remix titles and local/remote result
+            // sections separate. Content identity remains on each original row.
+            return JSON.stringify([source,this.normalize(metadata.title),artists]);
+        },
+        rowId(track,source){return 'search-version-'+source+'-'+encodeURIComponent(String(track.key?.content_id || track.id));},
+        rows(tracks,source,enabled=true){
+            const groups=new Map();
+            for(const [index,track] of (tracks || []).entries()){
+                const key=enabled?this.key(track,source):JSON.stringify([source,index]);
+                if(!groups.has(key))groups.set(key,[]);
+                groups.get(key).push({track,index});
+            }
+            const rows=[];let number=0;
+            for(const [key,members] of groups){
+                number++;
+                const expanded=!!this.expanded[key];
+                const controls=members.slice(1).map(({track})=>this.rowId(track,source)).join(' ');
+                for(const [version,{track,index}] of members.entries())rows.push({
+                    ...track,
+                    _searchSourceIndex:index,
+                    _searchRowId:this.rowId(track,source),
+                    _searchGroupKey:key,
+                    _searchGroupCount:members.length,
+                    _searchGroupNumber:number,
+                    _searchGroupChild:version>0,
+                    _searchGroupExpanded:expanded,
+                    _searchGroupHidden:version>0&&!expanded,
+                    _searchGroupControls:controls,
+                });
+            }
+            return rows;
+        },
+        toggle(track){this.expanded={...this.expanded,[track._searchGroupKey]:!this.expanded[track._searchGroupKey]};},
+        label(track){
+            const ru=document.documentElement.lang.startsWith('ru');
+            return (track._searchGroupExpanded?(ru?'Свернуть версии':'Collapse versions'):(ru?'Показать версии':'Show versions'))+' ('+track._searchGroupCount+')';
+        },
+        description(track){
+            const metadata=track.metadata || track;
+            return [metadata.release?.title || metadata.release_title,metadata.year || metadata.release_year,
+                metadata.audio_format?.toUpperCase(),metadata.audio_bitrate?metadata.audio_bitrate+' kbps':null].filter(Boolean).join(' · ');
+        },
+    });
+});
+</script>

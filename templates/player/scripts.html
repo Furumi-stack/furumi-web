@@ -3484,6 +3484,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async search(query, options = {}) {
+            Alpine.store('searchGroups')?.reset();
             if (GUEST) return;
             const q = (query || '').trim();
             if (!q) {
@@ -3650,6 +3651,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         clearSearch() {
+            Alpine.store('searchGroups')?.reset();
             this.stopFederationSearch();
             this.searchQuery = '';
             this.searchResults = null;
@@ -4450,7 +4452,10 @@ document.addEventListener('alpine:init', () => {
 
         playSearchTrack(idx) {
             if (!this.searchResults || !this.searchResults.tracks) return;
-            Alpine.store('queue').playRelease(this.searchResults.tracks, idx);
+            const groups=Alpine.store('searchGroups');
+            const visible=groups ? groups.rows(this.searchResults.tracks,'local',!this.similaritySearchLabel).filter(track=>!track._searchGroupHidden) : this.searchResults.tracks;
+            const position=groups ? visible.findIndex(track=>track._searchSourceIndex===idx) : idx;
+            if(position>=0) Alpine.store('queue').playRelease(visible, position);
         },
 
         _setupScroll() {

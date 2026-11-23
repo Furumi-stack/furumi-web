@@ -2794,6 +2794,23 @@ button.user-stat:hover {
 }
 
 /* Search results */
+.search-result-entry {display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows 160ms ease-out,opacity 130ms ease-out}
+.search-result-entry.search-result-hidden {grid-template-rows:0fr;opacity:0;pointer-events:none}
+.search-result-clip {min-height:0;overflow:hidden}
+.search-track-title {display:flex;align-items:center;gap:6px}
+.search-track-name {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-version-toggle {display:inline-flex;align-items:center;justify-content:center;gap:3px;flex:none;padding:3px;border:0;border-radius:4px;color:var(--text-secondary);background:transparent;cursor:pointer;font:inherit;font-size:10px;line-height:1}
+.search-version-toggle svg {width:16px;height:16px;flex:none}
+.search-version-toggle:hover,.search-version-toggle[aria-expanded=true] {color:var(--accent);background:var(--bg-active)}
+.search-version-toggle:focus-visible {outline:2px solid var(--accent);outline-offset:2px}
+.search-track-variant .track-info {border-left:2px solid var(--border-color);padding-left:10px}
+.search-variant-detail {margin-top:3px;color:var(--text-subdued);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.search-result-entry[data-search-source="local"] .search-variant-detail {display:none}
+.search-result-entry .track-row:focus-visible {outline:2px solid var(--accent);outline-offset:-2px}
+@media (max-width:900px), (pointer:coarse) and (max-width:1024px) {
+    .search-result-entry[data-search-source="local"] .search-variant-detail {display:block}
+}
+@media(prefers-reduced-motion:reduce) {.search-result-entry {transition:none}}
 .search-section { margin-bottom: 24px; }
 .federation-search-section {
     border-top: 1px solid var(--border);
