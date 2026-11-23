@@ -11,12 +11,15 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
     const u=new URL(route.request().url());
     if(u.hostname==='search.test'&&u.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
     if(u.hostname==='cdn.jsdelivr.net'&&u.pathname.includes('alpine'))return route.fulfill({contentType:'application/javascript',body:alpine});
+    if(u.pathname==='/api/player/me')return route.fulfill({json:{name:'Listener'}});
     if(u.pathname==='/api/player/artists')return route.fulfill({json:{items:[],total:0,has_more:false}});
     if(u.pathname==='/api/player/search')return route.fulfill({json:{artists:[],releases:[],tracks:[],podcasts:[]}});
     return route.fulfill({json:[]});
    });
-   await page.goto('http://search.test/');await page.waitForFunction(()=>window.Alpine?.store('library'));
+   await page.goto('http://search.test/');await page.waitForFunction(()=>window.Alpine?.store('user')?.profile?.name==='Listener');
    const input=page.locator('#search-input'),panel=page.locator('.content-topbar');
+   const account=page.locator('.mobile-account-chip');
+   if(width<=560)await account.waitFor({state:'visible'});
    const original=await input.boundingBox(),panelBefore=await panel.boundingBox(),buttonBefore=await page.locator('.torrent-import-btn').boundingBox();
    await input.focus();
    if(width<=560){
@@ -26,8 +29,10 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
     // Account data may arrive after the user has already focused the input.
     // Changing header controls must not shrink the expanded search again.
     await page.evaluate(()=>Alpine.store('user').profile=null);
+    await account.waitFor({state:'hidden'});
     await page.waitForFunction(()=>{const input=document.querySelector('#search-input').getBoundingClientRect(),panel=document.querySelector('.content-topbar').getBoundingClientRect();return Math.abs(input.width-panel.width)<1;});
     await page.evaluate(()=>Alpine.store('user').profile={name:'Listener'});
+    await account.waitFor({state:'visible'});
     await page.waitForFunction(()=>{const input=document.querySelector('#search-input').getBoundingClientRect(),panel=document.querySelector('.content-topbar').getBoundingClientRect();return Math.abs(input.width-panel.width)<1;});
     const topmost=await page.evaluate(()=>{const panel=document.querySelector('.content-topbar').getBoundingClientRect();return document.elementFromPoint(panel.right-10,panel.top+panel.height/2)?.id;});
     assert.equal(topmost,'search-input','search overlays account and download controls');

@@ -1,8 +1,13 @@
 <script>
 document.addEventListener('alpine:init',()=>{
+    const closeTimers = new Map();
     Alpine.store('searchGroups',{
-        expanded:{},
-        reset(){this.expanded={};},
+        states: {},
+        reset() {
+            for (const timer of closeTimers.values()) clearTimeout(timer);
+            closeTimers.clear();
+            this.states = {};
+        },
         normalize(value){return String(value || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();},
         key(track,source){
             const metadata=track.metadata || track;
@@ -12,34 +17,59 @@ document.addEventListener('alpine:init',()=>{
             return JSON.stringify([source,this.normalize(metadata.title),artists]);
         },
         rowId(track,source){return 'search-version-'+source+'-'+encodeURIComponent(String(track.key?.content_id || track.id));},
-        rows(tracks,source,enabled=true){
-            const groups=new Map();
-            for(const [index,track] of (tracks || []).entries()){
-                const key=enabled?this.key(track,source):JSON.stringify([source,index]);
-                if(!groups.has(key))groups.set(key,[]);
-                groups.get(key).push({track,index});
+        rows(tracks, source, enabled = true) {
+            const groups = new Map();
+            for (const [index, track] of (tracks || []).entries()) {
+                const key = enabled ? this.key(track, source) : JSON.stringify([source, index]);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push({ track, index });
             }
-            const rows=[];let number=0;
-            for(const [key,members] of groups){
+            const rows = [];
+            let number = 0;
+            for (const [key, members] of groups) {
+                const state = this.states[key];
+                const count = state ? members.length : 1;
+                const headIndex = rows.length;
+                const controls = [];
                 number++;
-                const expanded=!!this.expanded[key];
-                const controls=members.slice(1).map(({track})=>this.rowId(track,source)).join(' ');
-                for(const [version,{track,index}] of members.entries())rows.push({
-                    ...track,
-                    _searchSourceIndex:index,
-                    _searchRowId:this.rowId(track,source),
-                    _searchGroupKey:key,
-                    _searchGroupCount:members.length,
-                    _searchGroupNumber:number,
-                    _searchGroupChild:version>0,
-                    _searchGroupExpanded:expanded,
-                    _searchGroupHidden:version>0&&!expanded,
-                    _searchGroupControls:controls,
-                });
+                for (let version = 0; version < count; version++) {
+                    const { track, index } = members[version];
+                    const id = this.rowId(track, source);
+                    if (version > 0) controls.push(id);
+                    rows.push({
+                        ...track,
+                        _searchSourceIndex: index,
+                        _searchRowId: id,
+                        _searchGroupKey: key,
+                        _searchGroupCount: members.length,
+                        _searchGroupNumber: number,
+                        _searchGroupChild: version > 0,
+                        _searchGroupExpanded: state === 'open',
+                        _searchGroupHidden: version > 0 && state === 'closing',
+                        _searchGroupControls: null,
+                    });
+                }
+                if (controls.length) rows[headIndex]._searchGroupControls = controls.join(' ');
             }
             return rows;
         },
-        toggle(track){this.expanded={...this.expanded,[track._searchGroupKey]:!this.expanded[track._searchGroupKey]};},
+        toggle(track) {
+            const key = track._searchGroupKey;
+            clearTimeout(closeTimers.get(key));
+            closeTimers.delete(key);
+            if (this.states[key] !== 'open') {
+                this.states[key] = 'open';
+            } else if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                delete this.states[key];
+            } else {
+                // Keep the children mounted through the 160 ms grid transition.
+                this.states[key] = 'closing';
+                closeTimers.set(key, setTimeout(() => {
+                    delete this.states[key];
+                    closeTimers.delete(key);
+                }, 180));
+            }
+        },
         label(track){
             const ru=document.documentElement.lang.startsWith('ru');
             return (track._searchGroupExpanded?(ru?'Свернуть версии':'Collapse versions'):(ru?'Показать версии':'Show versions'))+' ('+track._searchGroupCount+')';

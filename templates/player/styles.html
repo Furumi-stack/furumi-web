@@ -2796,6 +2796,9 @@ button.user-stat:hover {
 /* Search results */
 .search-result-entry {display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows 160ms ease-out,opacity 130ms ease-out}
 .search-result-entry.search-result-hidden {grid-template-rows:0fr;opacity:0;pointer-events:none}
+@starting-style {
+    .search-result-entry.search-result-variant {grid-template-rows:0fr;opacity:0}
+}
 .search-result-clip {min-height:0;overflow:hidden}
 .search-track-title {display:flex;align-items:center;gap:6px}
 .search-track-name {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

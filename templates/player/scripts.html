@@ -2626,7 +2626,8 @@ document.addEventListener('alpine:init', () => {
         trackAvailability: {},
         _federatedReleaseCache: {},
         federationLiked: [],
-        _federationSearchSource: null,
+        _cancelFederationSearch: null,
+        failedFederationArtwork: new Set(),
         _artistFederationSource: null,
         _releaseFederationSource: null,
         releaseFederationLoading: false,
@@ -2772,6 +2773,7 @@ document.addEventListener('alpine:init', () => {
 
         _beginNavigation(hash, options = {}) {
             this.cancelPendingSearch();
+            if (this._cancelFederationSearch && !hash.startsWith('#search?')) this.stopFederationSearch();
             if (!hash.startsWith('#artistfed')) this.stopArtistFederation();
             if (!hash.startsWith('#release/')) this.stopReleaseFederation();
             if (!options.fromHash) {
@@ -3525,7 +3527,6 @@ document.addEventListener('alpine:init', () => {
                 const data=await res.json();
                 if(generation!==this._searchGeneration || controller.signal.aborted)return;
                 this.searchResults=data;
-                if(mode!=='lyrics')this.applyFederationArtworkFallbacks();
             } catch(error) {
                 if(generation!==this._searchGeneration || controller.signal.aborted)return;
                 this.searchResults={artists:[],releases:[],tracks:[]};
@@ -3695,99 +3696,75 @@ document.addEventListener('alpine:init', () => {
         },
 
         stopFederationSearch() {
-            if (this._federationSearchSource) {
-                this._federationSearchSource.close();
-                this._federationSearchSource = null;
-            }
+            this._cancelFederationSearch?.();
             this.federationSearch = { loading: false, error: '', artists: [], releases: [], tracks: [] };
         },
 
         startFederationSearch(query) {
-            this.stopFederationSearch();
+            this._cancelFederationSearch?.();
+            this.failedFederationArtwork = new Set();
             this.federationSearch = { loading: true, error: '', artists: [], releases: [], tracks: [] };
             const source = new EventSource(`/api/player/federation/search/events?q=${encodeURIComponent(query)}`);
-            this._federationSearchSource = source;
-            const updateResults = (kind, keyFor, labelFor, entity) => {
-                if (this._federationSearchSource !== source) return;
-                const items = [...this.federationSearch[kind]];
-                const key = keyFor(entity);
-                const index = items.findIndex(item => keyFor(item) === key);
-                if (index >= 0) items.splice(index, 1, entity);
-                else items.push(entity);
-                items.sort((left, right) => {
-                    const score = this.federationSearchScore(labelFor(right), query)
-                        - this.federationSearchScore(labelFor(left), query);
-                    return score || String(labelFor(left) || '').localeCompare(
-                        String(labelFor(right) || ''),
-                        undefined,
-                        { sensitivity: 'base' },
+            const results = { tracks: new Map(), artists: new Map(), releases: new Map() };
+            const changed = new Set();
+            const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
+            let batchTimer = null;
+            let active = true;
+
+            const publish = () => {
+                batchTimer = null;
+                for (const kind of changed) {
+                    const ranked = Array.from(results[kind].values());
+                    ranked.sort((a, b) => b.score - a.score || collator.compare(a.label, b.label));
+                    this.federationSearch[kind] = ranked.map(({ entity }) =>
+                        kind === 'tracks' ? this.withTrackAvailability(entity) : entity
                     );
-                });
-                this.federationSearch = { ...this.federationSearch, [kind]: items };
+                }
+                changed.clear();
             };
-            const watchdog = window.setTimeout(() => {
-                if (!this.federationSearch.loading || this._federationSearchSource !== source) return;
-                this.federationSearch = {
-                    ...this.federationSearch,
-                    error: 'Federation search timed out',
-                    loading: false,
-                };
+            const add = (kind, key, entity, label = '') => {
+                if (!active || !key) return;
+                results[kind].set(key, { entity, label, score: this.federationSearchScore(label, query) });
+                changed.add(kind);
+                if (batchTimer === null) batchTimer = window.setTimeout(publish, 50);
+            };
+            const finish = (error = '') => {
+                if (!active) return;
+                this._cancelFederationSearch();
+                publish();
+                this.federationSearch.error = error;
+                this.federationSearch.loading = false;
+            };
+            const watchdog = window.setTimeout(() => finish('Federation search timed out'), 25000);
+            this._cancelFederationSearch = () => {
+                active = false;
+                window.clearTimeout(watchdog);
+                window.clearTimeout(batchTimer);
                 source.close();
-                this._federationSearchSource = null;
-            }, 25000);
-            const upsertTrack = event => {
-                const payload = JSON.parse(event.data);
-                const track = this.withTrackAvailability(payload.entity);
-                if (!track?.key?.content_id) return;
-                updateResults('tracks', item => item.key.content_id, item => item.metadata?.title, track);
+                this._cancelFederationSearch = null;
             };
-            source.addEventListener('federation.track', upsertTrack);
+
+            source.addEventListener('federation.track', event => {
+                const track = JSON.parse(event.data).entity;
+                add('tracks', track?.key?.content_id, track, track?.metadata?.title);
+            });
             source.addEventListener('federation.artist', event => {
-                const artist = this.withFederationArtistFallback(
-                    JSON.parse(event.data)?.entity
-                );
-                const key = artist?.key?.normalized_name;
-                if (!key) return;
-                updateResults('artists', item => item.key.normalized_name, item => item.name, artist);
+                const artist = JSON.parse(event.data).entity;
+                add('artists', artist?.key?.normalized_name, artist, artist?.name);
             });
             source.addEventListener('federation.release', event => {
-                const release = this.hydrateFederationSearchRelease(
-                    JSON.parse(event.data)?.entity
-                );
-                if (!release?.key) return;
-                updateResults('releases', item => JSON.stringify(item.key || {}), item => item.title, release);
+                const release = JSON.parse(event.data).entity;
+                if (release?.key) add('releases', JSON.stringify(release.key), release, release.title);
             });
-            source.addEventListener('search.completed', () => {
-                window.clearTimeout(watchdog);
-                if (this._federationSearchSource === source) {
-                    this.federationSearch = { ...this.federationSearch, loading: false };
-                }
-                source.close();
-                if (this._federationSearchSource === source) this._federationSearchSource = null;
-            });
+            source.addEventListener('search.completed', () => finish());
             source.addEventListener('search.failed', event => {
-                window.clearTimeout(watchdog);
                 let error = 'Federation search failed';
                 try {
                     error = JSON.parse(event.data)?.entity?.message || error;
                 } catch {}
-                if (this._federationSearchSource === source) {
-                    this.federationSearch = { ...this.federationSearch, error, loading: false };
-                }
-                source.close();
-                if (this._federationSearchSource === source) this._federationSearchSource = null;
+                finish(error);
             });
-            source.onerror = () => {
-                if (!this.federationSearch.loading || this._federationSearchSource !== source) return;
-                window.clearTimeout(watchdog);
-                this.federationSearch = {
-                    ...this.federationSearch,
-                    error: 'Federation connection interrupted',
-                    loading: false,
-                };
-                source.close();
-                if (this._federationSearchSource === source) this._federationSearchSource = null;
-            };
+            source.onerror = () => finish('Federation connection interrupted');
         },
 
         normalizeFederationSearchText(value) {
@@ -3828,10 +3805,20 @@ document.addEventListener('alpine:init', () => {
                 .join(', ');
         },
 
+        availableFederationArtwork(url) {
+            return url && !this.failedFederationArtwork.has(url) ? url : '';
+        },
+
+        federationArtworkFailed(image) {
+            image.classList.remove('artwork-loaded');
+            const url = image.getAttribute('src');
+            if (url) this.failedFederationArtwork.add(url);
+        },
+
         federationArtistImage(artist) {
             if (!artist?.name) return '';
-            if (artist._federationArtworkFailed) return artist.local_image_url || '';
-            return this.federationDiscoveredArtwork(artist.name);
+            return this.availableFederationArtwork(this.federationDiscoveredArtwork(artist.name))
+                || this.availableFederationArtwork(this.localArtistImage(artist.name));
         },
 
         localArtistImage(name) {
@@ -3839,38 +3826,6 @@ document.addEventListener('alpine:init', () => {
             return (this.searchResults?.artists || []).find(candidate =>
                 this.normalizeFederationSearchText(candidate.name) === key
             )?.image_url || '';
-        },
-
-        withFederationArtistFallback(artist) {
-            if (!artist) return artist;
-            return { ...artist, local_image_url: this.localArtistImage(artist.name) };
-        },
-
-        applyFederationArtworkFallbacks() {
-            this.federationSearch = {
-                ...this.federationSearch,
-                artists: this.federationSearch.artists.map(artist =>
-                    this.withFederationArtistFallback(artist)
-                ),
-            };
-        },
-
-        federationArtistImageFailed(artist) {
-            const key = artist?.key?.normalized_name;
-            if (!key) return;
-            this.federationSearch = {
-                ...this.federationSearch,
-                artists: this.federationSearch.artists.map(candidate =>
-                    candidate?.key?.normalized_name === key
-                        ? {
-                            ...candidate,
-                            _federationArtworkFailed: true,
-                            local_image_url: candidate.local_image_url
-                                || this.localArtistImage(candidate.name),
-                        }
-                        : candidate
-                ),
-            };
         },
 
         hydrateFederationSearchRelease(release) {
@@ -3899,27 +3854,8 @@ document.addEventListener('alpine:init', () => {
 
         federationReleaseCover(release) {
             if (!release) return '';
-            if (release._federationArtworkFailed) return release._discoveredCoverUrl || '';
-            return release.cover_url
-                || this.federationDiscoveredArtwork(release.artists?.[0], release.title);
-        },
-
-        federationReleaseCoverFailed(release, failedUrl) {
-            const discovered = this.federationDiscoveredArtwork(release?.artists?.[0], release?.title);
-            if (!release?.key) return;
-            const key = JSON.stringify(release.key);
-            this.federationSearch = {
-                ...this.federationSearch,
-                releases: this.federationSearch.releases.map(candidate =>
-                    JSON.stringify(candidate?.key) === key
-                        ? {
-                            ...candidate,
-                            _federationArtworkFailed: true,
-                            _discoveredCoverUrl: failedUrl === discovered ? '' : discovered,
-                        }
-                        : candidate
-                ),
-            };
+            return this.availableFederationArtwork(release.cover_url)
+                || this.availableFederationArtwork(this.federationDiscoveredArtwork(release.artists?.[0], release.title));
         },
 
         federationDiscoveredArtwork(artist, release = '') {
@@ -4103,17 +4039,13 @@ document.addEventListener('alpine:init', () => {
                 ...change,
                 content_id: contentId,
             };
-            this.trackAvailability = {
-                ...this.trackAvailability,
-                [contentId]: availability,
-            };
+            this.trackAvailability[contentId] = availability;
             const updateTrack = track => track?.key?.content_id === contentId
                 ? this.withTrackAvailability(track)
                 : track;
-            this.federationSearch = {
-                ...this.federationSearch,
-                tracks: this.federationSearch.tracks.map(updateTrack),
-            };
+            const searchTracks = this.federationSearch.tracks;
+            const index = searchTracks.findIndex(track => track.key?.content_id === contentId);
+            if (index >= 0) searchTracks[index] = this.withTrackAvailability(searchTracks[index]);
             this.artistFederation = {
                 ...this.artistFederation,
                 tracks: this.artistFederation.tracks.map(updateTrack),

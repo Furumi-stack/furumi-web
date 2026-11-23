@@ -25,17 +25,16 @@ const data={local:[local(1),local(2,'Another song'),local(3),local(4,'Still Lovi
     library.playFederatedTrack=track=>window.groupPlays.push({source:'federation',id:track.key.content_id});
    },data);
    const localRows=page.locator('[data-search-source="local"]'),remoteRows=page.locator('[data-search-source="federation"]');
-   await page.waitForFunction(()=>document.querySelectorAll('[data-search-source="local"]').length===5);
-   assert.equal(await localRows.count(),5);assert.equal(await remoteRows.count(),3);
+   await page.waitForFunction(()=>document.querySelectorAll('[data-search-source="local"]').length===3);
+   assert.equal(await localRows.count(),3);assert.equal(await remoteRows.count(),2);
    assert.equal(await localRows.locator('.search-version-toggle:visible').count(),1);
-   assert.equal(await localRows.nth(1).getAttribute('inert')!==null,true);
-   assert.ok((await localRows.nth(1).boundingBox()).height<1);assert.ok((await localRows.nth(2).boundingBox()).height<1);
+   assert.equal(await localRows.locator('.search-track-variant').count(),0,'collapsed versions are unmounted');
    assert.equal(await localRows.first().locator('.search-version-toggle').getAttribute('aria-expanded'),'false');
    await localRows.first().locator('.search-track-name').click();
    assert.deepEqual(await page.evaluate(()=>window.groupPlays.at(-1)),{source:'local',ids:[1,2,4],id:1});
    await page.evaluate(()=>{window.groupPlays=[];window.groupNodes=[...document.querySelectorAll('[data-search-source="local"]')];});
    const animation=await page.evaluate(()=>new Promise(resolve=>{
-    const head=document.querySelector('[data-search-source="local"]'),next=document.querySelectorAll('[data-search-source="local"]')[3],positions=[],start=performance.now();
+    const [head,next]=window.groupNodes,positions=[],start=performance.now();
     head.querySelector('.search-version-toggle').click();
     function sample(){positions.push(next.getBoundingClientRect().top);if(performance.now()-start<230)requestAnimationFrame(sample);else resolve(positions);}
     requestAnimationFrame(sample);
@@ -44,7 +43,8 @@ const data={local:[local(1),local(2,'Another song'),local(3),local(4,'Still Lovi
    assert.equal(await page.evaluate(()=>window.groupPlays.length),0,'branch toggle does not play');
    assert.equal(await localRows.first().locator('.search-version-toggle').getAttribute('aria-expanded'),'true');
    assert.equal(await localRows.nth(1).getAttribute('inert'),null);
-   assert.equal(await page.evaluate(()=>window.groupNodes.every((node,index)=>node===document.querySelectorAll('[data-search-source="local"]')[index])),true,'stable DOM identities on toggle');
+   assert.equal(await localRows.count(),5);
+   assert.equal(await page.evaluate(()=>window.groupNodes.every(node=>document.getElementById(node.id)===node)),true,'representatives keep their DOM identities');
    for(let index=0;index<3;index++){
     const row=localRows.nth(index),box=await row.boundingBox(),actions=await row.locator('.track-actions').boundingBox();
     assert.ok(actions.x>=0&&actions.x+actions.width<=width,'actions fit viewport');assert.ok(actions.y>=box.y&&actions.y+actions.height<=box.y+box.height+1);
@@ -56,13 +56,13 @@ const data={local:[local(1),local(2,'Another song'),local(3),local(4,'Still Lovi
     function sample(){positions.push(rows[3].getBoundingClientRect().top);if(performance.now()-start<230)requestAnimationFrame(sample);else resolve(positions);}requestAnimationFrame(sample);
    }));
    assert.ok(new Set(closing.map(y=>Math.round(y))).size>2,'collapse also moves siblings smoothly');
-   await page.waitForFunction(()=>document.querySelectorAll('[data-search-source="local"]')[1].getBoundingClientRect().height<1);
-   assert.equal(await localRows.nth(1).getAttribute('aria-hidden'),'true');
+   await page.waitForFunction(()=>document.querySelectorAll('[data-search-source="local"]').length===3);
+   assert.equal(await localRows.locator('.search-track-variant').count(),0);
    await localRows.first().locator('.search-version-toggle').focus();await page.keyboard.press('Enter');
    await page.waitForFunction(()=>document.querySelector('[data-search-source="local"] .search-version-toggle').getAttribute('aria-expanded')==='true');
    await page.evaluate(()=>new Promise(resolve=>{const button=document.querySelector('[data-search-source="local"] .search-version-toggle');[0,20,40,60,80].forEach(delay=>setTimeout(()=>button.click(),delay));setTimeout(resolve,280);}));
    assert.equal(await localRows.first().locator('.search-version-toggle').getAttribute('aria-expanded'),'false');
-   assert.ok((await localRows.nth(1).boundingBox()).height<1,'rapid toggles settle in the final state');
+   assert.equal(await localRows.count(),3,'rapid toggles settle in the final state');
    const remoteHead=remoteRows.first();await remoteHead.locator('.search-version-toggle').click();
    await page.evaluate(track=>Alpine.store('library').federationSearch.tracks.push(track),remote(14));
    await page.waitForFunction(()=>document.querySelectorAll('[data-search-source="federation"]').length===4);

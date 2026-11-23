@@ -518,7 +518,7 @@
                                         <span style="text-align:right">{{ t.player_duration }}</span>
                                     </div>
                                     <template x-for="(track, idx) in $store.searchGroups.rows($store.library.searchResults.tracks,'local',!$store.library.similaritySearchLabel)" :key="track.id">
-                                        <div class="search-result-entry" data-search-source="local" :id="track._searchRowId" :class="{ 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null" :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"><div class="search-result-clip">
+                                        <div class="search-result-entry" data-search-source="local" :id="track._searchRowId" :class="{ 'search-result-variant':track._searchGroupChild, 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null" :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"><div class="search-result-clip">
 <div class="track-row"
                                              :class="{ 'search-track-variant':track._searchGroupChild, playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id }"
 
@@ -611,13 +611,12 @@
                                         <div class="search-artist-card federation-entity-card"
                                              @click="$store.library.openFederatedArtist(artist)">
                                             <div class="search-artist-img">
-                                                <img x-show="$store.library.federationArtistImage(artist)"
-                                                     class="artwork-image"
-                                                     :src="$store.library.federationArtistImage(artist)"
-                                                     alt="" aria-hidden="true"
-                                                     loading="lazy"
-                                                     @load="$event.currentTarget.classList.add('artwork-loaded')"
-                                                     @error="$event.currentTarget.classList.remove('artwork-loaded'); $store.library.federationArtistImageFailed(artist)">
+                                                <template x-if="$store.library.federationArtistImage(artist)">
+                                                    <img class="artwork-image" :src="$store.library.federationArtistImage(artist) || null"
+                                                         alt="" aria-hidden="true" loading="lazy"
+                                                         @load="$event.currentTarget.classList.add('artwork-loaded')"
+                                                         @error="$store.library.federationArtworkFailed($event.currentTarget)">
+                                                </template>
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                                     <circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/>
                                                 </svg>
@@ -636,13 +635,12 @@
                                         <div class="search-release-card federation-entity-card"
                                              @click="$store.library.openFederatedRelease($store.library.hydrateFederationSearchRelease(release))">
                                             <div class="search-release-cover">
-                                                <img x-show="$store.library.federationReleaseCover(release)"
-                                                     class="artwork-image"
-                                                     :src="$store.library.federationReleaseCover(release)"
-                                                     alt="" aria-hidden="true"
-                                                     loading="lazy"
-                                                     @load="$event.currentTarget.classList.add('artwork-loaded')"
-                                                     @error="$event.currentTarget.classList.remove('artwork-loaded'); $store.library.federationReleaseCoverFailed(release, $event.currentTarget.getAttribute('src'))">
+                                                <template x-if="$store.library.federationReleaseCover(release)">
+                                                    <img class="artwork-image" :src="$store.library.federationReleaseCover(release) || null"
+                                                         alt="" aria-hidden="true" loading="lazy"
+                                                         @load="$event.currentTarget.classList.add('artwork-loaded')"
+                                                         @error="$store.library.federationArtworkFailed($event.currentTarget)">
+                                                </template>
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                                     <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/>
                                                 </svg>
@@ -655,7 +653,7 @@
                                 </div>
                                 <template x-for="(track, idx) in $store.searchGroups.rows($store.library.federationSearch.tracks,'federation',!$store.library.similaritySearchLabel)"
                                           :key="track.key.content_id">
-                                    <div class="search-result-entry" data-search-source="federation" :id="track._searchRowId" :class="{ 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null" :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"><div class="search-result-clip">
+                                    <div class="search-result-entry" data-search-source="federation" :id="track._searchRowId" :class="{ 'search-result-variant':track._searchGroupChild, 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null" :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"><div class="search-result-clip">
 <div class="track-row federation-track-row" :class="{ 'search-track-variant':track._searchGroupChild }"
 
                                          tabindex="0" @click="if ($event.detail < 2) { $store.library.similaritySearchLabel ? $store.library.playSimilarityResult($store.library.federationQueueTrack(track)) : $store.library.playFederatedTrack(track) }" @dblclick.stop @keydown.enter.self.prevent="$store.library.similaritySearchLabel ? $store.library.playSimilarityResult($store.library.federationQueueTrack(track)) : $store.library.playFederatedTrack(track)">
