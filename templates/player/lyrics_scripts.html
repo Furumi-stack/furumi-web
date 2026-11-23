@@ -2,13 +2,15 @@
 document.addEventListener('alpine:init', () => {
     Alpine.store('lyrics', {
         visible:false, follow:false, track:null, versions:[], selected:0,
-        lines:[], active:-1, loading:false, error:false, generation:0,
+        lines:[], active:-1, loading:false, error:false, generation:0, copyResult:'',
         loadedKey:null, holdUntil:0, previousFocus:null, previousOverflow:'',
         text(key) {
             const labels={lyrics:['Lyrics','Текст песни'],available:['Available · view','Есть · посмотреть'],unavailable:['Not available','Нет текста'],
                 loading:['Loading lyrics…','Загрузка текста…'],missing:['No lyrics for this track yet.','Для этого трека текста пока нет.'],
                 instrumental:['Instrumental','Инструментальная композиция'],error:['Could not load lyrics.','Не удалось загрузить текст.'],
-                retry:['Retry','Повторить'],close:['Close','Закрыть'],version:['Version','Версия'],following:['Following playback','Следует за воспроизведением'],
+                retry:['Retry','Повторить'],close:['Close','Закрыть'],version:['Lyrics version','Версия текста'],following:['Following playback','Следует за воспроизведением'],
+                copy:['Copy lyrics','Скопировать текст'],copied:['Copied','Скопировано'],copyFailed:['Could not copy lyrics','Не удалось скопировать текст'],
+                timed:['Synced','С таймкодами'],plain:['Plain text','Без таймкодов'],
                 preview:['Track lyrics','Просмотр текста'],resume:['Follow lyrics','Следить за текстом'],play:['Play / pause','Играть / пауза'],previous:['Previous track','Предыдущий трек'],next:['Next track','Следующий трек']};
             return labels[key]?.[document.documentElement.lang.startsWith('ru')?1:0] || key;
         },
@@ -33,12 +35,13 @@ document.addEventListener('alpine:init', () => {
         },
         async load(track) {
             const generation=++this.generation;
-            this.track=track; this.loadedKey=this.key(track); this.versions=[]; this.lines=[]; this.selected=0;this.active=-1;this.error=false;
+            this.track=track; this.loadedKey=this.key(track); this.versions=[]; this.lines=[]; this.selected=0;this.active=-1;this.error=false;this.copyResult='';
             if (!this.loadedKey) {this.loading=false;return;}
             this.loading=true;
             try {
-                const source=track.availability?.federation?.[0] || track._federationTrack?.availability?.federation?.[0];
-                const remote=track.federation_pending || !Number.isSafeInteger(Number(track.id)) || Number(track.id)<1;
+                const availability=track.availability || track._federationTrack?.availability;
+                const source=availability?.federation?.[0];
+                const localId=Number(availability?.local?.track_id ?? track.id);
                 let contentId=this.key(track);
                 const showing=()=>generation===this.generation && this.visible;
                 const read=async endpoint=>{
@@ -57,8 +60,8 @@ document.addEventListener('alpine:init', () => {
                     track.has_lyrics=this.versions.length>0;
                     if (!hadVersions && this.versions.length) this.choose(0);
                 };
-                if (GUEST || !remote) {
-                    const endpoint=GUEST?`/api/player/shares/${SHARE_TOKEN}/lyrics/${track.id}`:`/api/player/lyrics/${track.id}`;
+                if (GUEST || (Number.isSafeInteger(localId) && localId>0)) {
+                    const endpoint=GUEST?`/api/player/shares/${SHARE_TOKEN}/lyrics/${track.id}`:`/api/player/lyrics/${localId}`;
                     const local=await read(endpoint);
                     if (!showing()) return;
                     contentId=local?.content_id || contentId;
@@ -91,10 +94,40 @@ document.addEventListener('alpine:init', () => {
             return lines.sort((a,b)=>a.ms-b.ms);
         },
         choose(index) {
-            this.selected=Number(index); this.lines=this.parse(this.versions[this.selected]?.synced_lrc);this.active=-1;this.holdUntil=0;
+            this.selected=Number(index); this.lines=this.parse(this.versions[this.selected]?.synced_lrc);this.active=-1;this.holdUntil=0;this.copyResult='';
             this.tick(Alpine.store('player').currentTrack,Alpine.store('player').currentTime);
+            const scroller=document.querySelector('.lyrics-scroll');
+            if (scroller && this.active<0) scroller.scrollTop=0;
         },
         currentVersion() {return this.versions[this.selected] || null;},
+        status() {
+            if (this.versions.length) return this.currentVersion()?.instrumental ? 'instrumental' : '';
+            if (this.loading) return 'loading';
+            return this.error ? 'error' : 'missing';
+        },
+        versionName(version,index) {
+            let name=version.label || this.text('version');
+            if (version.source==='lrclib') {
+                name=this.versions.findIndex(v=>v.source==='lrclib')===index ? 'LRCLIB' : name;
+            }
+            return version.language ? name+' ('+version.language+')' : name;
+        },
+        versionLabel(version) {
+            const format=version.instrumental?'instrumental':version.synced_lrc?'timed':'plain';
+            return [version.label,version.language,this.text(format)].filter(Boolean).join(' · ');
+        },
+        canCopy() {
+            const version=this.currentVersion();
+            return !!version && !version.instrumental && !!(version.plain_text || version.synced_lrc);
+        },
+        async copy(button) {
+            if (!this.canCopy()) return;
+            const generation=this.generation,version=this.currentVersion();
+            const copied=await Alpine.store('sharing').copyText(this.plain());
+            if (generation!==this.generation || version!==this.currentVersion()) return;
+            this.copyResult=copied?'copied':'copyFailed';
+            if (document.activeElement===document.body) button?.focus();
+        },
         plain() {
             const version=this.currentVersion();
             return version?.plain_text || (this.lines.length?this.lines.map(v=>v.text).join('\n'):version?.synced_lrc || '');

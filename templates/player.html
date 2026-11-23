@@ -5,6 +5,9 @@
 {% block head_extra %}
 {% include "player/styles.html" %}
 {% include "player/podcast_styles.html" %}
+{% include "player/sidebar_styles.html" %}
+{% include "player/collection_styles.html" %}
+{% include "player/listening_styles.html" %}
 {% endblock head_extra %}
 
 {% block body %}
@@ -15,5 +18,7 @@
 {% include "player/lyrics_scripts.html" %}
 {% include "player/lyrics_search_scripts.html" %}
 {% include "player/search_group_scripts.html" %}
+{% include "player/collection_scripts.html" %}
+{% include "player/listening_scripts.html" %}
 {% include "player/scripts.html" %}
 {% endblock body %}

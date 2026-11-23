@@ -1,0 +1,183 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    const labels = {
+        title: ['My listening', 'Мои прослушивания'], overview: ['Overview', 'Обзор'],
+        history: ['History', 'История'], period: ['Period', 'Период'], date: ['Date', 'Дата'],
+        week: ['Last 7 days', 'Последние 7 дней'], month: ['Last 30 days', 'Последние 30 дней'],
+        quarter: ['Last 90 days', 'Последние 90 дней'], allDates: ['All dates', 'Все даты'],
+        time: ['Listening time', 'Время прослушивания'], plays: ['Plays', 'Прослушивания'],
+        tracksMetric: ['Different tracks', 'Разных треков'], daily: ['Listening by day', 'По дням'],
+        top: ['In heavy rotation', 'Чаще всего'], artists: ['Artists', 'Артисты'],
+        tracks: ['Tracks', 'Треки'], releases: ['Albums', 'Альбомы'], rankBy: ['Rank by', 'Рейтинг'],
+        emptyOverview: ['No plays in this period.', 'За этот период прослушиваний нет.'],
+        emptyHistory: ['No plays to show.', 'Прослушиваний пока нет.'],
+        emptyDay: ['No plays on this day.', 'В этот день прослушиваний нет.'],
+        emptyRank: ['No entries in this ranking yet.', 'Этот рейтинг пока пуст.'],
+        loading: ['Loading…', 'Загрузка…'], failed: ['Could not load your listening data.', 'Не удалось загрузить прослушивания.'],
+        unavailable: ['This track is unavailable.', 'Трек недоступен.'], retry: ['Retry', 'Повторить'],
+        play: ['Play', 'Слушать'], more: ['Track actions', 'Действия с треком'],
+        counts: ['Play count', 'Число прослушиваний'], hour: ['h', 'ч'], minute: ['min', 'мин'], second: ['s', 'с'],
+    };
+    const locale = document.documentElement.lang || 'en';
+    const numbers = new Intl.NumberFormat(locale);
+    const dates = new Intl.DateTimeFormat(locale, {day:'numeric', month:'long', year:'numeric'});
+    const times = new Intl.DateTimeFormat(locale, {hour:'2-digit', minute:'2-digit'});
+    const calendar = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+    const localDate = day => new Date(day + 'T12:00:00');
+    const validDay = day => /^\d{4}-\d{2}-\d{2}$/.test(day || '') && calendar(localDate(day)) === day;
+    let generation = 0;
+    let playRequest = 0;
+    let pending;
+    Alpine.store('listening', {
+        tab: 'overview', period: 30, kind: 'artists', day: '', page: 1,
+        overview: null, overviewPeriod: 0, rankedKind: '', history: null, chart: [], groups: [],
+        loading: false, error: '', actionError: '',
+        text(key) { return labels[key][locale.startsWith('ru') ? 1 : 0]; },
+        number(value) { return numbers.format(value || 0); },
+        date(day) { return dates.format(localDate(day)); },
+        clock(ms) { return times.format(new Date(ms)); },
+        duration(seconds) {
+            const minutes = Math.floor(Number(seconds || 0) / 60);
+            if (minutes < 1 && seconds > 0) return Math.floor(seconds) + ' ' + this.text('second');
+            const hours = Math.floor(minutes / 60);
+            const parts = [];
+            if (hours) parts.push(this.number(hours) + ' ' + this.text('hour'));
+            if (!hours || minutes % 60) parts.push(minutes % 60 + ' ' + this.text('minute'));
+            return parts.join(' ');
+        },
+        enter(tab, day) {
+            this.tab = tab === 'history' ? 'history' : 'overview';
+            this.day = this.tab === 'history' && validDay(day) ? day : '';
+            this.page = 1;
+            this.actionError = '';
+            return this.load();
+        },
+        range() {
+            const end = new Date();
+            if (this.tab === 'history') return {from: this.day || 'all', to: this.day || calendar(end)};
+            const start = new Date(end);
+            start.setDate(start.getDate() - this.period + 1);
+            return {from: calendar(start), to: calendar(end)};
+        },
+        dailyPoints(rows, range) {
+            const byDay = new Map(rows.map(row => [row.day, row]));
+            const points = [];
+            const max = Math.max(1, ...rows.map(row => row.listened_seconds));
+            for (const d = localDate(range.from); calendar(d) <= range.to; d.setDate(d.getDate() + 1)) {
+                const day = calendar(d);
+                const row = byDay.get(day);
+                const seconds = row?.listened_seconds || 0;
+                points.push({day, plays: row?.plays || 0, seconds, height: 100 * seconds / max});
+            }
+            return points;
+        },
+        historyDays(items) {
+            const groups = [];
+            for (const item of items) {
+                const day = calendar(new Date(item.started_at_ms));
+                if (groups.at(-1)?.day !== day) groups.push({day, items: []});
+                groups.at(-1).items.push(item);
+            }
+            return groups;
+        },
+        async load(page = this.page) {
+            const version = ++generation;
+            pending?.abort();
+            pending = new AbortController();
+            const range = this.range();
+            const params = new URLSearchParams({...range, view: this.tab, kind: this.kind, page,
+                tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'});
+            this.error = '';
+            this.loading = true;
+            try {
+                const response = await fetch('/api/player/listening?' + params, {signal: pending.signal});
+                if (!response.ok) throw new Error();
+                const data = await response.json();
+                if (version !== generation) return;
+                if (this.tab === 'overview') {
+                    this.overview = data;
+                    this.overviewPeriod = this.period;
+                    this.rankedKind = this.kind;
+                    this.chart = this.dailyPoints(data.daily, range);
+                } else {
+                    this.history = data;
+                    this.page = data.page;
+                    this.groups = this.historyDays(data.items);
+                }
+            } catch {
+                if (version === generation) this.error = this.text('failed');
+            } finally {
+                if (version === generation) this.loading = false;
+            }
+        },
+        setKind(kind) {
+            if (kind === this.kind) return;
+            this.kind = kind;
+            return this.load();
+        },
+        rankLink(item) {
+            const library = Alpine.store('library');
+            if (this.kind === 'artists') return library.artistHref({name: item.title, id: item.artist_id});
+            if (this.kind === 'releases') return library.releaseHref({
+                id: item.release_id, key: library.federationReleaseKey(item.title, item.artist_names || [], null),
+            });
+            return null;
+        },
+        remoteTrack(item) {
+            if (!item.content_id) return null;
+            const library = Alpine.store('library');
+            const wire = {
+                key: {content_id: item.content_id},
+                metadata: {title: item.title, artists: (item.artist_names || []).map(name => ({name})),
+                    release_title: item.release_title, cover_url: item.cover_url},
+                availability: {state:'federated', local:null, federation:[{owner:'', item_id:''}]},
+            };
+            return library.federationQueueTrack(wire);
+        },
+        async tracksFor(items) {
+            const ids = [...new Set(items.map(item => item.track_id).filter(Boolean))];
+            let tracks = [];
+            if (ids.length) {
+                const response = await fetch('/api/player/tracks-by-ids', {method:'POST',
+                    headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
+                if (!response.ok) throw new Error();
+                tracks = await response.json();
+            }
+            const local = new Map(tracks.map(track => [track.id, track]));
+            return items.map(item => local.get(item.track_id) || this.remoteTrack(item));
+        },
+        async play(item) {
+            const version = generation;
+            const request = ++playRequest;
+            this.actionError = '';
+            try {
+                const items = this.tab === 'history' ? this.history.items : this.overview.ranking;
+                const index = this.tab === 'history'
+                    ? items.findIndex(row => row.id === item.id)
+                    : items.findIndex(row => row.content_id === item.content_id);
+                const tracks = await this.tracksFor(items);
+                if (request !== playRequest || version !== generation || Alpine.store('library').view !== 'listening') return;
+                if (!tracks[index]) throw new Error();
+                Alpine.store('queue').playRelease(tracks.filter(Boolean), tracks.slice(0, index).filter(Boolean).length);
+            } catch {
+                if (request === playRequest && version === generation) this.actionError = this.text('unavailable');
+            }
+        },
+        async trackAction(item, action) {
+            const version = generation;
+            this.actionError = '';
+            try {
+                const [track] = await this.tracksFor([item]);
+                if (version !== generation || Alpine.store('library').view !== 'listening') return;
+                if (!track) throw new Error();
+                if (action === 'next') Alpine.store('queue').addNextInQueue([track]);
+                else if (action === 'queue') Alpine.store('queue').addToEnd([track]);
+                else if (track.federation_pending) Alpine.store('library').openFederationTrackInfo(track._federationTrack);
+                else Alpine.store('library').openTrackInfo(track);
+            } catch {
+                if (version === generation) this.actionError = this.text('unavailable');
+            }
+        },
+    });
+});
+</script>

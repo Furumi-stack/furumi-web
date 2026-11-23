@@ -29,6 +29,20 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
    },tracks);
    await page.waitForSelector('.playlist-track-row');
    const row=page.locator('.playlist-track-row').first(),pop=row.locator('.popularity-info-btn'),heart=row.locator('.like-btn');
+   if(viewport.width===1440){
+    const title=row.locator('.track-title');
+    await page.evaluate(()=>{
+     Alpine.store('queue').playRelease=(tracks,index)=>{window.playedFromRow=tracks[index].id;};
+    });
+    await title.dblclick({position:{x:12,y:8}});
+    assert.equal(await page.evaluate(()=>window.playedFromRow),tracks[0].id,'double click plays the row');
+    assert.equal(await page.evaluate(()=>getSelection().toString()),'','playing does not select the title');
+    const box=await title.boundingBox();
+    await page.mouse.move(box.x+2,box.y+8);
+    await page.mouse.down();await page.mouse.move(box.x+56,box.y+8,{steps:8});await page.mouse.up();
+    assert.ok((await page.evaluate(()=>getSelection().toString())).trim(),'drag still selects title text');
+    await page.evaluate(()=>getSelection().removeAllRanges());
+   }
    const initial=await pop.boundingBox(),heartBefore=await heart.boundingBox();
    const icon=await row.locator('.lyrics-presence').boundingBox();assert.ok(icon.x+icon.width<=initial.x,'lyrics appear to the left of popularity');
    await page.evaluate(()=>Alpine.store('library').currentPlaylist.tracks[0].has_lyrics=false);

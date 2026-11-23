@@ -1,0 +1,28 @@
+<style>
+.collection-heading,.collection-tabs,.collection-row,.collection-link {display:flex;align-items:center}
+.collection-heading {justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 16px}
+.collection-heading .section-title {margin:0}
+.collection-tabs {gap:6px;flex-wrap:wrap;margin:0 0 22px}
+.collection-tabs a {color:var(--text-subdued);border-radius:16px;padding:6px 12px;background:var(--bg-elevated);text-decoration:none;font-size:13px}
+.collection-tabs a:hover,.collection-tabs a:focus-visible {color:var(--text-primary)}
+.collection-tabs a[aria-current] {background:var(--text-primary);color:var(--bg-primary)}
+.collection-list {max-width:840px}
+.collection-row {gap:8px;border-bottom:1px solid var(--border-color);padding:4px 6px}
+.collection-row:hover,.collection-row:focus-within {background:var(--bg-elevated);border-radius:6px}
+.collection-link {gap:12px;min-width:0;flex:1;color:inherit;text-decoration:none;padding:5px 0}
+.collection-link > span:last-child {min-width:0}
+.collection-link strong,.collection-link small {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.collection-link strong {font-size:14px;font-weight:600}
+.collection-link small {color:var(--text-subdued);font-size:12px;margin-top:3px}
+.collection-art {position:relative;display:grid;place-items:center;flex:none;width:44px;height:44px;background:var(--bg-active);color:var(--text-subdued);border-radius:5px;overflow:hidden}
+.collection-art.artist {border-radius:50%}
+.collection-art.likes {color:var(--accent);background:#183426}
+.collection-art img {position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.collection-pin {padding:8px;min-width:34px;justify-content:center}
+.collection-pin[aria-pressed=true] {color:var(--accent)}
+.collection-more {border:0;border-radius:50%;width:34px;height:34px;background:transparent;color:var(--text-subdued);font-size:20px;cursor:pointer}
+.collection-options {position:relative}
+.collection-popup {position:absolute;right:0;top:100%;z-index:5;min-width:135px;background:var(--bg-elevated);padding:4px;border:1px solid var(--border-color);border-radius:6px;box-shadow:0 4px 14px #0005}
+.collection-popup button {display:block;width:100%;border:0;padding:8px 12px;text-align:left;background:transparent;color:var(--text-primary);cursor:pointer}
+.collection-popup button:hover,.collection-more:hover {background:var(--bg-active)}
+</style>

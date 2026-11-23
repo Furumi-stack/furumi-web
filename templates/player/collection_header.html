@@ -1,0 +1,18 @@
+<header class="collection-heading">
+    <h1 class="section-title" x-text="['artists','published'].includes($store.library.view) ? '{{ t.player_global_library }}' : '{{ t.player_my_music }}'"></h1>
+    <button type="button" class="release-action-btn secondary" x-show="$store.library.view === 'collection' && $store.library.collectionTab === 'playlists'"
+            @click="$store.playlists.showCreate()"><span aria-hidden="true">＋</span> {{ t.player_new_playlist }}</button>
+</header>
+<template x-if="['artists','published'].includes($store.library.view)">
+    <nav class="collection-tabs" aria-label="{{ t.player_global_library }}">
+        <a href="#artists" :aria-current="$store.library.view === 'artists' ? 'page' : null">{{ t.player_artists }}</a>
+        <a href="#artists?tab=playlists" :aria-current="$store.library.view === 'published' ? 'page' : null">{{ t.player_published_playlists }}</a>
+    </nav>
+</template>
+<template x-if="['collection','my_uploads'].includes($store.library.view)">
+    <nav class="collection-tabs" aria-label="{{ t.player_my_music }}">
+        <a href="#collection" :aria-current="$store.library.view === 'collection' && $store.library.collectionTab === 'playlists' ? 'page' : null">{{ t.player_playlists }}</a>
+        <a href="#collection?tab=artists" :aria-current="$store.library.view === 'collection' && $store.library.collectionTab === 'artists' ? 'page' : null">{{ t.player_artists }}</a>
+        <a href="#uploads" :aria-current="$store.library.view === 'my_uploads' ? 'page' : null">{{ t.player_my_uploads }}</a>
+    </nav>
+</template>

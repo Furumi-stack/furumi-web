@@ -11,11 +11,17 @@ const text=Array.from({length:24},(_,i)=>`[00:${String(i*2).padStart(2,'0')}.00]
   for(const viewport of [{width:1440,height:1000},{width:390,height:844}]){
    const page=await browser.newPage({viewport,reducedMotion:'reduce'}),errors=[];
    page.on('pageerror',e=>errors.push(e.message));
+   let holdLyrics=false,releaseLyrics;
+   const waiting=new Promise(resolve=>{releaseLyrics=resolve;});
    await page.route('**/*',async route=>{
     const u=new URL(route.request().url());
     if(u.hostname==='lyrics-ui.test'&&u.pathname==='/') return route.fulfill({contentType:'text/html',body:html});
     if(u.hostname==='cdn.jsdelivr.net'&&u.pathname.includes('alpine'))return route.fulfill({contentType:'application/javascript',body:alpine});
-    if(u.pathname==='/api/player/lyrics/1')return route.fulfill({json:{versions:[{id:'plain',label:'Plain translation',plain_text:'A plain text translation',source:'manual'},{id:'timed',label:'Original',synced_lrc:text,source:'lrclib'}]}});
+    if(u.pathname==='/api/player/lyrics/1'){
+     if(holdLyrics)await waiting;
+     const alternatives=holdLyrics?Array.from({length:8},(_,i)=>({id:'translation-'+i,label:'Alternative translation '+(i+1),plain_text:'Full text '+i,source:'manual'})):[];
+     return route.fulfill({json:{versions:[{id:'plain',label:'Plain translation',plain_text:'A plain text translation',source:'manual'},{id:'timed',label:'Original',synced_lrc:text,source:'lrclib'},...alternatives]}});
+    }
     if(u.pathname==='/api/player/lyrics/2')return route.fulfill({json:{versions:[]}});
     if(u.pathname==='/api/player/lyrics/3')return route.fulfill({json:{versions:[{id:'plain',label:'Plain',plain_text:'Third track lyrics\nAnother line',source:'manual'}]}});
     if(u.pathname==='/api/player/artists')return route.fulfill({json:{items:[],total:0,has_more:false}});
@@ -38,7 +44,7 @@ const text=Array.from({length:24},(_,i)=>`[00:${String(i*2).padStart(2,'0')}.00]
    const bounds=await page.locator('.lyrics-dialog').boundingBox();
    assert.equal(Math.round(bounds.width),viewport.width);assert.equal(Math.round(bounds.height),viewport.height);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-   await page.selectOption('#lyrics-version','1');
+   await page.getByRole('button',{name:'Plain translation',exact:true}).click();
    await page.waitForFunction(()=>document.querySelector('.lyrics-plain')?.textContent==='A plain text translation');
    await page.evaluate(()=>{Alpine.store('player').currentTrack={id:2,title:'No lyrics',artists:[]};Alpine.store('player').currentTime=0;});
    await page.waitForFunction(()=>Alpine.store('lyrics').loadedKey==='2'&&!Alpine.store('lyrics').loading);
@@ -46,11 +52,34 @@ const text=Array.from({length:24},(_,i)=>`[00:${String(i*2).padStart(2,'0')}.00]
    await page.evaluate(()=>Alpine.store('player').currentTrack={id:3,title:'Plain lyrics track',artists:[]});
    await page.waitForFunction(()=>document.querySelector('.lyrics-plain')?.textContent.includes('Third track'));
    await page.keyboard.press('Escape');assert.equal(await page.locator('.lyrics-overlay').count(),0);
+   holdLyrics=true;
+   await page.evaluate(()=>{document.execCommand=command=>{
+    if(command!=='copy')return false;
+    window.copiedLyrics=document.activeElement.value;
+    return true;
+   };});
    await page.evaluate(t=>Alpine.store('library').openTrackInfo(t),track);
    await page.getByRole('button',{name:'Available · view',exact:true}).click();
+   await page.locator('.lyrics-heading .lyrics-status').getByText('Loading lyrics…').waitFor();
+   assert.ok((await page.locator('.lyrics-dialog').boundingBox()).height<viewport.height/2,'loading uses a compact header');
+   releaseLyrics();
    await page.waitForSelector('.lyrics-line');
    assert.equal(await page.locator('.lyrics-fullscreen').count(),0);
    assert.ok((await page.locator('.lyrics-dialog').boundingBox()).height<viewport.height);
+   const heading=await page.locator('.lyrics-header').boundingBox(),first=await page.locator('.lyrics-line').first().boundingBox();
+   assert.ok(first.y-heading.y-heading.height<20,'lyrics start immediately after the header');
+   const copy=page.getByRole('button',{name:'Copy lyrics',exact:true});
+   await copy.click();
+   assert.equal(await page.evaluate(()=>window.copiedLyrics),text.split('\n').map(line=>line.slice(line.indexOf(']')+1).trim()).join('\n'));
+   assert.equal(await page.locator('.lyrics-copy-result').textContent(),'Copied');
+   const choices=page.getByRole('group',{name:'Lyrics version'});
+   assert.equal(await choices.getByRole('button',{pressed:true}).textContent(),'LRCLIB');
+   if(viewport.width<600) assert.ok(await choices.evaluate(el=>el.scrollWidth>el.clientWidth),'versions scroll inside the footer');
+   await choices.getByRole('button',{name:'Alternative translation 8',exact:true}).click();
+   assert.equal(await choices.getByRole('button',{pressed:true}).textContent(),'Alternative translation 8');
+   await copy.click();
+   assert.equal(await page.evaluate(()=>window.copiedLyrics),'Full text 7');
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    assert.deepEqual(errors,[]);
    await page.close();
   }

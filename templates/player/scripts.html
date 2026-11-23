@@ -25,9 +25,6 @@ const T = {
     noDetails: "{{ t.player_no_details }}",
     trackInfoTitle: "{{ t.player_track_info }}",
     releaseInfoTitle: "{{ t.player_release_info }}",
-    loadingHistory: "{{ t.player_loading_history }}",
-    failedLoadHistory: "{{ t.player_failed_load_history }}",
-    totalPlays: "{{ t.player_total_plays }}",
     unknown: "{{ t.player_unknown }}",
     unknownSize: "{{ t.player_unknown_size }}",
     title: "{{ t.player_title }}",
@@ -232,6 +229,14 @@ function coverVariantUrl(url, variant) {
     return url.replace(/^(\/api\/player\/cover\/\d+\/)(?:small|medium|large)(?=[?#]|$)/, '$1' + variant);
 }
 
+// A row uses double-click for playback. Keep the first press native so dragging still selects text.
+document.addEventListener('mousedown', event => {
+    if (event.button !== 0 || event.detail !== 2 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest('.track-row') && !event.target.closest('a, button, input, textarea, select, [contenteditable]')) {
+        event.preventDefault();
+    }
+});
+
 document.addEventListener('alpine:init', () => {
     Alpine.data('playerCoverPreview', () => ({
         visible: false,
@@ -320,6 +325,7 @@ document.addEventListener('alpine:init', () => {
             if (this.libraryOpen) Alpine.store('user').menuOpen = false;
         },
         closeLibrary() {
+            document.querySelector('dialog.mobile-library-backdrop[open]')?.close();
             this.libraryOpen = false;
         },
         isMobilePlayer() {
@@ -657,10 +663,6 @@ document.addEventListener('alpine:init', () => {
             this.settingsOpen = false;
         },
 
-        openHistoryFromSettings() {
-            Alpine.store('history').open();
-        },
-
         initials() {
             const name = this.profile?.name || '';
             return name.trim().charAt(0) || '?';
@@ -693,83 +695,6 @@ document.addEventListener('alpine:init', () => {
 
         logout() {
             window.location.href = '/logout';
-        },
-    });
-
-    // -----------------------------------------------------------------------
-    // Play history store
-    // -----------------------------------------------------------------------
-    Alpine.store('history', {
-        modal: false,
-        items: [],
-        page: 1,
-        perPage: 20,
-        total: 0,
-        loading: false,
-        message: '',
-        error: false,
-
-        open() {
-            this.modal = true;
-            this.load(1);
-        },
-
-        close() {
-            this.modal = false;
-        },
-
-        totalPages() {
-            return Math.max(1, Math.ceil(this.total / this.perPage));
-        },
-
-        tracks() {
-            return (this.items || []).map(item => item.track).filter(Boolean);
-        },
-
-        playFrom(index) {
-            const tracks = this.tracks();
-            if (!tracks.length || index < 0 || index >= tracks.length) return;
-            Alpine.store('queue').playRelease(tracks, index);
-        },
-
-        async load(page) {
-            page = Math.max(1, page || 1);
-            this.loading = true;
-            this.error = false;
-            this.message = T.loadingHistory;
-            try {
-                const res = await fetch(`/api/player/history?page=${page}&limit=${this.perPage}`);
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.failedLoadHistory);
-                this.items = data.items || [];
-                this.page = data.page || page;
-                this.perPage = data.per_page || this.perPage;
-                this.total = data.total || 0;
-                this.message = this.total ? (this.total + ' ' + T.totalPlays) : '';
-            } catch (err) {
-                this.error = true;
-                this.message = err.message || String(err);
-            } finally {
-                this.loading = false;
-            }
-        },
-
-        date(value) {
-            if (!value) return '';
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) return value;
-            return new Intl.DateTimeFormat(undefined, {
-                year: 'numeric',
-                month: 'short',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-            }).format(date);
-        },
-
-        duration(seconds) {
-            if (!seconds) return '0:00';
-            return formatTime(Number(seconds));
         },
     });
 
@@ -2623,6 +2548,7 @@ document.addEventListener('alpine:init', () => {
     // -----------------------------------------------------------------------
     Alpine.store('library', {
         view: 'artists',
+        collectionTab: 'playlists',
         artistFilter: 'all',
         artists: [],
         artistsPage: 0,
@@ -2733,6 +2659,12 @@ document.addEventListener('alpine:init', () => {
             if (GUEST) return;
             if (this._hashNav) return;
             const hash = location.hash || '#artists';
+            const listening = hash.match(/^#listening(?:\/(history))?(?:\?(.*))?$/);
+            if (listening) {
+                return this.openListening(listening[1] || 'overview', {
+                    ...options, day: new URLSearchParams(listening[2]).get('day') || '',
+                });
+            }
             const match = hash.match(/^#(\w+)(?:\/([-]?\d+))?(?:\?(.*))?$/);
             if (!match) {
                 this.goArtists(options);
@@ -2742,7 +2674,11 @@ document.addEventListener('alpine:init', () => {
             const id = match[2] ? parseInt(match[2], 10) : null;
             const params = match[3] || '';
 
-            if (view === 'artists' && !id) {
+            if (view === 'collection') {
+                this.goCollection(new URLSearchParams(params).get('tab') || 'playlists', options);
+            } else if (view === 'artists' && new URLSearchParams(params).get('tab') === 'playlists') {
+                this.openCollectionView('published', '#artists?tab=playlists', options);
+            } else if (view === 'artists' && !id) {
                 if (this.view !== 'artists' || this.artistsPage === 0) this.goArtists(options);
                 else if (options.restoreScroll) this._restoreScrollPosition(hash);
             } else if (view === 'podcasts') {
@@ -2864,6 +2800,33 @@ document.addEventListener('alpine:init', () => {
             this._previousView = 'artists';
             this.$nextTick(() => { this._setupScroll(); });
             this._afterNavigation(options);
+        },
+
+        openCollectionView(view, hash, options) {
+            this._beginNavigation(hash, options);
+            this.searchQuery = '';
+            this.searchResults = null;
+            this.currentArtist = null;
+            this.currentRelease = null;
+            this.currentPlaylist = null;
+            this.view = view;
+            this._previousView = view;
+            this._afterNavigation(options);
+        },
+
+        goCollection(tab = 'playlists', options = {}) {
+            if (GUEST) return;
+            this.collectionTab = tab === 'artists' ? 'artists' : 'playlists';
+            this.openCollectionView('collection', this.collectionTab === 'artists' ? '#collection?tab=artists' : '#collection', options);
+        },
+
+        openListening(tab = 'overview', options = {}) {
+            if (GUEST) return;
+            const history = tab === 'history';
+            const day = history && /^\d{4}-\d{2}-\d{2}$/.test(options.day || '') ? options.day : '';
+            const hash = history ? '#listening/history' + (day ? '?day=' + day : '') : '#listening';
+            this.openCollectionView('listening', hash, options);
+            Alpine.store('listening').enter(history ? 'history' : 'overview', day);
         },
 
         goMyUploads(options = {}) {
@@ -4487,8 +4450,7 @@ document.addEventListener('alpine:init', () => {
                     });
                     this.refreshMaterializedArtwork(track);
                     Alpine.store('likes')?.reload();
-                    const history = Alpine.store('history');
-                    if (history?.modal) history.load(history.page);
+                    if (this.view === 'listening') Alpine.store('listening').load();
                 }
                 const finalProgress = this.federationPreparing[contentId] || {};
                 const queueIndex = Number.isInteger(finalProgress.queueIndex)
@@ -6889,12 +6851,12 @@ document.addEventListener('alpine:init', () => {
                 } catch {}
             } else if (this.modal.mode === 'rename') {
                 try {
-                    await fetch(`/api/player/playlists/${this.modal.id}`, {
+                    const response = await fetch(`/api/player/playlists/${this.modal.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ title }),
                     });
-                    await this.reload();
+                    if (response.ok) await Promise.all([this.reload(), Alpine.store('pins').reload()]);
                 } catch {}
             }
             this.modal = null;
@@ -6903,8 +6865,8 @@ document.addEventListener('alpine:init', () => {
         async deletePlaylist(id) {
             if (!confirm(T.deletePlaylistConfirm)) return;
             try {
-                await fetch(`/api/player/playlists/${id}`, { method: 'DELETE' });
-                await this.reload();
+                const response = await fetch(`/api/player/playlists/${id}`, { method: 'DELETE' });
+                if (response.ok) await Promise.all([this.reload(), Alpine.store('pins').reload()]);
             } catch {}
         },
 

@@ -280,7 +280,12 @@ translations! {
     // Player UI
     player_library:          "Library"                         , "Библиотека";
     player_artists:          "Artists"                         , "Артисты";
-    player_global_library:   "Global"                          , "Global";
+    player_global_library:   "Catalog"                         , "Каталог";
+    player_my_music:         "My music"                        , "Моя музыка";
+    player_my_listening:     "My listening"                    , "Мои прослушивания";
+    player_quick_access:     "Quick access"                    , "Быстрый доступ";
+    player_pinned:           "Pinned"                          , "Закреплено";
+    player_account_menu:     "Account menu"                    , "Меню аккаунта";
     player_featured_only_artists: "Featured only"               , "Только фиты";
     player_release:          "Release"                         , "Релиз";
     player_album_cover:      "Album cover"                     , "Обложка альбома";
@@ -310,7 +315,7 @@ translations! {
     player_play_one:         "play"                            , "прослушивание";
     player_play_few:         "plays"                           , "прослушивания";
     player_likes_count:      "likes"                           , "лайков";
-    player_likes_playlist:   "Likes"                           , "Лайки";
+    player_likes_playlist:   "Liked songs"                     , "Мне нравится";
     player_listened:         "listened"                        , "прослушано";
     player_search_placeholder: "Search artists, releases, tracks, podcasts..." , "Поиск артистов, релизов, треков, подкастов...";
     player_search_similar_to: "Search similar to:"                , "Поиск похожих на:";
@@ -321,6 +326,11 @@ translations! {
     player_active_device:   "Active device"                   , "Активный девайс";
     player_no_results:       "No results found"                , "Ничего не найдено";
     player_new_playlist:     "New Playlist"                    , "Новый плейлист";
+    player_sidebar_pin:      "Pin to sidebar"                   , "Закрепить в меню";
+    player_sidebar_unpin:    "Unpin from sidebar"               , "Открепить из меню";
+    player_pin_failed:       "Could not update this shortcut."   , "Не удалось обновить закрепление.";
+    player_more_actions:     "More actions"                     , "Ещё";
+    player_collection_empty: "No playlists yet."                , "Плейлистов пока нет.";
     player_rename_playlist:  "Rename Playlist"                 , "Переименовать плейлист";
     player_playlist_name:    "Playlist name"                   , "Название плейлиста";
     player_add_to_playlist:  "Add to Playlist"                 , "Добавить в плейлист";

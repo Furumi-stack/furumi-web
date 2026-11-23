@@ -107,6 +107,7 @@ pub(super) struct UploaderSummary {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct PlaylistCard {
     pub(super) id: i64,
+    pub(super) cover_url: Option<String>,
     pub(super) title: String,
     pub(super) track_count: i64,
     pub(super) is_own: bool,

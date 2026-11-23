@@ -2930,7 +2930,30 @@ pub mod db_migrations {
             )];
         const OPERATIONS: &'static [Operation] = &[Operation::custom(create_lyrics_search).build()];
     }
+
+    #[cot::db::migrations::migration_op]
+    async fn create_sidebar_pins(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        ctx.db
+            .raw(include_str!("../player/sidebar_pins.sql"))
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0058CreateSidebarPins;
+    impl migrations::Migration for M0058CreateSidebarPins {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0058_create_sidebar_pins";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0057_create_lyrics_search",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(create_sidebar_pins).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0058CreateSidebarPins,
         &M0057CreateLyricsSearch,
         &M0056CreateLyrics,
         &M0006CreateMediaFile,

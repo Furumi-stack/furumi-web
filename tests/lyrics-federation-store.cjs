@@ -13,6 +13,7 @@ function storeFor(fetch, guest = false) {
         document: {
             addEventListener: (_, initialize) => initialize(),
             documentElement: {lang: 'en'},
+            querySelector: () => null,
         },
         Alpine: {
             store: (name, value) => name === 'lyrics' ? (lyrics = value) : {},
@@ -39,10 +40,22 @@ test('saved lyrics display first and peer alternatives preserve the selection', 
     const load = lyrics.load({id: '4'});
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(lyrics.currentVersion().id, 'local');
+    assert.equal(lyrics.status(), '', 'saved lyrics are ready while the peer lookup is pending');
     assert.match(url, /\/federation\/tracks\/lyrics\?content_id=b3%3A/);
     release(reply([version('duplicate', 'Words'), version('peer', 'New words')]));
     await load;
     assert.equal(lyrics.versions.length, 2);
+    assert.equal(lyrics.currentVersion().id, 'local');
+});
+
+test('a peer track with a known local copy previews saved lyrics first', async () => {
+    const urls = [];
+    const lyrics = storeFor(async endpoint => {
+        urls.push(endpoint);
+        return reply(endpoint.includes('/federation/') ? [] : [version('local', 'Words')]);
+    });
+    await lyrics.load({id: 'fed:' + id, content_id: id, federation_pending: true, availability: {local: {track_id: 7}}});
+    assert.equal(urls[0], '/api/player/lyrics/7');
     assert.equal(lyrics.currentVersion().id, 'local');
 });
 

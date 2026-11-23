@@ -10,6 +10,16 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.15.0 — 2026-11-23
+
+- Desktop and mobile navigation now includes a personal music collection,
+  account shortcuts and pins for artists, releases and playlists.
+- My listening shows personal listening time, daily activity, rankings and a
+  playable history that can be filtered by day.
+- The lyrics preview keeps loading status in the header, offers one-click
+  copying and lets listeners switch versions from the source names below the text.
+- Double-clicking a track row starts playback without selecting the title.
+
 ## v0.14.0 — 2026-11-23
 
 - Artist pages count guest appearances as tracks and include them in the Listen

@@ -1,0 +1,101 @@
+<style>
+.music-nav {
+    flex: 1;
+    min-height: 0;
+    padding: 18px 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+.music-nav a, .account-action-list a { text-decoration: none; }
+.music-nav-pages { display: grid; gap: 3px; }
+.music-nav-pages a, .music-shortcut, .account-action-list > *, .sidebar-account-trigger {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 12px;
+    border: 0;
+    border-radius: 7px;
+    color: var(--text-secondary);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.music-nav-pages a { min-height: 41px; padding: 8px 11px; font-size: 14px; font-weight: 600; }
+.music-nav svg, .sidebar-account-trigger svg, .account-action-list svg {
+    flex: 0 0 auto;
+    width: 19px;
+    height: 19px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.music-nav-pages a:hover, .music-shortcut:hover, .account-action-list > :hover,
+.sidebar-account-trigger:hover, .sidebar-account-trigger[aria-expanded="true"] {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.music-nav a[aria-current] { background: var(--bg-active); color: var(--text-primary); }
+.music-nav-pages a[aria-current] svg { color: var(--accent); }
+.music-nav a:focus-visible, .sidebar-account button:focus-visible, .account-action-list > :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.music-shortcuts {
+    margin-top: 17px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+.music-shortcuts h2 { margin: 0 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-subdued); }
+.music-shortcut { padding: 6px 8px; min-height: 43px; gap: 10px; }
+.music-shortcut-art {
+    position: relative;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    flex: 0 0 31px;
+    height: 31px;
+    border-radius: 5px;
+    background: var(--bg-elevated);
+    color: var(--text-subdued);
+}
+.shortcut-artist { border-radius: 50%; }
+.shortcut-likes { background: rgba(29,185,84,.13); color: var(--accent); }
+.shortcut-likes svg { width: 15px; fill: currentColor; stroke: none; }
+.music-shortcut-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.music-shortcut-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.music-shortcut-count { margin-left: auto; font-size: 12px; color: var(--text-subdued); font-variant-numeric: tabular-nums; }
+.sidebar-account { position: relative; flex: 0 0 auto; padding: 8px; border-top: 1px solid var(--border-color); }
+.sidebar-account-trigger { width: 100%; padding: 7px 10px; }
+.sidebar-account-trigger .user-avatar { width: 29px; height: 29px; flex-shrink: 0; font-size: 12px; }
+.sidebar-account-trigger .user-name { flex: 1; font-weight: 600; }
+.sidebar-account-trigger svg { width: 15px; height: 15px; }
+.sidebar-account-popover, .mobile-account-control .mobile-account-popover {
+    position: absolute;
+    z-index: 65;
+    padding: 5px;
+    border: 1px solid var(--border-color);
+    border-radius: 9px;
+    background: var(--bg-elevated);
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.sidebar-account-popover { left: 8px; right: 8px; bottom: calc(100% + 3px); }
+.account-action-list > * { width: 100%; min-height: 38px; padding: 8px 10px; font-size: 13px; }
+.account-action-list svg { width: 17px; height: 17px; }
+.account-menu-name { overflow-wrap: anywhere; padding: 9px 10px; margin-bottom: 3px; font-size: 14px; font-weight: 650; border-bottom: 1px solid var(--border-color); }
+.mobile-account-control { display: none; position: relative; flex: 0 0 auto; }
+.mobile-account-control .mobile-account-chip { width: 42px; padding: 0; justify-content: center; }
+.mobile-account-control .mobile-account-popover { top: calc(100% + 6px); right: 0; width: min(240px, calc(100vw - 24px)); }
+.mobile-library-backdrop { color: var(--text-primary); padding: 0; border: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
+.mobile-library-backdrop::backdrop { background: transparent; }
+.mobile-library-drawer .music-nav { padding: 4px 2px; overflow: visible; }
+.mobile-library-drawer .music-nav-pages a, .mobile-library-drawer .music-shortcut { min-height: 44px; }
+@media (max-width: 900px), (pointer: coarse) and (max-width: 1024px) {
+    .mobile-account-control { display: block; }
+    .account-action-list > * { min-height: 44px; }
+}
+</style>

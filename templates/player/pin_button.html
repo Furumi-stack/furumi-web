@@ -1,0 +1,7 @@
+<button data-member-only type="button" class="release-action-btn secondary collection-pin" x-show="target" x-cloak
+        :aria-pressed="$store.pins.has(target)" :disabled="$store.pins.busy" @click.stop="$store.pins.toggle(target)"
+        :aria-label="$store.pins.has(target) ? '{{ t.player_sidebar_unpin }}' : '{{ t.player_sidebar_pin }}'"
+        :title="$store.pins.has(target) ? '{{ t.player_sidebar_unpin }}' : '{{ t.player_sidebar_pin }}'">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"
+         stroke-linecap="round" aria-hidden="true"><path d="m15 3 6 6-3 1-4 4v3l-2 2-7-7 2-2h3l4-4zM9 15l-6 6"/></svg>
+</button>

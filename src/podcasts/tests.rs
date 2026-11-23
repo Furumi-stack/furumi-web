@@ -29,7 +29,7 @@ fn renders_podcast_navigation_and_views() {
     .render()
     .unwrap();
     assert_eq!(
-        html.matches("@click=\"$store.podcasts.enter()\"").count(),
+        html.matches("href=\"#podcasts\" class=\"podcast-nav\"").count(),
         2
     );
     assert!(html.contains("/api/podcasts/action"));

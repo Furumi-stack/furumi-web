@@ -1,0 +1,53 @@
+<template x-if="['collection','published'].includes($store.library.view)">
+    <section x-data="{menuId: null, get playlists() { return $store.playlists.list.filter(pl => $store.library.view === 'published'
+            ? pl.is_public : (pl.is_own || pl.is_saved || pl.kind === 'likes')) },
+            get artists() { return $store.library.view === 'collection' && $store.library.collectionTab === 'artists' } }"
+             @click.window="if (menuId !== null && !$event.target.closest('.collection-options')) menuId = null">
+        {% include "player/collection_header.html" %}
+        <template x-if="artists">
+            <div>
+                <div class="collection-list">
+                    <template x-for="artist in $store.follows.artists" :key="artist.id">
+                        <div class="collection-row">
+                            <a class="collection-link" :href="$store.library.artistHref(artist)">
+                                <span class="collection-art artist"><span aria-hidden="true">♫</span><template x-if="artist.image_url"><img :src="artist.image_url" alt="" loading="lazy"></template></span>
+                                <span><strong x-text="artist.name"></strong><small x-text="formatArtistCount(artist.track_count, 'tracks')"></small></span>
+                            </a>
+                            <div x-data="{ get target() { return $store.pins.target('artist', artist) } }">{% include "player/pin_button.html" %}</div>
+                        </div>
+                    </template>
+                </div>
+                <p class="empty-state" x-show="!$store.follows.artists.length">{{ t.player_no_followed_artists }}</p>
+            </div>
+        </template>
+        <template x-if="!artists">
+            <div>
+                <div class="collection-list">
+                    <template x-for="pl in playlists" :key="pl.id">
+                        <div class="collection-row" x-data="{ get target() { return $store.pins.target('playlist', pl) } }"
+                             @keydown.escape="if (menuId === pl.id) {menuId = null; $refs.more.focus()}">
+                            <a class="collection-link" :href="'#playlist/' + pl.id">
+                                <span class="collection-art" :class="{likes: pl.kind === 'likes'}">
+                                    <span aria-hidden="true" x-text="pl.kind === 'likes' ? '♥' : '♫'"></span>
+                                    <template x-if="pl.cover_url"><img :src="pl.cover_url" alt="" loading="lazy"></template>
+                                </span>
+                                <span><strong x-text="$store.playlists.displayTitle(pl)"></strong><small x-text="[pl.is_own ? '' : pl.owner_name, formatArtistCount(pl.track_count, 'tracks')].filter(Boolean).join(' · ')"></small></span>
+                            </a>
+                            {% include "player/pin_button.html" %}
+                            <template x-if="pl.kind === 'user' && pl.is_own">
+                                <div class="collection-options">
+                                    <button type="button" class="collection-more" x-ref="more" @click="menuId = menuId === pl.id ? null : pl.id" :aria-expanded="menuId === pl.id" aria-label="{{ t.player_more_actions }}">⋯</button>
+                                    <div class="collection-popup" x-show="menuId === pl.id" x-cloak>
+                                        <button @click="menuId = null; $store.playlists.startRename(pl)">{{ t.player_rename }}</button>
+                                        <button @click="menuId = null; $store.playlists.deletePlaylist(pl.id)">{{ t.player_delete }}</button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+                <p class="empty-state" x-show="!playlists.length">{{ t.player_collection_empty }}</p>
+            </div>
+        </template>
+    </section>
+</template>

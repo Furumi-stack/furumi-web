@@ -30,6 +30,8 @@ use crate::youtube::{YouTubePreviewRequest, YouTubeService, YouTubeStartRequest}
 mod artist_tests;
 mod dto;
 mod helpers;
+mod listening;
+mod pins;
 mod queries;
 mod rows;
 mod sharing;
@@ -4256,6 +4258,7 @@ async fn playlists_handler(
 
     let mut cards = vec![PlaylistCard {
         id: -1,
+        cover_url: None,
         title: "Likes".to_string(),
         track_count: likes_count.0,
         is_own: true,
@@ -4265,9 +4268,13 @@ async fn playlists_handler(
         kind: "likes".to_string(),
     }];
 
-    let rows = sqlx::query_as::<_, PlaylistRow>(
+    let rows = sqlx::query_as::<_, PlaylistRow>(&format!(
         r#"SELECT p.id, p.title::text as title,
-                  COALESCE((SELECT COUNT(*) FROM furumusic__playlist_track pt WHERE pt.playlist_id = p.id), 0) as track_count,
+                  COALESCE(p.cover_file_id, ({})) AS cover_file_id,
+                  (SELECT COUNT(*) FROM furumusic__playlist_track pt WHERE pt.playlist_id = p.id)
+                   + (SELECT COUNT(*) FROM furumusic__fed_state_playlist_item i
+                      JOIN furumusic__fed_state_playlist fp ON fp.user_id = i.user_id AND fp.playlist_id = i.playlist_id
+                      WHERE i.user_id = $1 AND fp.local_playlist_id = p.id AND i.present AND i.local_track_id IS NULL) AS track_count,
                   (p.owner_id = $1) as is_own,
                   COALESCE(NULLIF(u.display_name, ''), u.username)::text as owner_name,
                   p.is_public,
@@ -4285,31 +4292,18 @@ async fn playlists_handler(
               OR p.is_public = true
            ORDER BY
               CASE WHEN p.owner_id = $1 THEN 0 WHEN p.is_public THEN 2 ELSE 1 END,
-              p.title"#,
-    )
+              p.title"#, include_str!("playlist_cover.sql")))
     .bind(user.id)
     .fetch_all(pool)
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     for r in rows {
-        let federated_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
-               FROM furumusic__fed_state_playlist_item i
-               JOIN furumusic__fed_state_playlist p
-                 ON p.user_id = i.user_id AND p.playlist_id = i.playlist_id
-              WHERE i.user_id = $1 AND p.local_playlist_id = $2
-                AND i.present = true AND i.local_track_id IS NULL",
-        )
-        .bind(user.id)
-        .bind(r.id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
         cards.push(PlaylistCard {
             id: r.id,
+            cover_url: cover_variant_url(r.cover_file_id, "small"),
             title: r.title,
-            track_count: r.track_count + federated_count,
+            track_count: r.track_count,
             is_own: r.is_own,
             owner_name: Some(r.owner_name),
             is_public: r.is_public,
@@ -4353,7 +4347,8 @@ async fn playlist_detail_handler(
                   ) as is_saved
            FROM furumusic__playlist p
            JOIN furumusic__user u ON u.id = p.owner_id
-           WHERE p.id = $1"#,
+           WHERE p.id = $1 AND (p.owner_id = $2 OR p.is_public OR EXISTS (
+               SELECT 1 FROM furumusic__saved_playlist sp WHERE sp.user_id = $2 AND sp.playlist_id = p.id))"#,
     )
     .bind(playlist_id)
     .bind(user.id)
@@ -7533,6 +7528,7 @@ async fn create_playlist_handler(
 
     Json(PlaylistCard {
         id: row.0,
+        cover_url: None,
         title,
         track_count: 0,
         is_own: true,
@@ -8252,6 +8248,7 @@ impl App for PlayerApp {
         let device_hub = Arc::clone(&self.device_hub);
 
         Router::with_urls([
+            pins::route(pool.clone(), pool_config.clone()),
             // -- Current user profile --
             Route::with_handler_and_name(
                 "/me",
@@ -10540,6 +10537,33 @@ impl App for PlayerApp {
                     }
                 }),
                 "player_state",
+            ),
+            Route::with_handler_and_name(
+                "/listening",
+                get({
+                    let pool = Arc::clone(&pool);
+                    let pool_config = Arc::clone(&pool_config);
+                    move |auth_ctx: auth::AuthContext,
+                          session: Session,
+                          db: Database,
+                          query: UrlQuery<listening::Query>| {
+                        let pool = Arc::clone(&pool);
+                        let pool_config = Arc::clone(&pool_config);
+                        async move {
+                            let pg_pool = pool
+                                .get_or_try_init(|| async {
+                                    sqlx::postgres::PgPoolOptions::new()
+                                        .max_connections(5)
+                                        .connect(&pool_config.database_url)
+                                        .await
+                                })
+                                .await
+                                .map_err(|e| cot::Error::internal(e.to_string()))?;
+                            listening::handler(auth_ctx, session, db, pg_pool, query.0).await
+                        }
+                    }
+                }),
+                "player_listening",
             ),
             // -- Play history --
             Route::with_handler_and_name(

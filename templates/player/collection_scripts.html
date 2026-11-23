@@ -1,0 +1,47 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    Alpine.store('pins', {
+        items: [], busy: false, generation: 0,
+        init() { if (!GUEST) this.reload(); },
+        async reload() {
+            if (this.busy) return;
+            const generation = ++this.generation;
+            try {
+                const response = await fetch('/api/player/pins');
+                if (!response.ok) return;
+                const items = await response.json();
+                if (generation === this.generation && Array.isArray(items)) this.items = items;
+            } catch {}
+        },
+        has(target) {
+            return !!target && this.items.some(item => item.href === target.href);
+        },
+        target(kind, entity) {
+            if (!entity || GUEST) return null;
+            const library = Alpine.store('library');
+            let href;
+            if (kind === 'artist') href = library.artistHref(entity);
+            if (kind === 'release') href = library.releaseHref(entity.id ? entity : entity.federationRelease);
+            if (kind === 'playlist' && entity.id > 0) href = '#playlist/' + entity.id;
+            return href ? {href, title: entity.name || entity.title, cover_url: entity.image_url || entity.cover_url || null} : null;
+        },
+        async toggle(target) {
+            if (!target || this.busy) return;
+            const pinned = !this.has(target);
+            this.busy = true;
+            ++this.generation;
+            try {
+                const response = await fetch('/api/player/pins', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({...target, pinned}) });
+                if (!response.ok) throw new Error();
+                this.items = await response.json();
+                if (this.has(target) !== pinned) throw new Error();
+            } catch {
+                Alpine.store('info').open('{{ t.player_error }}', '{{ t.player_pin_failed }}');
+            } finally {
+                this.busy = false;
+            }
+        },
+    });
+});
+</script>

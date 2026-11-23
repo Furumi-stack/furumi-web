@@ -1,0 +1,148 @@
+<template x-if="$store.library.view === 'listening'">
+    <section class="my-listening" x-data="{ get listens() { return $store.listening } }"
+             @keydown.space="if ($event.target.closest('button,summary,a')) $event.stopPropagation()">
+        <header class="listening-header">
+            <h1 class="section-title" x-text="listens.text('title')"></h1>
+            <select x-show="listens.tab === 'overview'" class="listening-period" :aria-label="listens.text('period')"
+                    x-model.number="listens.period" @change="listens.load(1)">
+                <option value="7" x-text="listens.text('week')"></option>
+                <option value="30" x-text="listens.text('month')"></option>
+                <option value="90" x-text="listens.text('quarter')"></option>
+            </select>
+        </header>
+        <nav class="listening-tabs" :aria-label="listens.text('title')">
+            <a href="#listening" :aria-current="listens.tab === 'overview' ? 'page' : null" x-text="listens.text('overview')"></a>
+            <a href="#listening/history" :aria-current="listens.tab === 'history' ? 'page' : null" x-text="listens.text('history')"></a>
+        </nav>
+        <div x-show="listens.tab === 'history'" class="listening-date-filter">
+            <label><span x-text="listens.text('date')"></span>
+                <input type="date" :value="listens.day"
+                       @change="$store.library.openListening('history', {day: $event.target.value})">
+            </label>
+            <a href="#listening/history" x-show="listens.day" x-text="listens.text('allDates')"></a>
+        </div>
+        <p class="listening-notice" role="status"
+           x-show="listens.loading && (listens.tab === 'history' || listens.period !== listens.overviewPeriod)"
+           x-text="listens.text('loading')"></p>
+        <div class="listening-notice" role="alert" x-show="listens.error">
+            <span x-text="listens.error"></span>
+            <button class="listening-text-action" @click="listens.load()" x-text="listens.text('retry')"></button>
+        </div>
+        <p class="listening-notice" role="alert" x-show="listens.actionError" x-text="listens.actionError"></p>
+        <template x-if="listens.tab === 'overview' && listens.overview && listens.period === listens.overviewPeriod && !listens.error">
+            <div>
+                <dl class="listening-totals">
+                    <div><dt x-text="listens.text('time')"></dt><dd x-text="listens.duration(listens.overview.listened_seconds)"></dd></div>
+                    <div><dt x-text="listens.text('plays')"></dt><dd x-text="listens.number(listens.overview.plays)"></dd></div>
+                    <div><dt x-text="listens.text('tracksMetric')"></dt><dd x-text="listens.number(listens.overview.tracks)"></dd></div>
+                </dl>
+                <p class="listening-notice" x-show="!listens.overview.plays" x-text="listens.text('emptyOverview')"></p>
+                <div class="listening-panels" x-show="listens.overview.plays">
+                    <section class="listening-panel">
+                        <h2 x-text="listens.text('daily')"></h2>
+                        <div class="listening-chart-scroll" :aria-label="listens.text('daily')">
+                            <div class="listening-chart" :style="'--days:' + listens.chart.length">
+                                <template x-for="(point, index) in listens.chart" :key="point.day">
+                                    <button type="button" class="listening-day" :disabled="!point.plays"
+                                            :aria-label="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
+                                            :title="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
+                                            @click="$store.library.openListening('history', {day:point.day})">
+                                        <span class="listening-bar" :style="{height: point.height + '%'}" :class="{'has-plays':point.plays}"></span>
+                                        <span class="listening-tick" aria-hidden="true"
+                                              x-show="index === 0 || listens.chart.length === 7 || point.day.endsWith('-01') || (index % 5 === 0 && index !== listens.chart.length-1)"
+                                              x-text="Number(point.day.slice(-2))"></span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+                        <div class="listening-chart-dates">
+                            <span x-text="listens.date(listens.chart[0].day)"></span>
+                            <span x-text="listens.date(listens.chart[listens.chart.length-1].day)"></span>
+                        </div>
+                    </section>
+                    <section class="listening-panel listening-rank-panel">
+                        <h2 x-text="listens.text('top')"></h2>
+                        <div class="listening-rank-kinds" role="group" :aria-label="listens.text('rankBy')">
+                            <template x-for="kind in ['artists','tracks','releases']" :key="kind">
+                                <button type="button" :aria-pressed="kind === listens.kind" @click="listens.setKind(kind)" x-text="listens.text(kind)"></button>
+                            </template>
+                        </div>
+                        <p class="listening-notice" role="status" x-show="listens.rankedKind !== listens.kind" x-text="listens.text('loading')"></p>
+                        <p class="listening-notice" x-show="listens.rankedKind === listens.kind && !listens.overview.ranking.length" x-text="listens.text('emptyRank')"></p>
+                        <ol class="listening-ranks">
+                            <template x-for="(item,index) in (listens.rankedKind === listens.kind ? listens.overview.ranking : [])" :key="index">
+                                <li><span class="listening-rank-no" aria-hidden="true" x-text="index+1"></span>
+                                    <div class="listening-rank-art" :class="{round:listens.kind === 'artists'}">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/></svg>
+                                        <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy" @error="$el.hidden=true"></template>
+                                    </div>
+                                    <div class="listening-entry-info">
+                                        <template x-if="listens.kind === 'tracks'">
+                                            <button class="listening-entry-title" @click="listens.play(item)" x-text="item.title"></button>
+                                        </template>
+                                        <template x-if="listens.kind !== 'tracks'">
+                                            <a class="listening-entry-title" :href="listens.rankLink(item)" x-text="item.title"></a>
+                                        </template>
+                                        <small x-show="item.detail" x-text="item.detail"></small>
+                                    </div>
+                                    <span class="listening-rank-count" :title="listens.text('counts')" x-text="listens.number(item.plays)"></span>
+                                </li>
+                            </template>
+                        </ol>
+                    </section>
+                </div>
+            </div>
+        </template>
+        <template x-if="listens.tab === 'history' && listens.history && !listens.loading && !listens.error">
+            <div>
+                <p class="listening-notice" x-show="!listens.groups.length"
+                   x-text="listens.text(listens.day ? 'emptyDay' : 'emptyHistory')"></p>
+                <template x-for="group in listens.groups" :key="group.day">
+                    <section class="listening-history-group">
+                        <h2 x-text="listens.date(group.day)"></h2>
+                        <ul>
+                            <template x-for="item in group.items" :key="item.id">
+                                <li class="listening-history-row">
+                                    <time :datetime="new Date(item.started_at_ms).toISOString()" x-text="listens.clock(item.started_at_ms)"></time>
+                                    <button class="listening-play-art" @click="listens.play(item)"
+                                            :aria-label="listens.text('play') + ' ' + item.title">
+                                        <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy" @error="$el.hidden=true"></template>
+                                        <svg viewBox="0 0 24 24" aria-hidden="true" :class="{placeholder: !item.cover_url}"><path d="M8 5v14l11-7z"/></svg>
+                                    </button>
+                                    <div class="listening-entry-info">
+                                        <button class="listening-entry-title" @click="listens.play(item)" x-text="item.title"></button>
+                                        <small><template x-for="(name,i) in item.artist_names" :key="i"><span><span x-show="i">, </span><a :href="$store.library.artistHref(name)" x-text="name"></a></span></template>
+                                            <span x-show="item.artist_names.length && item.release_title"> · </span>
+                                            <a x-show="item.release_id" :href="item.release_id ? '#release/' + item.release_id : null" x-text="item.release_title"></a>
+                                            <span x-show="!item.release_id" x-text="item.release_title"></span>
+                                        </small>
+                                    </div>
+                                    <div class="listening-event-detail">
+                                        <span :title="listens.text('time')" x-text="listens.duration(Math.floor(item.listened_ms / 1000))"></span>
+                                        <small x-text="item.device_name"></small>
+                                    </div>
+                                    <details class="listening-item-actions" @click.outside="$el.open=false" @keydown.escape.stop="$el.open=false; $el.querySelector('summary').focus()">
+                                        <summary :aria-label="listens.text('more')" :title="listens.text('more')">⋯</summary>
+                                        <div @click="$el.closest('details').open=false">
+                                            <button @click="listens.trackAction(item, 'info')">{{ t.player_track_info }}</button>
+                                            <button x-show="item.track_id" @click="$store.likes.toggle(item.track_id)" :aria-pressed="$store.likes.has(item.track_id)">{{ t.player_like }}</button>
+                                            <button @click="listens.trackAction(item, 'next')">{{ t.player_play_next }}</button>
+                                            <button @click="listens.trackAction(item, 'queue')">{{ t.player_add_to_queue }}</button>
+                                            <button x-show="item.track_id" @click="$store.playlists.showPicker([item.track_id])">{{ t.player_add_to_playlist }}</button>
+                                            <button x-show="item.track_id" @click="$store.sharing.copyTrack(item.track_id, $event.currentTarget)">{{ t.player_share_track }}</button>
+                                        </div>
+                                    </details>
+                                </li>
+                            </template>
+                        </ul>
+                    </section>
+                </template>
+                <nav class="listening-pager" x-show="listens.history.total > listens.history.limit" :aria-label="listens.text('history')">
+                    <button :disabled="listens.page <= 1" @click="listens.load(listens.page-1)">{{ t.player_previous }}</button>
+                    <span x-text="listens.page + ' / ' + Math.ceil(listens.history.total / listens.history.limit)"></span>
+                    <button :disabled="listens.page * listens.history.limit >= listens.history.total" @click="listens.load(listens.page+1)">{{ t.player_next }}</button>
+                </nav>
+            </div>
+        </template>
+    </section>
+</template>
