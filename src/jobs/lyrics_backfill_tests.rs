@@ -91,6 +91,28 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
         "same metadata shares durable API cache"
     );
     let signature = rows[0].signature.clone();
+    // Reproduce production's JSONB rejection of provider U+0000, through the
+    // actual normalization, cache write and text attachment paths.
+    let rejected = sqlx::query("SELECT $1::jsonb")
+        .bind(serde_json::json!({"text":"Words\0here"}))
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        rejected.as_database_error().unwrap().code().as_deref(),
+        Some("22P05")
+    );
+    let record:Record=serde_json::from_str(r#"{"id":9,"trackName":"Song","artistName":"Artist","albumName":"Al\u0000bum","duration":100,"plainLyrics":"Wo\u0000rds 🎵","syncedLyrics":"\u0000[00:01]Words 🎵"}"#).unwrap();
+    let cleaned = version(record).unwrap();
+    sqlx::query("INSERT INTO furumusic__lyrics_lookup(signature,status,versions) VALUES('_nul_fixture','found',$1)")
+        .bind(serde_json::to_value(vec![&cleaned]).unwrap()).execute(&pool).await.unwrap();
+    attach(&pool, &rows[0], std::slice::from_ref(&cleaned))
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::lyrics::versions(&pool, &rows[0].hash).await.unwrap(),
+        vec![cleaned]
+    );
     sqlx::query("INSERT INTO furumusic__lyrics_lookup(signature,status) VALUES($1,'not_found')")
         .bind(&signature)
         .execute(&pool)

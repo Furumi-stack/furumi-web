@@ -59,6 +59,7 @@ impl Job for LyricsBackfillJob {
             log.info("Automatic LRCLIB enrichment is disabled; stored lyrics remain available.");
             return Ok(());
         }
+        log.info("Starting LRCLIB lyrics enrichment; completed lookups will be skipped.");
         // Prevent overlapping manual/scheduled runs, including across server processes.
         let mut lock_connection = ctx.pool.begin().await?;
         let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(7834219601)")
@@ -69,6 +70,9 @@ impl Job for LyricsBackfillJob {
             return Ok(());
         }
         let result = enrich(ctx, log).await;
+        if let Err(error) = &result {
+            log.error(&format!("{error:#}"));
+        }
         // Transaction locks are also released if the task is cancelled.
         lock_connection.rollback().await?;
         result
@@ -147,7 +151,7 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
             if !versions.is_empty() {
                 found += 1
             }
-            if processed % 100 == 0 {
+            if processed == 1 || processed % 25 == 0 {
                 log.info(&format!(
                     "Lyrics: {processed} content items, {found} found, {requests} API lookups."
                 ));
@@ -277,7 +281,13 @@ fn matching(record: &Record, track: &Candidate) -> bool {
         && record.duration.is_finite()
         && (record.duration - track.duration).abs() <= 2.0
 }
-fn version(record: Record) -> Option<LyricsVersion> {
+fn version(mut record: Record) -> Option<LyricsVersion> {
+    // JSON permits NUL, but PostgreSQL text/JSONB cannot represent it. Provider
+    // texts occasionally contain these invisible bytes; remove them before
+    // parsing LRC or writing either the lookup cache or the content binding.
+    record.album_name.retain(|c| c != '\0');
+    record.plain_lyrics = record.plain_lyrics.map(without_nul);
+    record.synced_lyrics = record.synced_lyrics.map(without_nul);
     let synced = record
         .synced_lyrics
         .filter(|v| !crate::lyrics::parse_lrc(v).is_empty());
@@ -296,6 +306,11 @@ fn version(record: Record) -> Option<LyricsVersion> {
         instrumental: record.instrumental,
     };
     value.validate().ok().map(|()| value)
+}
+
+fn without_nul(mut text: String) -> String {
+    text.retain(|c| c != '\0');
+    text
 }
 async fn lookup(
     client: &Client,
@@ -335,6 +350,15 @@ async fn lookup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_nul_is_removed_before_cache_and_lrc_parsing() {
+        let record:Record=serde_json::from_str(r#"{"id":7,"trackName":"Song","artistName":"Artist","albumName":"Al\u0000bum","duration":100,"plainLyrics":"\u0000Words 🎵","syncedLyrics":"\u0000[00:01]Wo\u0000rds 🎵"}"#).unwrap();
+        let lyrics = version(record).unwrap();
+        assert_eq!(lyrics.label, "LRCLIB · Album");
+        assert_eq!(lyrics.plain_text.as_deref(), Some("Words 🎵"));
+        assert_eq!(lyrics.synced_lrc.as_deref(), Some("[00:01]Words 🎵"));
+        assert!(!serde_json::to_string(&lyrics).unwrap().contains("\\u0000"));
+    }
     #[test]
     fn strict_matching_and_timed_validation() {
         let track = Candidate {

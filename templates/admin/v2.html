@@ -1031,11 +1031,11 @@
                             </div>
                         </section>
 
-                        <section class="panel settings-section" id="settings-lyrics">
+                        <section class="panel settings-section settings-lyrics" id="settings-lyrics">
                             <div class="panel-head"><div class="panel-title"><strong>Lyrics · LRCLIB</strong><span>Automatic library enrichment</span></div></div>
                             <div class="setting-toggle">
                                 <label class="setting-toggle-row"><span>Fetch lyrics automatically</span><input type="checkbox" x-model="settingsDraft.lyrics_enrichment_enabled" /></label>
-                                <div class="setting-help">Requests to the external LRCLIB API reveal track metadata from this library. Disabling stops automatic requests; saved lyrics remain available.</div>
+                                <div class="setting-help">External LRCLIB requests reveal track metadata from this library. Saved lyrics remain available when disabled.</div>
                                 <span class="source-pill" :class="sourceClass('lyrics_enrichment_enabled')" x-text="settingSource('lyrics_enrichment_enabled')"></span>
                             </div>
                         </section>

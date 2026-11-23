@@ -4,7 +4,7 @@ const html=fs.readFileSync('target/lyrics-admin-fixture.html','utf8'),alpine=fs.
 (async()=>{
  const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
  try {
-  for(const viewport of [{width:1440,height:1000},{width:390,height:844}]){
+  for(const viewport of [{width:1920,height:1080},{width:1440,height:1000},{width:390,height:844}]){
    const page=await browser.newPage({viewport}),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.route('**/*',route=>{
     const url=new URL(route.request().url());
@@ -37,6 +37,11 @@ const html=fs.readFileSync('target/lyrics-admin-fixture.html','utf8'),alpine=fs.
    const toggle=page.locator('#settings-lyrics input[type=checkbox]');await toggle.waitFor({state:'visible'});
    const toggleBox=await toggle.boundingBox();assert.ok(toggleBox.width<=20&&toggleBox.height<=20);
    assert.equal(await toggle.isChecked(),true);
+   const layout=await page.locator('.settings-layout').boundingBox(),lyrics=await page.locator('#settings-lyrics').boundingBox();
+   assert.ok(lyrics.width>=layout.width*0.9,'lyrics must occupy the full settings row');
+   assert.equal(await page.locator('#settings-lyrics').evaluate(el=>getComputedStyle(el).gridArea),'lyrics');
+   await page.locator('#settings-lyrics').scrollIntoViewIfNeeded();
+   await page.screenshot({path:`target/lyrics-settings-${viewport.width}.png`,fullPage:true});
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Lyrics admin desktop/mobile checks passed.');

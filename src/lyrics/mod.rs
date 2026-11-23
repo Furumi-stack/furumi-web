@@ -94,6 +94,22 @@ pub fn validate_edit(body: &LyricsEdit) -> Result<()> {
     let mut ids = std::collections::HashSet::new();
     for version in &body.versions {
         version.validate()?;
+        let fields = [
+            Some(version.id.as_str()),
+            Some(version.label.as_str()),
+            Some(version.source.as_str()),
+            version.source_id.as_deref(),
+            version.language.as_deref(),
+            version.plain_text.as_deref(),
+            version.synced_lrc.as_deref(),
+        ];
+        anyhow::ensure!(
+            fields
+                .into_iter()
+                .flatten()
+                .all(|text| !text.contains('\0')),
+            "lyrics cannot contain the NUL character (U+0000)"
+        );
         anyhow::ensure!(ids.insert(&version.id), "duplicate version id");
     }
     anyhow::ensure!(
@@ -194,6 +210,25 @@ pub fn parse_lrc(value: &str) -> Vec<(i64, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn manual_lyrics_reject_nul_before_database_writes() {
+        let version = LyricsVersion {
+            id: "manual:1".into(),
+            label: "Original".into(),
+            source: "manual".into(),
+            source_id: None,
+            language: None,
+            plain_text: Some("Words\0here".into()),
+            synced_lrc: None,
+            instrumental: false,
+        };
+        let error = validate_edit(&LyricsEdit {
+            versions: vec![version],
+            retry_lookup: false,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("U+0000"));
+    }
     #[test]
     fn lrc_timestamps_offsets_and_malformed_metadata() {
         assert_eq!(
