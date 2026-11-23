@@ -14,6 +14,12 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
     if(url.hostname==='layout.test'&&url.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
     if(url.hostname==='cdn.jsdelivr.net'&&url.pathname.includes('alpine'))return route.fulfill({contentType:'application/javascript',body:alpine});
     if(url.pathname==='/api/player/artists')return route.fulfill({json:{items:[],total:0,has_more:false}});
+    if(/^\/api\/player\/similarity\/[12]$/.test(url.pathname)){
+     const seedId=Number(url.pathname.split('/').at(-1));
+     return route.fulfill({json:url.searchParams.has('local_only')
+      ? {label:tracks[seedId-1].title,tracks:[tracks[2]]}
+      : {federation_tracks:[],queried_peers:0}});
+    }
     return route.fulfill({json:[]});
    });
    await page.goto('http://layout.test/');await page.waitForFunction(()=>window.Alpine?.store('library')&&Alpine.store('player'));
@@ -30,6 +36,14 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
    near((await pop.boundingBox()).x,initial.x,'popularity must not move');near((await heart.boundingBox()).x,heartBefore.x,'other actions must not move');
    await page.evaluate(()=>Alpine.store('library').currentPlaylist.tracks[0].has_lyrics=true);await row.locator('.lyrics-presence').waitFor({state:'visible'});
    assert.equal(await page.locator('.lyrics-toggle:visible').count(),1,'only one player lyrics button');
+   const current=page.locator('.player-current-track');
+   const similar=current.getByRole('button',{name:'Find similar tracks',exact:true});
+   const bounds=await current.boundingBox(),button=await similar.boundingBox();
+   assert.ok(button&&button.x>=bounds.x && button.x+button.width<=bounds.x+bounds.width+1,'similarity button fits the now-playing area');
+   for(const selector of ['.player-track-title','.player-current-like','.player-current-share']){
+    const neighbor=await current.locator(selector).boundingBox();
+    assert.ok(neighbor.x+neighbor.width<=button.x+1 || button.x+button.width<=neighbor.x+1,'similarity button does not overlap '+selector);
+   }
    const actions=await row.locator('.track-actions').boundingBox(),info=await row.locator('.playlist-track-info').boundingBox(),rowBox=await row.boundingBox();
    assert.ok(actions.y>=rowBox.y&&actions.y+actions.height<=rowBox.y+rowBox.height+1,'actions stay inside row');
    near(actions.y+actions.height/2,info.y+info.height/2,'playlist actions share title row');
@@ -56,6 +70,16 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
     const expandedButtons=await page.locator('.player-buttons').boundingBox();assert.ok(expandedButtons.x>=-1&&expandedButtons.x+expandedButtons.width<=viewport.width+1,`expanded transport buttons fit viewport: ${JSON.stringify({viewport,expandedButtons})}`);
     await page.screenshot({path:`target/player-layout-expanded-${viewport.width}.png`});
    }
+   for(const seed of tracks.slice(0,2)){
+    await page.evaluate(track=>{Alpine.store('player').currentTrack=track;},seed);
+    await similar.click();
+    await page.waitForURL('**/#similar/'+seed.id);
+    await page.locator('.search-standard-entry').getByText(tracks[2].title,{exact:true}).first().waitFor();
+    assert.equal(await page.evaluate(()=>Alpine.store('mobile').playerExpanded),false);
+    assert.equal(await page.evaluate(()=>Alpine.store('player').currentTrack.id),seed.id);
+   }
+   await page.evaluate(()=>{Alpine.store('player').currentTrack={...Alpine.store('player').currentTrack,podcast:true};});
+   await similar.waitFor({state:'hidden'});
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Player layout checks passed at 1440, 900, 820, 575, 390 and 320 px.');

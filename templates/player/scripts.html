@@ -229,10 +229,47 @@ function formatTime(seconds) {
 
 function coverVariantUrl(url, variant) {
     if (!url) return url;
-    return url.replace(/\/(small|medium|large)$/, '/' + variant);
+    return url.replace(/^(\/api\/player\/cover\/\d+\/)(?:small|medium|large)(?=[?#]|$)/, '$1' + variant);
 }
 
 document.addEventListener('alpine:init', () => {
+    Alpine.data('playerCoverPreview', () => ({
+        visible: false,
+        pinned: false,
+        leaveTimer: null,
+        get artwork() { return Alpine.store('player').currentTrack?.cover_url; },
+        hover(event) {
+            if (!this.artwork || event.pointerType !== 'mouse') return;
+            clearTimeout(this.leaveTimer);
+            this.visible = true;
+        },
+        leave(event) {
+            if (this.pinned || !this.visible || event.pointerType !== 'mouse') return;
+            clearTimeout(this.leaveTimer);
+            this.leaveTimer = setTimeout(() => this.closePreview(), 160);
+        },
+        pin() {
+            clearTimeout(this.leaveTimer);
+            this.visible = this.pinned = Boolean(this.artwork);
+        },
+        activate(event) {
+            const mobile = Alpine.store('mobile');
+            const touch = event.pointerType === 'touch' ||
+                (!event.pointerType && !window.matchMedia('(hover: hover)').matches);
+            if (!mobile.playerExpanded && mobile.isMobilePlayer() && (touch || !this.artwork)) {
+                this.closePreview();
+                mobile.openPlayerFullscreen();
+            } else {
+                this.pin();
+            }
+        },
+        closePreview() {
+            clearTimeout(this.leaveTimer);
+            this.visible = this.pinned = false;
+        },
+        destroy() { clearTimeout(this.leaveTimer); },
+    }));
+
     // -----------------------------------------------------------------------
     // Connection monitor
     // -----------------------------------------------------------------------
@@ -3244,7 +3281,7 @@ document.addEventListener('alpine:init', () => {
             if (peers.size) rows.push({ label: T.peers, value: peers.size });
             rows.push({label:Alpine.store('lyrics').text('lyrics'), value:track.has_lyrics ? Alpine.store('lyrics').text('available') : Alpine.store('lyrics').text('unavailable'), run:()=>{Alpine.store('info').close();Alpine.store('lyrics').open(track,false);}});
             const actions = [{label:T.download, run:() => this.downloadTrack(track)}];
-            if (!GUEST) actions.push({label:T.findSimilar, run:() => this.searchSimilar(track)});
+            if (this.similarityTrackId(track)) actions.push({label:T.findSimilar, run:() => this.searchSimilar(track)});
             Alpine.store('info').openRows(T.trackInfoTitle, rows, actions);
         },
 
@@ -3635,12 +3672,18 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        similarityTrackId(trackOrId) {
+            if (GUEST || trackOrId?.podcast) return null;
+            const id = Number(typeof trackOrId === 'object' ? trackOrId?.id : trackOrId);
+            return Number.isSafeInteger(id) && id > 0 ? id : null;
+        },
+
         async searchSimilar(trackOrId, options = {}) {
+            const id = this.similarityTrackId(trackOrId);
+            if (!id) return;
             this.cancelPendingSearch();
             this.searchMode='normal';
-            if (GUEST) return;
-            const id = Number(typeof trackOrId === 'object' ? trackOrId?.id : trackOrId);
-            if (!Number.isInteger(id) || id <= 0) return;
+            if (Alpine.store('mobile').playerExpanded) Alpine.store('mobile').closePlayerFullscreen();
             const track = typeof trackOrId === 'object' ? trackOrId : null;
             const artist = (track?.artists || []).map(item => item.name).filter(Boolean).join(', ');
             const initialLabel = track

@@ -1590,6 +1590,10 @@ button.user-stat:hover {
 .player-cover {
     width: 56px;
     height: 56px;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    cursor: zoom-in;
     border-radius: 4px;
     background: var(--bg-elevated);
     overflow: hidden;
@@ -1601,6 +1605,33 @@ button.user-stat:hover {
 
 .player-cover img { width: 100%; height: 100%; object-fit: cover; }
 .player-cover svg { width: 24px; height: 24px; color: var(--text-subdued); }
+.player-cover:disabled { cursor: default; }
+.player-cover:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.player-cover-preview {
+    --available-height: calc(100dvh - var(--player-bar-space) - 24px);
+    position: fixed;
+    z-index: 90;
+    left: max(12px, env(safe-area-inset-left));
+    bottom: calc(var(--player-bar-space) + 6px);
+    width: min(512px, calc(100vw - 24px), var(--available-height));
+    aspect-ratio: 1;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    box-shadow: 0 8px 32px rgb(0 0 0 / 55%);
+}
+
+.player-cover-preview-centered {
+    --available-height: calc(100dvh - 24px);
+    left: 50%;
+    top: 50%;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+}
+
+.player-cover-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
 
 .player-track-info {
     overflow: hidden;
@@ -1623,21 +1654,21 @@ button.user-stat:hover {
     min-width: 0;
 }
 
-.player-current-like {
+.player-current-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.player-current-actions > button {
     width: 24px;
     height: 24px;
     padding: 4px;
     flex: 0 0 auto;
 }
 
-.player-current-share {
-    width: 24px;
-    height: 24px;
-    padding: 4px;
-    flex: 0 0 auto;
-}
-
-.player-current-share svg {
+.player-current-actions .track-action-btn svg {
     width: 15px;
     height: 15px;
 }
@@ -5701,7 +5732,7 @@ button.user-stat:hover {
 
     .player-bar:not(.mobile-expanded) .player-current-track {
         display: grid;
-        grid-template-columns: 52px minmax(0, 1fr) 30px 30px;
+        grid-template-columns: 52px minmax(0, 1fr) auto;
         grid-template-rows: repeat(3, auto);
         align-items: center;
         justify-content: stretch;
@@ -5727,19 +5758,21 @@ button.user-stat:hover {
         display: contents;
     }
 
-    .player-bar:not(.mobile-expanded) .player-current-like,
-    .player-bar:not(.mobile-expanded) .player-current-share {
+    .player-bar:not(.mobile-expanded) .player-current-actions {
+        grid-column: 3;
+        grid-row: 1 / span 3;
+        gap: 4px;
+    }
+
+    .player-bar:not(.mobile-expanded) .player-current-actions > button {
         display: flex;
         width: 30px;
         height: 30px;
         flex: 0 0 30px;
         padding: 5px;
-        align-self: center;
-        justify-self: end;
     }
 
-    .player-bar:not(.mobile-expanded) .player-current-like svg,
-    .player-bar:not(.mobile-expanded) .player-current-share svg {
+    .player-bar:not(.mobile-expanded) .player-current-actions svg {
         width: 17px;
         height: 17px;
     }
@@ -5769,14 +5802,8 @@ button.user-stat:hover {
         grid-row: 3;
     }
 
-    .player-bar:not(.mobile-expanded) .player-current-share {
-        grid-column: 3;
-        grid-row: 1 / span 3;
-    }
-
     .player-bar:not(.mobile-expanded) .player-current-like {
-        grid-column: 4;
-        grid-row: 1 / span 3;
+        order: 1;
     }
 
     .player-track-release {
@@ -6126,13 +6153,7 @@ button.user-stat:hover {
         text-align: center;
     }
 
-    .player-bar.mobile-expanded .mobile-full-player .player-current-like {
-        display: flex;
-        width: 38px;
-        height: 38px;
-    }
-
-    .player-bar.mobile-expanded .mobile-full-player .player-current-share {
+    .player-bar.mobile-expanded .mobile-full-player .player-current-actions > button {
         display: flex;
         width: 38px;
         height: 38px;

@@ -283,6 +283,7 @@ translations! {
     player_global_library:   "Global"                          , "Global";
     player_featured_only_artists: "Featured only"               , "Только фиты";
     player_release:          "Release"                         , "Релиз";
+    player_album_cover:      "Album cover"                     , "Обложка альбома";
     player_releases:         "Releases"                        , "Релизы";
     player_tracks:           "Tracks"                          , "Треки";
     player_title:            "Title"                           , "Название";
