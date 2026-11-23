@@ -139,25 +139,37 @@ const SUMMARY: &str = "
            'daily', COALESCE((SELECT jsonb_agg(to_jsonb(daily) ORDER BY day) FROM daily), '[]'))
       FROM events";
 
-const TOP_ARTISTS: &str = "
+// Fold credits with the same Unicode rules on every database, including C-locale
+// installations. Return the key to the column's collation for the name_sort index.
+const TOP_ARTISTS: &str = r#"
     , top AS (
-        SELECT lower(name) AS key, MIN(name) AS title, COUNT(*) AS plays
+        SELECT key, MIN(name) AS title, COUNT(*) AS plays
           FROM events CROSS JOIN LATERAL (
-              SELECT DISTINCT ON (lower(trim(n))) trim(n) AS name
+              SELECT DISTINCT ON (key)
+                     lower(normalize(trim(n), NFKC) COLLATE furumusic_unicode) COLLATE "default" AS key,
+                     trim(n) AS name
                 FROM jsonb_array_elements_text(COALESCE(metadata_json->'artist_names', '[]') ||
                      COALESCE(metadata_json->'featured_artist_names', '[]')) n
-               WHERE trim(n) <> '' ORDER BY lower(trim(n)), trim(n)
+               WHERE trim(n) <> '' ORDER BY key, name
           ) credit
-         GROUP BY lower(name) ORDER BY plays DESC, key LIMIT 5
+         GROUP BY key ORDER BY plays DESC, key LIMIT 5
+    ), visible AS NOT MATERIALIZED (
+        SELECT id, name_sort, image_file_id,
+               lower(normalize(trim(name), NFKC) COLLATE furumusic_unicode) COLLATE "default" AS display_key
+          FROM furumusic__artist WHERE NOT is_hidden
     )
     SELECT COALESCE(jsonb_agg(to_jsonb(item) ORDER BY plays DESC, title), '[]') FROM (
         SELECT COALESCE(a.name, top.title) AS title, top.plays, a.id AS artist_id,
                CASE WHEN a.image_file_id IS NOT NULL THEN '/api/player/cover/' || a.image_file_id || '/small' END AS cover_url
-          FROM top LEFT JOIN LATERAL (
-              SELECT id, name, image_file_id FROM furumusic__artist WHERE name_sort = top.key
-                 AND NOT is_hidden ORDER BY id LIMIT 1
-          ) a ON true
-    ) item";
+          FROM top LEFT JOIN furumusic__artist a ON a.id = COALESCE(
+              (SELECT id FROM visible WHERE name_sort = top.key AND display_key = top.key
+                   AND image_file_id IS NOT NULL ORDER BY id LIMIT 1),
+              -- Older imports can have a different sort key. Prefer the actual
+              -- display name and choose the visible copy with a photo on ties.
+              (SELECT id FROM visible WHERE display_key = top.key OR name_sort = top.key
+                 ORDER BY (display_key = top.key) DESC, (image_file_id IS NOT NULL) DESC, id LIMIT 1)
+          )
+    ) item"#;
 
 const TRACK_ROWS: &str = "
     SELECT COALESCE(jsonb_agg(to_jsonb(item) ORDER BY plays DESC, content_id), '[]') FROM (
@@ -284,14 +296,20 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    #[ignore = "requires disposable PostgreSQL via FURU_STATISTICS_TEST_DATABASE_URL"]
-    async fn personal_listening_filters_events_and_resolves_playable_editions() -> anyhow::Result<()>
-    {
+    async fn catalog_fixture() -> anyhow::Result<PgPool> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect(&std::env::var("FURU_STATISTICS_TEST_DATABASE_URL")?)
             .await?;
+        // Collation names do not resolve through pg_temp. Use an isolated schema
+        // with the deployment's ICU collation, rolled back with the fixture.
+        let schema = format!("listening_{}", uuid::Uuid::new_v4().simple());
+        sqlx::raw_sql(&format!(
+            "BEGIN; CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}, public;
+             CREATE COLLATION furumusic_unicode (provider=icu, locale='und', deterministic=true);"
+        ))
+        .execute(&pool)
+        .await?;
         sqlx::raw_sql(include_str!("../../tests/statistics_fixture.sql"))
             .execute(&pool)
             .await?;
@@ -309,6 +327,55 @@ mod tests {
             INSERT INTO furumusic__media_file (id,sha256_hash) VALUES (51,'sha'),(61,'new-sha');
             INSERT INTO furumusic__federation_content_id_cache VALUES (51,'sha','content-one'),(61,'old-sha','content-two');
         ").execute(&pool).await?;
+        Ok(pool)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL via FURU_STATISTICS_TEST_DATABASE_URL"]
+    async fn personal_artist_ranking_resolves_unicode_portraits() -> anyhow::Result<()> {
+        let pool = catalog_fixture().await?;
+        sqlx::raw_sql(r#"
+            INSERT INTO furumusic__artist (id,name,name_sort,image_file_id,is_hidden) VALUES
+                (20,'Ногу Свело!','ногу свело!',101,true),
+                (21,'Ногу Свело!','ногу свело!',NULL,false),
+                (22,'Ногу Свело!','ногу свело',102,false),
+                (23,'Олег Лёгкий','олег лёгкий',103,false),
+                (24,'Саша Скул','саша скул',104,false),
+                (25,'Hidden','hidden',105,true);
+            INSERT INTO furumusic__listen_event (user_id,listen_id,started_at_ms,qualified,metadata_json) VALUES
+                (4,'one',1,true,'{"artist_names":["НОГУ СВЕЛО!","Олег Лёгкий","Саша Скул","Hidden"],"featured_artist_names":[" Ногу Свело! "]}'),
+                (4,'two',2,true,'{"artist_names":["ногу свело!","Олег Ле\u0308гкии\u0306"],"featured_artist_names":["ОЛЕГ ЛЁГКИЙ"]}');
+        "#).execute(&pool).await?;
+        let data = overview(&pool, 4, (0, 3), "UTC", &Ranking::Artists).await?;
+        let artists = data["ranking"].as_array().unwrap();
+        assert_eq!(artists.len(), 4);
+        for (title, id, image, plays) in [
+            ("Ногу Свело!", 22, 102, 2),
+            ("Олег Лёгкий", 23, 103, 2),
+            ("Саша Скул", 24, 104, 1),
+        ] {
+            let artist = artists.iter().find(|item| item["title"] == title).unwrap();
+            assert_eq!(artist["artist_id"], id);
+            assert_eq!(
+                artist["cover_url"],
+                format!("/api/player/cover/{image}/small")
+            );
+            assert_eq!(artist["plays"], plays);
+        }
+        let hidden = artists
+            .iter()
+            .find(|item| item["title"] == "Hidden")
+            .unwrap();
+        assert!(hidden["artist_id"].is_null() && hidden["cover_url"].is_null());
+        sqlx::query("ROLLBACK").execute(&pool).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL via FURU_STATISTICS_TEST_DATABASE_URL"]
+    async fn personal_listening_filters_events_and_resolves_playable_editions() -> anyhow::Result<()>
+    {
+        let pool = catalog_fixture().await?;
         let all = (0, i64::MAX);
         let data = overview(&pool, 1, all, "UTC", &Ranking::Artists).await?;
         assert_eq!(data["plays"], 31);
@@ -352,6 +419,7 @@ mod tests {
         let empty = overview(&pool, 3, all, "UTC", &Ranking::Releases).await?;
         assert_eq!(empty["plays"], 0);
         assert_eq!(empty["ranking"], json!([]));
+        sqlx::query("ROLLBACK").execute(&pool).await?;
         Ok(())
     }
 }

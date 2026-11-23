@@ -39,10 +39,11 @@
 .listening-rank-art, .listening-play-art { position: relative; display: grid; place-items: center; border: 0; border-radius: 4px; overflow: hidden; aspect-ratio: 1; background: var(--bg-elevated); }
 .listening-rank-art.round { border-radius: 50%; }
 .listening-rank-art img, .listening-play-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.my-listening img[data-unavailable] { opacity: 0; }
 .listening-rank-art svg { width: 70%; fill: none; stroke: var(--text-subdued); stroke-width: 1.5; }
 .listening-play-art svg { width: 56%; position: relative; fill: white; opacity: 0; }
-.listening-play-art :is(svg.placeholder,img[hidden] + svg), .listening-play-art:hover svg, .listening-play-art:focus-visible svg { opacity: 1; }
-.listening-play-art:hover img, .listening-play-art:focus-visible img { opacity: .5; }
+.listening-play-art :is(svg.placeholder,img[data-unavailable] + svg), .listening-play-art:hover svg, .listening-play-art:focus-visible svg { opacity: 1; }
+.listening-play-art:hover img:not([data-unavailable]), .listening-play-art:focus-visible img:not([data-unavailable]) { opacity: .5; }
 .listening-entry-info { min-width: 0; }
 .listening-entry-title, .listening-entry-info small, .listening-event-detail small { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .my-listening .listening-entry-title { padding: 2px 0; color: var(--text-primary); font-size: 14px; font-weight: 500; text-align: left; background: none; border: 0; text-decoration: none; }

@@ -10,6 +10,13 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.15.1 — 2026-11-24
+
+- My listening now finds local artist portraits for Cyrillic and other Unicode
+  credits, including older catalog entries with different sort keys.
+- A failed listening thumbnail falls back to the original image. A refreshed
+  ranking row can display new artwork after an earlier image failed.
+
 ## v0.15.0 — 2026-11-23
 
 - Desktop and mobile navigation now includes a personal music collection,

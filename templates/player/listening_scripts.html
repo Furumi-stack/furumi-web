@@ -36,6 +36,13 @@ document.addEventListener('alpine:init', () => {
         number(value) { return numbers.format(value || 0); },
         date(day) { return dates.format(localDate(day)); },
         clock(ms) { return times.format(new Date(ms)); },
+        coverFailed(image) {
+            image.setAttribute('data-unavailable', '');
+            const path = image.getAttribute('src') || '';
+            if (/^\/api\/player\/cover\/\d+\/small$/.test(path)) {
+                image.src = path.slice(0, -'/small'.length);
+            }
+        },
         duration(seconds) {
             const minutes = Math.floor(Number(seconds || 0) / 60);
             if (minutes < 1 && seconds > 0) return Math.floor(seconds) + ' ' + this.text('second');

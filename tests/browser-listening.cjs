@@ -18,6 +18,8 @@ async function run(browser, width, locale) {
     page.setDefaultTimeout(6000);
     const errors = [];
     const queries = [];
+    const coverRequests = [];
+    let artistCover = '/api/player/cover/10/small';
     let fail = false;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', async route => {
@@ -29,12 +31,20 @@ async function run(browser, width, locale) {
         if (url.hostname === 'cdn.jsdelivr.net' && url.pathname.includes('alpine')) {
             return route.fulfill({contentType:'application/javascript', body: alpine});
         }
+        if (url.pathname.startsWith('/api/player/cover/')) {
+            coverRequests.push(url.pathname);
+            if (url.pathname === '/api/player/cover/11' || url.pathname === '/api/player/cover/12/small') {
+                return route.fulfill({contentType:'image/svg+xml', body:'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle cx="5" cy="5" r="5"/></svg>'});
+            }
+            return route.fulfill({status:404});
+        }
         if (url.pathname === '/api/player/listening') {
             const query = Object.fromEntries(url.searchParams);
             queries.push(query);
             if (fail) return route.fulfill({status:503,json:{}});
             if (query.view === 'overview') {
-                return send({plays:5, tracks:1, listened_seconds:900, ranking:[overview[query.kind]],
+                const item = query.kind === 'artists' ? {...overview.artists, cover_url:artistCover} : overview[query.kind];
+                return send({plays:5, tracks:1, listened_seconds:900, ranking:[item],
                     daily:[{day:query.to,plays:5,listened_seconds:900}]});
             }
             const selected = query.from !== 'all';
@@ -56,6 +66,22 @@ async function run(browser, width, locale) {
     assert.equal(await content.locator('h1').innerText(), locale === 'ru' ? 'Мои прослушивания' : 'My listening');
     assert.equal(await content.locator('.listening-day').count(), 30);
     assert.equal(await content.getByRole('link',{name:'Singer',exact:true}).getAttribute('href'), '#artist/8');
+    const portrait = content.locator('.listening-rank-art img');
+    await portrait.scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => {
+        const image = document.querySelector('.listening-rank-art img');
+        return image?.getAttribute('src') === '/api/player/cover/10' && image.complete && !image.naturalWidth && getComputedStyle(image).opacity === '0';
+    });
+    assert.deepEqual(coverRequests, ['/api/player/cover/10/small','/api/player/cover/10']);
+    for (const [id, suffix] of [[11, ''], [12, '/small']]) {
+        artistCover = '/api/player/cover/'+id+'/small';
+        await page.evaluate(() => Alpine.store('listening').load());
+        await page.waitForFunction(path => {
+            const image = document.querySelector('.listening-rank-art img');
+            return image?.getAttribute('src') === path && image.naturalWidth && getComputedStyle(image).opacity === '1';
+        }, '/api/player/cover/'+id+suffix);
+    }
+    assert.deepEqual(coverRequests.slice(2), ['/api/player/cover/11/small','/api/player/cover/11','/api/player/cover/12/small']);
     await content.locator('select').selectOption('7');
     await page.waitForFunction(() => document.querySelectorAll('.listening-day').length === 7);
     assert.equal(queries.at(-1).tz, 'Europe/Madrid');
