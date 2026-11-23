@@ -6679,6 +6679,9 @@ async fn history_handler(
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
     crate::metrics::record_play_history(entry.duration_listened, entry.completed);
+    if listened_seconds > 0 {
+        crate::federation::handle().refresh_track_lyrics(entry.track_id, None);
+    }
 
     Json(serde_json::json!({"ok": true})).into_response()
 }
@@ -10911,7 +10914,7 @@ impl App for PlayerApp {
                         if auth::get_request_user(&auth_ctx,&session,&db).await.is_none() {
                             return Ok(json_error(StatusCode::UNAUTHORIZED,"not authenticated"));
                         }
-                        match crate::federation::handle().track_lyrics(&query.0.owner,&query.0.content_id).await {
+                        match crate::federation::handle().track_lyrics(query.0.owner.as_deref(),&query.0.content_id).await {
                             Ok(value)=>Json(value).into_response(),
                             Err(error)=>Ok(json_error(StatusCode::BAD_REQUEST,&error.to_string())),
                         }

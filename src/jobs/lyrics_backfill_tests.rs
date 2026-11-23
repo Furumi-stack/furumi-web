@@ -293,6 +293,44 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
             .unwrap()
             .is_empty()
     );
+    // Federated alternatives are durable, deduplicated and bound to exact local audio.
+    let content_id = format!("b3:{}", "a".repeat(64));
+    sqlx::query(
+        "INSERT INTO furumusic__federation_content_id_cache(media_file_id,sha256_hash,content_id)
+                 VALUES(1,'audio-a',$1)",
+    )
+    .bind(&content_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let existing = crate::lyrics::versions(&pool, "audio-a").await.unwrap();
+    let mut alternative = automatic.clone();
+    alternative.plain_text = Some("Words from a peer".into());
+    alternative.synced_lrc = None;
+    for _ in 0..2 {
+        crate::lyrics::save_peer_versions(&pool, &content_id, std::slice::from_ref(&alternative))
+            .await
+            .unwrap();
+    }
+    let served_hash = crate::lyrics::visible_content_hash(&pool, &content_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let merged = crate::lyrics::versions(&pool, &served_hash).await.unwrap();
+    assert_eq!(merged.len(), existing.len() + 1);
+    assert!(existing.iter().all(|version| merged.contains(version)));
+    assert!(
+        merged.iter().any(|version| version.source == "federation"
+            && crate::lyrics::same_text(version, &alternative))
+    );
+    assert_eq!(
+        crate::lyrics::track_content_id(&pool, 1, true)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(content_id.as_str())
+    );
+
     // Visibility is enforced independently of whether lyrics exist.
     sqlx::query("UPDATE furumusic__track SET is_hidden=true WHERE id=1")
         .execute(&pool)

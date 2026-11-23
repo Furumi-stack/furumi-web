@@ -73,8 +73,13 @@ the same stored texts, restricted to visible tracks in that share.
   `{ "content_id": "b3:…" | null, "versions": […] }`.
 - Public share: `GET /api/player/shares/{token}/lyrics/{track_id}` has the same
   membership and visibility checks as shared audio.
-- Federated web playback: `GET /api/player/federation/tracks/lyrics` accepts
-  `owner` and `content_id`, fetching from that peer's optional lyrics protocol.
+- Federated web playback: `GET /api/player/federation/tracks/lyrics` discovers
+  alternatives by `content_id`, with an optional preferred `owner`. The player
+  displays saved local versions while that lookup runs. With Save on listen
+  enabled, imported or listened-to tracks also look up versions in the background.
+  Verified alternatives are saved for locally available audio with a visible
+  catalog entry and are eligible to serve to other peers. Guest shares read the
+  local library.
 - Frid: `music_dht::lyrics` defines ALPN `furumi/lyrics/1`, capability `lyrics: 1`,
   DTOs, validation and bounded JSON read/write helpers. Each direction carries
   one JSON document terminated by EOF. Requests include protocol version and

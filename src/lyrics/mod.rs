@@ -61,14 +61,93 @@ pub async fn for_track(
     let Some(hash) = track_hash(pool, track_id, visible_only).await? else {
         return Ok(None);
     };
-    let content_id = sqlx::query_scalar("SELECT c.content_id FROM furumusic__track t
-        JOIN furumusic__media_file m ON m.id=t.audio_file_id
-        JOIN furumusic__federation_content_id_cache c ON c.media_file_id=m.id AND c.sha256_hash=m.sha256_hash
-        WHERE t.id=$1").bind(track_id).fetch_optional(pool).await?;
+    let content_id = track_content_id(pool, track_id, visible_only).await?;
     Ok(Some(TrackLyrics {
         content_id,
         versions: versions(pool, &hash).await?,
     }))
+}
+
+pub(crate) async fn track_content_id(
+    pool: &PgPool,
+    track_id: i64,
+    visible_only: bool,
+) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar("SELECT c.content_id FROM furumusic__track t
+        JOIN furumusic__release r ON r.id=t.release_id
+        JOIN furumusic__media_file m ON m.id=t.audio_file_id
+        JOIN furumusic__federation_content_id_cache c ON c.media_file_id=m.id AND c.sha256_hash=m.sha256_hash
+        WHERE t.id=$1 AND (NOT $2 OR (NOT t.is_hidden AND NOT r.is_hidden))")
+        .bind(track_id).bind(visible_only).fetch_optional(pool).await?)
+}
+
+pub(crate) async fn visible_content_hash(
+    pool: &PgPool,
+    content_id: &str,
+) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar("SELECT m.sha256_hash::text FROM furumusic__track t
+        JOIN furumusic__release r ON r.id=t.release_id
+        JOIN furumusic__media_file m ON m.id=t.audio_file_id
+        JOIN furumusic__federation_content_id_cache c ON c.media_file_id=m.id AND c.sha256_hash=m.sha256_hash
+        WHERE c.content_id=$1 AND NOT t.is_hidden AND NOT r.is_hidden
+        ORDER BY t.id LIMIT 1")
+        .bind(content_id).fetch_optional(pool).await?)
+}
+
+pub(crate) fn same_text(a: &LyricsVersion, b: &LyricsVersion) -> bool {
+    a.plain_text == b.plain_text && a.synced_lrc == b.synced_lrc && a.instrumental == b.instrumental
+}
+
+pub(crate) fn peer_version_id(version: &LyricsVersion) -> String {
+    let mut hash = blake3::Hasher::new();
+    for text in [&version.plain_text, &version.synced_lrc] {
+        hash.update(&[u8::from(text.is_some())]);
+        if let Some(text) = text {
+            hash.update(&(text.len() as u64).to_le_bytes());
+            hash.update(text.as_bytes());
+        }
+    }
+    format!("peer:{}", hash.finalize().to_hex())
+}
+
+pub(crate) async fn save_peer_versions(
+    pool: &PgPool,
+    content_id: &str,
+    incoming: &[LyricsVersion],
+) -> Result<()> {
+    let Some(hash) = visible_content_hash(pool, content_id).await? else {
+        return Ok(());
+    };
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(&hash)
+        .execute(&mut *tx)
+        .await?;
+    let mut count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM furumusic__lyrics WHERE audio_sha256=$1")
+            .bind(&hash)
+            .fetch_one(&mut *tx)
+            .await?;
+    for version in incoming {
+        if count >= MAX_LYRICS_VERSIONS as i64 {
+            break;
+        }
+        if version.validate().is_err() || !postgres_safe(version) {
+            continue;
+        }
+        let result = sqlx::query("INSERT INTO furumusic__lyrics
+            (audio_sha256,id,label,source,source_id,language,plain_text,synced_lrc,instrumental)
+            SELECT $1,$2,$3,'federation',$4,$5,$6,$7,$8 WHERE NOT EXISTS (
+                SELECT 1 FROM furumusic__lyrics WHERE audio_sha256=$1 AND
+                plain_text IS NOT DISTINCT FROM $6 AND synced_lrc IS NOT DISTINCT FROM $7 AND instrumental=$8
+            ) ON CONFLICT DO NOTHING")
+            .bind(&hash).bind(peer_version_id(version)).bind(&version.label).bind(&version.source_id)
+            .bind(&version.language).bind(&version.plain_text).bind(&version.synced_lrc).bind(version.instrumental)
+            .execute(&mut *tx).await?;
+        count += result.rows_affected() as i64;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn available_track_ids(
@@ -87,6 +166,21 @@ pub struct LyricsEdit {
     pub retry_lookup: bool,
 }
 
+fn postgres_safe(version: &LyricsVersion) -> bool {
+    [
+        Some(version.id.as_str()),
+        Some(version.label.as_str()),
+        Some(version.source.as_str()),
+        version.source_id.as_deref(),
+        version.language.as_deref(),
+        version.plain_text.as_deref(),
+        version.synced_lrc.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .all(|text| !text.contains('\0'))
+}
+
 pub fn validate_edit(body: &LyricsEdit) -> Result<()> {
     anyhow::ensure!(
         body.versions.len() <= MAX_LYRICS_VERSIONS,
@@ -95,20 +189,8 @@ pub fn validate_edit(body: &LyricsEdit) -> Result<()> {
     let mut ids = std::collections::HashSet::new();
     for version in &body.versions {
         version.validate()?;
-        let fields = [
-            Some(version.id.as_str()),
-            Some(version.label.as_str()),
-            Some(version.source.as_str()),
-            version.source_id.as_deref(),
-            version.language.as_deref(),
-            version.plain_text.as_deref(),
-            version.synced_lrc.as_deref(),
-        ];
         anyhow::ensure!(
-            fields
-                .into_iter()
-                .flatten()
-                .all(|text| !text.contains('\0')),
+            postgres_safe(version),
             "lyrics cannot contain the NUL character (U+0000)"
         );
         anyhow::ensure!(ids.insert(&version.id), "duplicate version id");

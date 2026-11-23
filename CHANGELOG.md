@@ -10,6 +10,14 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.13.3 — 2026-11-23
+
+- Discover lyrics versions from federation peers by exact audio content ID.
+- Show local lyrics immediately and append peer alternatives without changing
+  the selected version. Save on listen makes peer lyrics available for further
+  distribution alongside imported audio.
+- Keep outbound lyrics streams alive until the response finishes sending.
+
 ## v0.13.2 — 2026-11-23
 
 - Search brings local and federated artists, releases and tracks into the same
