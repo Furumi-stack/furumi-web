@@ -34,6 +34,32 @@ function key(title, artist, year) {
 }
 const link = releaseKey => '#releasefed?key=' + encodeURIComponent(JSON.stringify(releaseKey));
 
+test('guest appearances add recordings, not owned releases, even across several catalogues', () => {
+    const { library, streams } = setup('#artist/333', () => assert.fail('no request expected'));
+    const wire = id => ({ item_id: id, content_id: id, title: 'Диагноз', artists: ['Трагедия Всей Жизни'], featured_artists: ['Кизиль'] });
+    const appearance = id => ({ release_title: '13/87', year: 2014, release_type: 'album', track: wire(id) });
+    library.currentArtist = { name: 'Кизиль', releases: [], total_track_count: 1,
+        track_content_ids: ['local'], top_tracks: [], featured_tracks: [{ content_id: 'local' }] };
+    library.startArtistFederation('Кизиль');
+    const emit = (peer, ids) => streams[0].emit('federation.artist.catalog', {
+        peer, entity: { name: 'Кизиль', releases: [], appears_on: ids.map(appearance) },
+    });
+    emit('first', ['local']);
+    assert.equal(library.artistFederation.releases.length, 0);
+    assert.equal(library.artistFederation.tracks.length, 0);
+    assert.equal(library.artistTrackCount(), 1);
+    emit('first', ['new-version']);
+    emit('second', ['local', 'new-version']);
+    assert.equal(library.artistFederation.releases.length, 0);
+    assert.equal(library.artistTrackCount(), 2);
+    assert.equal(library.artistFederation.tracks[0].availability.federation.length, 2);
+    library.currentArtist = { name: 'Кизиль', releases: [], total_track_count: 0, featured_tracks: [] };
+    library.startArtistFederation('Кизиль');
+    streams[1].emit('federation.artist.catalog', { peer: 'first', entity: { appears_on: [appearance('remote')] } });
+    assert.equal(library.artistFederation.releases.length, 0);
+    assert.equal(library.artistTrackCount(), 1);
+});
+
 test('existing release deep links replace their own history entry with the local edition', async () => {
     for (const [id, title, artist, year] of [
         [442, 'вино из цикуты', 'саша скул', 2014],

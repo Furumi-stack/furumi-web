@@ -646,7 +646,7 @@
                                         </button>
                                     </div>
                                     <div class="card-title" x-text="artist.name"></div>
-                                    <div class="card-subtitle" x-text="artist.release_count + ' {{ t.player_releases_count }} · ' + artist.track_count + ' {{ t.player_tracks_count }}'"></div>
+                                    <div class="card-subtitle" x-text="formatArtistCount(artist.release_count, 'releases') + ' · ' + formatArtistCount(artist.track_count, 'tracks')"></div>
                                 </div>
                             </div>
                         </template>
@@ -694,19 +694,19 @@
                         <div>
                             <div class="artist-name" x-text="$store.library.currentArtist.name"></div>
                             <div class="artist-stats">
-                                <span x-text="($store.library.currentArtist.releases.length + $store.library.artistFederation.releases.length) + ' {{ t.player_releases_count }}'"></span>
+                                <span x-text="formatArtistCount($store.library.currentArtist.releases.length + $store.library.artistFederation.releases.length, 'releases')"></span>
                                 <span>•</span>
-                                <span x-text="($store.library.currentArtist.total_track_count + $store.library.artistFederation.tracks.length) + ' {{ t.player_tracks_count }}'"></span>
+                                <span x-text="formatArtistCount($store.library.artistTrackCount(), 'tracks')"></span>
                                 <span>•</span>
-                                <span x-text="$store.library.currentArtist.total_play_count + ' {{ t.player_plays_count }}'"></span>
+                                <span x-text="formatArtistCount($store.library.currentArtist.total_play_count, 'plays')"></span>
                                 <span class="federation-live-badge"
                                       x-show="$store.library.artistFederation.loading"
                                       x-cloak>FEDERATION LIVE</span>
                             </div>
                             <div class="release-actions artist-actions">
                                 <button class="release-action-btn primary artist-listen-action"
-                                        :disabled="!($store.library.currentArtist.top_tracks?.length || $store.library.artistFederation.tracks.length)"
-                                        @click="$store.library.playArtistTopTracks()"
+                                        :disabled="!($store.library.currentArtist.top_tracks?.length || $store.library.currentArtist.featured_tracks?.length || $store.library.artistFederation.tracks.length)"
+                                        @click="$store.library.listenToArtist()"
                                         title="{{ t.player_listen_artist }}">
                                     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
                                         <path d="M8 5v14l11-7z"/>

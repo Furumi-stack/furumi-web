@@ -207,6 +207,18 @@ const T = {
     collapse: "{{ t.player_collapse }}",
 };
 
+const artistPluralRules = new Intl.PluralRules(document.documentElement.lang);
+const artistCountLabels = {
+    tracks: { one: "{{ t.player_track_one }}", few: "{{ t.player_track_few }}", other: "{{ t.player_tracks_count }}" },
+    releases: { one: "{{ t.player_release_one }}", few: "{{ t.player_release_few }}", other: "{{ t.player_releases_count }}" },
+    plays: { one: "{{ t.player_play_one }}", few: "{{ t.player_play_few }}", other: "{{ t.player_plays_count }}" },
+};
+
+function formatArtistCount(count, kind) {
+    const labels = artistCountLabels[kind];
+    return count + ' ' + (labels[artistPluralRules.select(count)] || labels.other);
+}
+
 function formatTime(seconds) {
     if (!seconds || isNaN(seconds)) return '0:00';
     const s = Math.floor(seconds);
@@ -2964,6 +2976,15 @@ document.addEventListener('alpine:init', () => {
             };
         },
 
+        artistTrackCount() {
+            const artist = this.currentArtist;
+            if (!artist) return 0;
+            if (!this.artistFederation.tracks.length) return artist.total_track_count;
+            const local = new Set(artist.track_content_ids ??
+                [...(artist.top_tracks || []), ...(artist.featured_tracks || [])].map(track => track.content_id));
+            return artist.total_track_count + this.artistFederation.tracks.filter(track => !local.has(track.key.content_id)).length;
+        },
+
         startArtistFederation(name) {
             this.artistFederation = { loading: true, error: '', releases: [], tracks: [] };
             const source = new EventSource(
@@ -2980,8 +3001,12 @@ document.addEventListener('alpine:init', () => {
                 if (!this.currentArtist?.image_url) {
                     this.currentArtist = { ...this.currentArtist, image_url: artworkBase };
                 }
-                const releases = [...this.artistFederation.releases];
-                const tracks = [...this.artistFederation.tracks];
+                const releases = new Map(this.artistFederation.releases.map(item => [item.identity, item]));
+                const tracks = new Map(this.artistFederation.tracks.map(item => [item.key.content_id, item]));
+                const localEditions = new Set((this.currentArtist?.releases || []).map(release =>
+                    JSON.stringify(this.federationReleaseKey(release.title, [artistName], release.year, release.release_type))));
+                const localPreview = new Set([...(this.currentArtist?.top_tracks || []), ...(this.currentArtist?.featured_tracks || [])]
+                    .map(track => track.content_id).filter(Boolean));
                 const catalogReleases = [
                     ...(artist.releases || []),
                     ...(artist.appears_on || []).map(appearance => ({
@@ -2990,6 +3015,7 @@ document.addEventListener('alpine:init', () => {
                         year: appearance.year,
                         tracks: [appearance.track],
                         artists: appearance.track?.artists,
+                        appearance: true,
                     })),
                 ];
                 for (const release of catalogReleases) {
@@ -2998,7 +3024,21 @@ document.addEventListener('alpine:init', () => {
                     if (!key) continue;
                     const identity = JSON.stringify(key);
                     const wireTracks = this.catalogReleaseTracks(release, owner, key);
-                    const existingRelease = releases.find(item => item.identity === identity);
+                    for (const track of wireTracks) {
+                        const id = track.key.content_id;
+                        if (localPreview.has(id)) continue;
+                        const existing = tracks.get(id);
+                        if (!existing) {
+                            tracks.set(id, track);
+                            continue;
+                        }
+                        const sourceInfo = track.availability.federation[0];
+                        if (!existing.availability.federation.some(item =>
+                            item.owner === sourceInfo.owner && item.item_id === sourceInfo.item_id
+                        )) existing.availability.federation.push(sourceInfo);
+                    }
+                    if (release.appearance || localEditions.has(identity)) continue;
+                    const existingRelease = releases.get(identity);
                     if (existingRelease) {
                         const known = new Set(existingRelease.tracks.map(item => item.key.content_id));
                         existingRelease.tracks = [
@@ -3007,7 +3047,7 @@ document.addEventListener('alpine:init', () => {
                         ];
                         if (!existingRelease.owners.includes(owner)) existingRelease.owners.push(owner);
                     } else {
-                        releases.push({
+                        releases.set(identity, {
                             key, identity, artists,
                             title: release.title,
                             release_type: release.release_type || null,
@@ -3017,22 +3057,11 @@ document.addEventListener('alpine:init', () => {
                             tracks: wireTracks,
                         });
                     }
-                    for (const track of wireTracks) {
-                        const existingTrack = tracks.find(item => item.key.content_id === track.key.content_id);
-                        if (existingTrack) {
-                            const sourceInfo = track.availability.federation[0];
-                            if (!existingTrack.availability.federation.some(item =>
-                                item.owner === sourceInfo.owner && item.item_id === sourceInfo.item_id
-                            )) existingTrack.availability.federation.push(sourceInfo);
-                        } else {
-                            tracks.push(track);
-                        }
-                    }
                 }
                 this.artistFederation = {
                     ...this.artistFederation,
-                    releases: [...releases],
-                    tracks: [...tracks],
+                    releases: [...releases.values()],
+                    tracks: [...tracks.values()],
                 };
                 if (this.currentArtist?.releases?.length) {
                     this.currentArtist = {
@@ -3327,14 +3356,20 @@ document.addEventListener('alpine:init', () => {
             return rows;
         },
 
-        playArtistTopTracks() {
-            const tracks = this.currentArtist?.top_tracks || [];
-            if (tracks.length) {
-                Alpine.store('queue').playRelease(tracks, 0);
-                return;
-            }
-            const federated = this.artistFederation.tracks[0];
-            if (federated) this.playFederatedTrack(federated);
+        listenToArtist() {
+            const tracks = [];
+            const ids = new Set();
+            const contentIds = new Set();
+            const add = track => {
+                if (ids.has(track.id) || (track.content_id && contentIds.has(track.content_id))) return;
+                ids.add(track.id);
+                if (track.content_id) contentIds.add(track.content_id);
+                tracks.push(track);
+            };
+            for (const track of this.currentArtist?.top_tracks || []) add(track);
+            for (const track of this.currentArtist?.featured_tracks || []) add(track);
+            for (const track of this.artistFederation.tracks) add(this.federationQueueTrack(track));
+            if (tracks.length) Alpine.store('queue').playRelease(tracks, 0);
         },
 
         async openRelease(id, options = {}) {

@@ -299,9 +299,15 @@ translations! {
     player_published:        "Published"                       , "Опубликован";
     player_by:               "by"                              , "от";
     player_tracks_count:     "tracks"                          , "треков";
+    player_track_one:        "track"                           , "трек";
+    player_track_few:        "tracks"                          , "трека";
     player_files_count:      "files"                           , "файлов";
     player_releases_count:   "releases"                        , "релизов";
+    player_release_one:      "release"                         , "релиз";
+    player_release_few:      "releases"                        , "релиза";
     player_plays_count:      "plays"                           , "прослушиваний";
+    player_play_one:         "play"                            , "прослушивание";
+    player_play_few:         "plays"                           , "прослушивания";
     player_likes_count:      "likes"                           , "лайков";
     player_likes_playlist:   "Likes"                           , "Лайки";
     player_listened:         "listened"                        , "прослушано";

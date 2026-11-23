@@ -224,6 +224,7 @@ const burst = stream([
         assert.deepEqual(await page.evaluate(() => Alpine.store('library').federationSearch),
             { loading: false, error: '', artists: [], releases: [], tracks: [] });
         await verifyReleaseNavigation(page);
+        await verifyArtistListen(page);
         assert.deepEqual(errors, []);
     } finally {
         await browser.close();
@@ -278,4 +279,58 @@ async function verifyReleaseNavigation(page) {
     await page.goBack();
     await page.waitForURL('**/#release/442');
     await page.locator('.release-cover img[src="/test/local-cover"]').waitFor();
+}
+
+async function verifyArtistListen(page) {
+    const feature = {
+        id: 37, content_id: 'diagnosis', title: 'Диагноз', release_id: 87, release_title: '13/87',
+        stream_url: '/api/player/stream/37', duration_seconds: 120,
+        artists: [{ id: 7, name: 'Трагедия Всей Жизни' }], featured_artists: [{ id: 23, name: 'Кизиль' }],
+    };
+    const artist = {
+        id: 23, name: 'Кизиль', releases: [], top_tracks: [], featured_tracks: [feature],
+        total_track_count: 1, total_play_count: 0, track_content_ids: [feature.content_id],
+    };
+    await page.route('**/api/player/artists/23', route => route.fulfill({ json: artist }));
+    await page.route('**/api/player/federation/artists/events?*', route =>
+        route.fulfill({ contentType: 'text/event-stream', body: 'event: artist.completed\ndata: {}\n\n' }));
+    await page.goto('about:blank');
+    await page.goto('http://groups.test/#artist/23');
+    await page.locator('.artist-appearance-row').waitFor();
+    const stats = page.locator('.artist-stats');
+    await stats.getByText('0 releases', { exact: true }).waitFor();
+    await stats.getByText('1 track', { exact: true }).waitFor();
+    await page.evaluate(() => {
+        Alpine.store('player')._playLocal = track => { window.playedStream = track.stream_url; };
+    });
+    const listen = page.getByRole('button', { name: 'Listen', exact: true });
+    await listen.click();
+    const queue = () => page.evaluate(() => Alpine.store('queue').tracks.map(track => track.id));
+    assert.deepEqual(await queue(), [37]);
+    assert.equal(await page.evaluate(() => window.playedStream), feature.stream_url);
+
+    // A local appearance and its peer copy join the ranked queue only once.
+    await page.evaluate(() => {
+        const library = Alpine.store('library');
+        const [feature] = library.currentArtist.featured_tracks;
+        library.currentArtist.top_tracks = [{ ...feature, id: 12, content_id: 'first' }, feature];
+        library.artistFederation.tracks = ['diagnosis', 'remote'].map(id => library.federationTrackFromWire({
+            title: id, owner: 'peer', item_id: id, content_id: id, artist_names: ['Кизиль'],
+        }));
+    });
+    await listen.click();
+    assert.deepEqual(await queue(), [12, 37, 'fed:remote']);
+    await page.evaluate(() => {
+        const library = Alpine.store('library');
+        library.currentArtist.top_tracks = [];
+        library.currentArtist.featured_tracks = [];
+        library.playFederatedTrack = (track, options) => {
+            window.peerPlayback = [track.key.content_id, options.queueIndex];
+        };
+    });
+    await listen.click();
+    assert.deepEqual(await queue(), ['fed:diagnosis', 'fed:remote']);
+    assert.deepEqual(await page.evaluate(() => window.peerPlayback), ['diagnosis', 0]);
+    await page.evaluate(() => { Alpine.store('library').artistFederation.tracks = []; });
+    assert.equal(await listen.isDisabled(), true);
 }

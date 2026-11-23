@@ -26,6 +26,8 @@ use crate::scheduler::SchedulerHandle;
 use crate::torrents::{TorrentPreviewRequest, TorrentService, TorrentStartRequest};
 use crate::youtube::{YouTubePreviewRequest, YouTubeService, YouTubeStartRequest};
 
+#[cfg(test)]
+mod artist_tests;
 mod dto;
 mod helpers;
 mod queries;
@@ -3962,8 +3964,16 @@ async fn artist_detail_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
 
-    let artist_id = path.0.id;
+    match load_artist_detail(pool, path.0.id).await? {
+        Some(detail) => Json(detail).into_response(),
+        None => Ok(json_error(StatusCode::NOT_FOUND, "artist not found")),
+    }
+}
 
+async fn load_artist_detail(
+    pool: &sqlx::PgPool,
+    artist_id: i64,
+) -> cot::Result<Option<ArtistDetail>> {
     let artist = sqlx::query_as::<_, ArtistBriefRow>(
         "SELECT id, name::text as name FROM furumusic__artist WHERE id = $1 AND is_hidden = false",
     )
@@ -3973,7 +3983,7 @@ async fn artist_detail_handler(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let Some(artist) = artist else {
-        return Ok(json_error(StatusCode::NOT_FOUND, "artist not found"));
+        return Ok(None);
     };
 
     let image_file_id: Option<i64> =
@@ -3988,8 +3998,10 @@ async fn artist_detail_handler(
                   r.year, r.cover_file_id,
                   COALESCE((SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id = r.id AND t.is_hidden = false), 0) as track_count
            FROM furumusic__release r
-           JOIN furumusic__release_artist ra ON ra.release_id = r.id
-           WHERE ra.artist_id = $1 AND r.is_hidden = false
+           WHERE NOT r.is_hidden AND EXISTS (
+               SELECT 1 FROM furumusic__release_artist ra
+                WHERE ra.release_id = r.id AND ra.artist_id = $1
+           )
            ORDER BY r.year DESC NULLS LAST, r.title_sort"#,
     )
     .bind(artist_id)
@@ -4015,22 +4027,13 @@ async fn artist_detail_handler(
         })
         .collect();
 
-    let total_track_count = release_cards.iter().map(|r| r.track_count).sum();
-    let total_play_count: i64 = sqlx::query_scalar(
-        r#"SELECT COUNT(*)
-           FROM furumusic__play_history ph
-           JOIN furumusic__track t ON t.id = ph.track_id
-           JOIN furumusic__release_artist ra ON ra.release_id = t.release_id
-           JOIN furumusic__release r ON r.id = t.release_id
-           WHERE ra.artist_id = $1 AND t.is_hidden = false AND r.is_hidden = false"#,
-    )
-    .bind(artist_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let (total_track_count, total_play_count, track_content_ids) =
+        helpers::artist_track_totals(pool, artist_id)
+            .await
+            .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let featured_rows = sqlx::query_as::<_, AppearanceTrackRow>(
-        r#"SELECT DISTINCT t.id,
+    let featured_rows = sqlx::query_as::<_, PlaylistTrackRow>(
+        r#"SELECT DISTINCT NULL::bigint AS playlist_track_id, t.id, t.track_number, t.disc_number,
                   t.title::text AS title,
                   r.id AS release_id,
                   r.title::text AS release_title,
@@ -4063,82 +4066,7 @@ async fn artist_detail_handler(
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let featured_track_ids: Vec<i64> = featured_rows.iter().map(|t| t.id).collect();
-    let featured_track_artists = if featured_track_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, TrackArtistRow>(
-            r#"SELECT ta.track_id, ta.artist_id, a.name::text as artist_name, ta.role::text as role
-               FROM furumusic__track_artist ta
-               JOIN furumusic__artist a ON a.id = ta.artist_id
-               WHERE ta.track_id = ANY($1)
-               ORDER BY ta.track_id, ta.position"#,
-        )
-        .bind(&featured_track_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?
-    };
-
-    let mut featured_main_artists: std::collections::HashMap<i64, Vec<ArtistRef>> =
-        std::collections::HashMap::new();
-    let mut featured_feat_artists: std::collections::HashMap<i64, Vec<ArtistRef>> =
-        std::collections::HashMap::new();
-
-    for ta in &featured_track_artists {
-        let artist_ref = ArtistRef {
-            id: ta.artist_id,
-            name: ta.artist_name.clone(),
-        };
-        if ta.role == "featuring" {
-            featured_feat_artists
-                .entry(ta.track_id)
-                .or_default()
-                .push(artist_ref);
-        } else {
-            featured_main_artists
-                .entry(ta.track_id)
-                .or_default()
-                .push(artist_ref);
-        }
-    }
-
-    let lyrics_ids = crate::lyrics::available_track_ids(pool, &featured_track_ids)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    let featured_tracks: Vec<ArtistAppearanceTrack> = featured_rows
-        .into_iter()
-        .map(|t| {
-            let tid = t.id;
-            ArtistAppearanceTrack {
-                id: t.id,
-                title: t.title,
-                release_id: t.release_id,
-                release_title: t.release_title,
-                release_year: t.release_year,
-                duration_seconds: t.duration_seconds,
-                artists: featured_main_artists.remove(&tid).unwrap_or_default(),
-                featured_artists: featured_feat_artists.remove(&tid).unwrap_or_default(),
-                cover_url: track_cover_variant_url(
-                    t.cover_file_id,
-                    t.release_cover_file_id,
-                    "medium",
-                ),
-                stream_url: format!("/api/player/stream/{tid}"),
-                uploader_name: t.uploader_name,
-                audio_format: t.audio_format,
-                audio_bitrate: t.audio_bitrate,
-                audio_sample_rate: t.audio_sample_rate,
-                audio_bit_depth: t.audio_bit_depth,
-                file_size_bytes: t.file_size_bytes,
-                lastfm_listeners: t.lastfm_listeners,
-                lastfm_playcount: t.lastfm_playcount,
-                lastfm_rating: t.lastfm_rating,
-                lastfm_updated_at: t.lastfm_updated_at,
-                has_lyrics: lyrics_ids.contains(&tid),
-            }
-        })
-        .collect();
+    let featured_tracks = build_track_items(featured_rows, pool).await?;
 
     let top_tracks = sqlx::query_as::<_, PlaylistTrackRow>(
         r#"SELECT * FROM (
@@ -4165,12 +4093,13 @@ async fn artist_detail_handler(
                LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
                WHERE t.is_hidden = false
                  AND r.is_hidden = false
-                 AND EXISTS (
-                     SELECT 1
-                       FROM furumusic__track_artist ta
-                      WHERE ta.track_id = t.id
-                        AND ta.artist_id = $1
-                        AND ta.role <> 'featuring'
+                 AND t.id IN (
+                     SELECT ta.track_id FROM furumusic__track_artist ta
+                      WHERE ta.artist_id = $1 AND ta.role <> 'featuring'
+                     UNION ALL
+                     SELECT rt.id FROM furumusic__release_artist ra
+                       JOIN furumusic__track rt ON rt.release_id = ra.release_id
+                      WHERE ra.artist_id = $1
                  )
                ORDER BY lower(t.title::text), COALESCE(t.lastfm_rating, 0) DESC
            ) deduped
@@ -4188,17 +4117,17 @@ async fn artist_detail_handler(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
     let top_tracks = build_track_items(top_tracks, pool).await?;
 
-    Json(ArtistDetail {
+    Ok(Some(ArtistDetail {
         id: artist.id,
         name: artist.name,
         image_url: cover_variant_url(image_file_id, "large"),
         total_track_count,
+        track_content_ids,
         total_play_count,
         top_tracks,
         releases: release_cards,
         featured_tracks,
-    })
-    .into_response()
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -6705,8 +6634,7 @@ async fn lyrics_result_cards(
         }
     }
     let artist_rows=sqlx::query_as::<_,SearchArtistRow>("SELECT a.id,a.name::text AS name,a.image_file_id,
-        (SELECT COUNT(DISTINCT r.id) FROM furumusic__release_artist ra JOIN furumusic__release r ON r.id=ra.release_id WHERE ra.artist_id=a.id AND NOT r.is_hidden) AS release_count,
-        (SELECT COUNT(DISTINCT t.id) FROM furumusic__track_artist ta JOIN furumusic__track t ON t.id=ta.track_id JOIN furumusic__release r ON r.id=t.release_id WHERE ta.artist_id=a.id AND NOT t.is_hidden AND NOT r.is_hidden) AS track_count
+        (SELECT COUNT(DISTINCT r.id) FROM furumusic__release_artist ra JOIN furumusic__release r ON r.id=ra.release_id WHERE ra.artist_id=a.id AND NOT r.is_hidden) AS release_count
         FROM furumusic__artist a WHERE a.id=ANY($1) AND NOT a.is_hidden ORDER BY array_position($1::bigint[],a.id) LIMIT 10").bind(&artist_ids).fetch_all(pool).await.map_err(|e|cot::Error::internal(e.to_string()))?;
     let release_rows=sqlx::query_as::<_,SearchReleaseRow>("SELECT r.id,r.title::text AS title,r.release_type::text AS release_type,r.year,r.cover_file_id,
         (SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id=r.id AND NOT t.is_hidden) AS track_count
@@ -6714,16 +6642,9 @@ async fn lyrics_result_cards(
     let mut uploaders = load_release_uploaders(pool, &release_ids)
         .await
         .map_err(|e| cot::Error::internal(e.to_string()))?;
-    let artists = artist_rows
-        .into_iter()
-        .map(|r| ArtistCard {
-            id: r.id,
-            name: r.name,
-            image_url: cover_variant_url(r.image_file_id, "medium"),
-            release_count: r.release_count,
-            track_count: r.track_count,
-        })
-        .collect();
+    let artists = helpers::artist_cards(pool, artist_rows, "medium")
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
     let releases = release_rows
         .into_iter()
         .map(|r| ReleaseCard {
@@ -6795,11 +6716,7 @@ async fn search_handler(
             r#"SELECT a.id, a.name::text AS name, a.image_file_id,
                       COALESCE((SELECT COUNT(*) FROM furumusic__release_artist ra
                                 JOIN furumusic__release r ON r.id = ra.release_id AND r.is_hidden = false
-                                WHERE ra.artist_id = a.id), 0) AS release_count,
-                      COALESCE((SELECT COUNT(*) FROM furumusic__release_artist ra
-                                JOIN furumusic__release r ON r.id = ra.release_id AND r.is_hidden = false
-                                JOIN furumusic__track t ON t.release_id = r.id AND t.is_hidden = false
-                                WHERE ra.artist_id = a.id), 0) AS track_count
+                                WHERE ra.artist_id = a.id), 0) AS release_count
                FROM furumusic__artist a
                WHERE a.is_hidden = false
                  AND (a.name_sort ILIKE '%' || $1 || '%'
@@ -6861,15 +6778,11 @@ async fn search_handler(
         tokio::try_join!(a, r, t).map_err(|e| cot::Error::internal(e.to_string()))?
     } else {
         let a = sqlx::query_as::<_, SearchArtistRow>(
-            r#"SELECT id, name, image_file_id, release_count, track_count FROM (
+            r#"SELECT id, name, image_file_id, release_count FROM (
                 SELECT a.id, a.name::text AS name, a.image_file_id,
                        COALESCE((SELECT COUNT(*) FROM furumusic__release_artist ra
                                  JOIN furumusic__release r ON r.id = ra.release_id AND r.is_hidden = false
                                  WHERE ra.artist_id = a.id), 0) AS release_count,
-                       COALESCE((SELECT COUNT(*) FROM furumusic__release_artist ra
-                                 JOIN furumusic__release r ON r.id = ra.release_id AND r.is_hidden = false
-                                 JOIN furumusic__track t ON t.release_id = r.id AND t.is_hidden = false
-                                 WHERE ra.artist_id = a.id), 0) AS track_count,
                        MAX(sim) AS similarity
                 FROM (
                     SELECT id, name, image_file_id, name_sort,
@@ -6978,16 +6891,9 @@ async fn search_handler(
 
     let tracks = build_track_items(track_rows, pool).await?;
 
-    let artists: Vec<ArtistCard> = artist_rows
-        .into_iter()
-        .map(|r| ArtistCard {
-            id: r.id,
-            name: r.name,
-            image_url: cover_variant_url(r.image_file_id, "medium"),
-            release_count: r.release_count,
-            track_count: r.track_count,
-        })
-        .collect();
+    let artists = helpers::artist_cards(pool, artist_rows, "medium")
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let release_ids: Vec<i64> = release_rows.iter().map(|r| r.id).collect();
     let mut release_uploaders = load_release_uploaders(pool, &release_ids)
@@ -8191,24 +8097,15 @@ async fn followed_artists_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
 
-    let rows = sqlx::query_as::<_, ArtistRow>(
-        r#"SELECT a.id, a.name::text as name, a.image_file_id,
-                  COALESCE(s.release_count, 0)::bigint AS release_count,
-                  COALESCE(s.track_count, 0)::bigint AS track_count
-           FROM furumusic__user_followed_artist ufa
-           JOIN furumusic__artist a ON a.id = ufa.artist_id
-           LEFT JOIN (
-               SELECT ra.artist_id,
-                      COUNT(DISTINCT r.id) AS release_count,
-                      COUNT(t.id) AS track_count
-               FROM furumusic__release_artist ra
-               JOIN furumusic__release r ON r.id = ra.release_id AND r.is_hidden = false
-               LEFT JOIN furumusic__track t ON t.release_id = r.id AND t.is_hidden = false
-               WHERE ra.position = 0
-               GROUP BY ra.artist_id
-           ) s ON s.artist_id = a.id
-           WHERE ufa.user_id = $1 AND a.is_hidden = false
-           ORDER BY ufa.created_at DESC, a.name_sort"#,
+    let rows = sqlx::query_as::<_, SearchArtistRow>(
+        r#"SELECT a.id, a.name::text AS name, a.image_file_id,
+                  (SELECT COUNT(DISTINCT ra.release_id) FROM furumusic__release_artist ra
+                     JOIN furumusic__release r ON r.id = ra.release_id AND NOT r.is_hidden
+                    WHERE ra.artist_id = a.id AND ra.position = 0) AS release_count
+             FROM furumusic__user_followed_artist ufa
+             JOIN furumusic__artist a ON a.id = ufa.artist_id
+            WHERE ufa.user_id = $1 AND NOT a.is_hidden
+            ORDER BY ufa.created_at DESC, a.name_sort"#,
     )
     .bind(user.id)
     .fetch_all(pool)
@@ -8216,16 +8113,9 @@ async fn followed_artists_handler(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     let artist_ids = rows.iter().map(|row| row.id).collect();
-    let artists = rows
-        .into_iter()
-        .map(|r| ArtistCard {
-            id: r.id,
-            name: r.name,
-            image_url: cover_variant_url(r.image_file_id, "small"),
-            release_count: r.release_count,
-            track_count: r.track_count,
-        })
-        .collect();
+    let artists = helpers::artist_cards(pool, rows, "small")
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     Json(FollowedArtists {
         artist_ids,

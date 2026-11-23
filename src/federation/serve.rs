@@ -9,8 +9,8 @@ use std::sync::Arc;
 use anyhow::Result;
 pub use music_dht::catalog::CATALOG_ALPN;
 use music_dht::catalog::{
-    CatalogArtist, CatalogArtistPreview, CatalogImageHeader as ImageHeader, CatalogRelease,
-    CatalogRequest, CatalogResponse, CatalogTrack,
+    CatalogAppearance, CatalogArtist, CatalogArtistPreview, CatalogImageHeader as ImageHeader,
+    CatalogRelease, CatalogRequest, CatalogResponse, CatalogTrack,
 };
 use music_dht::{ByteStream, EndpointId, ItemId, ItemKind, StreamAcceptor, normalize_name};
 use serde::{Deserialize, Serialize};
@@ -597,16 +597,28 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
     .fetch_all(pool)
     .await?;
 
-    // Fetch every release track and its credits in one round trip. The old
-    // implementation performed one track query per release and one artist
-    // query per track; a large discography could not finish before the
-    // client's five-second catalog deadline when PostgreSQL was busy.
-    let release_ids: Vec<i64> = release_rows.iter().map(|row| row.get(0)).collect();
-    let track_rows = if release_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query(
-            "SELECT t.release_id, t.id, t.title, t.track_number, t.disc_number,
+    let mut releases = Vec::with_capacity(release_rows.len());
+    let mut owned = HashMap::with_capacity(release_rows.len());
+    for row in release_rows {
+        owned.insert(row.get::<i64, _>("id"), releases.len());
+        releases.push(CatalogRelease {
+            title: row.get("title"),
+            release_type: row.get("release_type"),
+            year: row.get("year"),
+            tracks: Vec::new(),
+        });
+    }
+    // Include the full tracklist of owned releases, but only the credited
+    // recordings on someone else's releases. UNION handles overlapping credits.
+    let release_ids: Vec<_> = owned.keys().copied().collect();
+    let track_rows = sqlx::query(
+        "WITH catalog_tracks AS (
+                 SELECT id FROM furumusic__track WHERE release_id = ANY($1)
+                 UNION
+                 SELECT track_id FROM furumusic__track_artist
+                  WHERE artist_id = $2 AND role IN ('main', 'featuring')
+             )
+             SELECT t.release_id, t.id, t.title, t.track_number, t.disc_number,
                     t.duration_seconds, c.content_id,
                     COALESCE(
                         array_agg(a.name::text ORDER BY ta.position)
@@ -617,52 +629,50 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
                         array_agg(a.name::text ORDER BY ta.position)
                             FILTER (WHERE ta.role = 'featuring'),
                         ARRAY[]::text[]
-                    ) AS featured_artists
-             FROM furumusic__track t
+                    ) AS featured_artists, r.title AS release_title, r.release_type, r.year
+             FROM catalog_tracks selected
+             JOIN furumusic__track t ON t.id = selected.id
+             JOIN furumusic__release r ON r.id = t.release_id AND NOT r.is_hidden
              JOIN furumusic__media_file m ON m.id = t.audio_file_id
              LEFT JOIN furumusic__federation_content_id_cache c
                     ON c.media_file_id = m.id AND c.sha256_hash = m.sha256_hash
              LEFT JOIN furumusic__track_artist ta ON ta.track_id = t.id
              LEFT JOIN furumusic__artist a ON a.id = ta.artist_id
-             WHERE t.release_id = ANY($1) AND t.is_hidden = false
+             WHERE NOT t.is_hidden
              GROUP BY t.release_id, t.id, t.title, t.track_number, t.disc_number,
-                      t.duration_seconds, c.content_id
+                      t.duration_seconds, c.content_id, r.title, r.release_type, r.year
              ORDER BY t.release_id, t.disc_number NULLS FIRST,
                       t.track_number NULLS LAST, t.title",
-        )
-        .bind(&release_ids)
-        .fetch_all(pool)
-        .await?
-    };
-    let mut tracks_by_release: HashMap<i64, Vec<CatalogTrack>> = HashMap::new();
+    )
+    .bind(release_ids)
+    .bind(artist_id)
+    .fetch_all(pool)
+    .await?;
+    let mut appears_on = Vec::new();
     for row in track_rows {
-        let release_id: i64 = row.get(0);
-        let track_id: i64 = row.get(1);
-        let duration: f64 = row.get(5);
-        tracks_by_release
-            .entry(release_id)
-            .or_default()
-            .push(CatalogTrack {
-                title: row.get(2),
-                artists: row.get(7),
-                featured_artists: row.get(8),
-                track_number: row.get(3),
-                disc_number: row.get(4),
-                duration_seconds: (duration > 0.0).then_some(duration),
-                content_id: row.get(6),
-                item_id: item_id_of(own, track_id),
+        let release_id: i64 = row.get("release_id");
+        let track_id: i64 = row.get("id");
+        let duration: f64 = row.get("duration_seconds");
+        let track = CatalogTrack {
+            title: row.get("title"),
+            artists: row.get("artists"),
+            featured_artists: row.get("featured_artists"),
+            track_number: row.get("track_number"),
+            disc_number: row.get("disc_number"),
+            duration_seconds: (duration > 0.0).then_some(duration),
+            content_id: row.get("content_id"),
+            item_id: item_id_of(own, track_id),
+        };
+        if let Some(&index) = owned.get(&release_id) {
+            releases[index].tracks.push(track);
+        } else {
+            appears_on.push(CatalogAppearance {
+                release_title: row.get("release_title"),
+                release_type: row.get("release_type"),
+                year: row.get("year"),
+                track,
             });
-    }
-
-    let mut releases = Vec::new();
-    for release_row in release_rows {
-        let release_id: i64 = release_row.get(0);
-        releases.push(CatalogRelease {
-            title: release_row.get(1),
-            release_type: release_row.get(2),
-            year: release_row.get(3),
-            tracks: tracks_by_release.remove(&release_id).unwrap_or_default(),
-        });
+        }
     }
 
     Ok(CatalogResponse {
@@ -670,10 +680,54 @@ async fn build_catalog(pool: &PgPool, own: &EndpointId, artist: &str) -> Result<
         artist: Some(CatalogArtist {
             name: artist_row.get(1),
             releases,
-            appears_on: Vec::new(),
+            appears_on,
         }),
         ..CatalogResponse::default()
     })
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn postgres_catalog_separates_guest_tracks_from_owned_releases() -> Result<()> {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&std::env::var("FURU_FEDERATION_TEST_DATABASE_URL")?)
+        .await?;
+    sqlx::raw_sql("
+        CREATE TEMP TABLE furumusic__artist(id bigint PRIMARY KEY, name text, is_hidden bool);
+        CREATE TEMP TABLE furumusic__release(id bigint PRIMARY KEY, title text, release_type text, year int, is_hidden bool);
+        CREATE TEMP TABLE furumusic__release_artist(release_id bigint, artist_id bigint);
+        CREATE TEMP TABLE furumusic__track(id bigint PRIMARY KEY, release_id bigint, title text, track_number int,
+            disc_number int DEFAULT 1, duration_seconds float8 DEFAULT 120, audio_file_id bigint DEFAULT 1, is_hidden bool DEFAULT false);
+        CREATE TEMP TABLE furumusic__track_artist(track_id bigint, artist_id bigint, role text, position int);
+        CREATE TEMP TABLE furumusic__media_file(id bigint, sha256_hash text);
+        CREATE TEMP TABLE furumusic__federation_content_id_cache(media_file_id bigint, sha256_hash text, content_id text);
+        INSERT INTO furumusic__artist VALUES (1,'Host',false), (2,'Guest',false);
+        INSERT INTO furumusic__release VALUES (1,'Album','album',2020,false), (2,'Hidden','single',2021,true);
+        INSERT INTO furumusic__release_artist VALUES (1,1),(2,1);
+        INSERT INTO furumusic__track(id,release_id,title,track_number,is_hidden)
+            VALUES (1,1,'Duet',1,false),(2,1,'Solo',2,false),(3,2,'Invisible release',1,false),(4,1,'Invisible track',3,true);
+        INSERT INTO furumusic__track_artist VALUES (1,1,'main',0),(1,2,'featuring',1),(2,1,'main',0),
+            (3,2,'featuring',1),(4,2,'featuring',1);
+        INSERT INTO furumusic__media_file VALUES (1,'sha');
+        INSERT INTO furumusic__federation_content_id_cache VALUES (1,'sha','content');
+    ").execute(&pool).await?;
+    let own = music_dht::SecretKey::from_bytes(&[1; 32]).public();
+    let guest = build_catalog(&pool, &own, "Guest").await?.artist.unwrap();
+    assert!(guest.releases.is_empty());
+    assert_eq!(guest.appears_on.len(), 1);
+    let duet = &guest.appears_on[0];
+    assert_eq!(duet.release_title, "Album");
+    assert_eq!(duet.track.title, "Duet");
+    assert_eq!(duet.track.featured_artists, ["Guest"]);
+    assert_eq!(duet.track.content_id.as_deref(), Some("content"));
+    assert_eq!(duet.track.item_id, item_id_of(&own, 1));
+    let host = build_catalog(&pool, &own, "Host").await?.artist.unwrap();
+    assert!(host.appears_on.is_empty());
+    assert_eq!(host.releases.len(), 1);
+    assert_eq!(host.releases[0].tracks.len(), 2);
+    assert_eq!(host.releases[0].tracks[1].title, "Solo");
+    Ok(())
 }
 
 async fn build_artist_slice(
