@@ -2595,6 +2595,26 @@ document.addEventListener('alpine:init', () => {
         _observer: null,
         searchQuery: '',
         searchResults: null,
+        searchMode: 'normal',
+        _searchTimer: null,
+        _searchController: null,
+        _searchGeneration: 0,
+        cancelPendingSearch() {
+            clearTimeout(this._searchTimer); this._searchTimer=null;
+            this._searchController?.abort(); this._searchController=null;
+            this._searchGeneration++;
+        },
+        queueSearch() {
+            this.cancelPendingSearch();
+            if (!this.searchQuery.trim()) {this.clearSearch();return;}
+            this._searchTimer=setTimeout(()=>this.search(this.searchQuery),this.searchMode==='lyrics'?1800:300);
+        },
+        toggleSearchMode() {
+            this.cancelPendingSearch(); this.stopFederationSearch();
+            this.searchMode=this.searchMode==='lyrics'?'normal':'lyrics';
+            this.searchResults=null;this.searchLoading=false;this.similaritySearchLabel='';this.similaritySearchError='';
+            if (this.searchQuery.trim()) this.queueSearch();
+        },
         searchLoading: false,
         similaritySearchLabel: '',
         similaritySearchError: '',
@@ -2699,6 +2719,7 @@ document.addEventListener('alpine:init', () => {
                 if (qMatch) {
                     const q = decodeURIComponent(qMatch[1]);
                     this.searchQuery = q;
+                    this.searchMode=/(?:^|&)mode=lyrics(?:&|$)/.test(params)?'lyrics':'normal';
                     this.search(q, options);
                 }
             } else if (view === 'similar' && id) {
@@ -2750,6 +2771,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _beginNavigation(hash, options = {}) {
+            this.cancelPendingSearch();
             if (!hash.startsWith('#artistfed')) this.stopArtistFederation();
             if (!hash.startsWith('#release/')) this.stopReleaseFederation();
             if (!options.fromHash) {
@@ -3484,35 +3506,38 @@ document.addEventListener('alpine:init', () => {
         },
 
         async search(query, options = {}) {
+            this.cancelPendingSearch();
             Alpine.store('searchGroups')?.reset();
             if (GUEST) return;
-            const q = (query || '').trim();
-            if (!q) {
-                this.clearSearch();
-                return;
-            }
-            this._beginNavigation('#search?q=' + encodeURIComponent(q), options);
-            if (this.view !== 'search') {
-                this._previousView = this.view;
-            }
-            this.view = 'search';
-            this.searchLoading = true;
-            this.similaritySearchLabel = '';
-            this.similaritySearchError = '';
-            this.startFederationSearch(q);
+            const q=(query || '').trim();
+            if (!q) {this.clearSearch();return;}
+            const mode=this.searchMode;
+            this._beginNavigation('#search?q='+encodeURIComponent(q)+(mode==='lyrics'?'&mode=lyrics':''),options);
+            const generation=++this._searchGeneration;
+            const controller=new AbortController();this._searchController=controller;
+            if (this.view!=='search') this._previousView=this.view;
+            this.view='search';this.searchLoading=true;this.searchResults=null;
+            this.similaritySearchLabel='';this.similaritySearchError='';
+            if (mode==='lyrics') this.stopFederationSearch();else this.startFederationSearch(q);
             try {
-                const res = await fetch(`/api/player/search?q=${encodeURIComponent(q)}&limit=10`);
-                if (!res.ok) throw new Error('failed');
-                this.searchResults = await res.json();
-                this.applyFederationArtworkFallbacks();
-            } catch {
-                this.searchResults = { artists: [], releases: [], tracks: [] };
+                const res=await fetch(`/api/player/search?q=${encodeURIComponent(q)}&limit=${mode==='lyrics'?30:10}&mode=${mode}`,{signal:controller.signal});
+                if (!res.ok) throw new Error('search failed');
+                const data=await res.json();
+                if(generation!==this._searchGeneration || controller.signal.aborted)return;
+                this.searchResults=data;
+                if(mode!=='lyrics')this.applyFederationArtworkFallbacks();
+            } catch(error) {
+                if(generation!==this._searchGeneration || controller.signal.aborted)return;
+                this.searchResults={artists:[],releases:[],tracks:[]};
+                this.similaritySearchError=Alpine.store('lyricsSearch').text('error');
+            } finally {
+                if(generation===this._searchGeneration){this.searchLoading=false;this._searchController=null;this._afterNavigation(options);}
             }
-            this.searchLoading = false;
-            this._afterNavigation(options);
         },
 
         async searchSimilar(trackOrId, options = {}) {
+            this.cancelPendingSearch();
+            this.searchMode='normal';
             if (GUEST) return;
             const id = Number(typeof trackOrId === 'object' ? trackOrId?.id : trackOrId);
             if (!Number.isInteger(id) || id <= 0) return;
@@ -3651,6 +3676,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         clearSearch() {
+            this.cancelPendingSearch();
             Alpine.store('searchGroups')?.reset();
             this.stopFederationSearch();
             this.searchQuery = '';

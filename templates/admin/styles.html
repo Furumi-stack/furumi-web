@@ -890,7 +890,10 @@ tbody tr:hover {
 .settings-downloads { grid-area: downloads; }
 .settings-federation { grid-area: federation; }
 .settings-lastfm { grid-area: lastfm; }
-.settings-lyrics { grid-area: lyrics; }
+.settings-lyrics { grid-area: lyrics; min-width:0; }
+.lyrics-search-status {margin:0 16px 16px;min-width:0}
+.lyrics-search-status .probe-row {gap:12px;flex-wrap:wrap}
+.lyrics-search-status strong {overflow-wrap:anywhere;min-width:0}
 .settings-lyrics > .setting-toggle {margin:0 16px 16px}
 .settings-developer { grid-area: developer; }
 .settings-section-narrow { border-left: 2px solid rgba(29, 185, 84, 0.55); }

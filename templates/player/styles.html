@@ -7110,4 +7110,18 @@ button.user-stat:hover {
     .guest-player .playlist-track-row .playlist-track-info { grid-column:2; grid-row:1; }
     .guest-player .playlist-track-row .track-actions { grid-column:3; grid-row:1; }
 }
+
+/* A separate local lyrics mode, while retaining the mobile expanding field. */
+@property --lyrics-glow-angle {syntax:'<angle>';initial-value:0deg;inherits:false}
+@keyframes lyrics-search-glow {to {--lyrics-glow-angle:360deg}}
+.search-bar .search-mode-toggle {pointer-events:auto;z-index:2;display:grid;place-items:center;width:32px;height:32px;left:4px;padding:0;border:0;border-radius:6px;background:transparent;cursor:pointer}
+.search-mode-toggle:focus-visible {outline:2px solid #669f83;outline-offset:1px}
+.lyrics-search-mode .search-field {isolation:isolate}
+.lyrics-search-mode .search-field::before {content:'';position:absolute;inset:-1px;border-radius:9px;background:conic-gradient(from var(--lyrics-glow-angle),#426e5d,#334c49,#688579,#344d57,#426e5d);animation:lyrics-search-glow 12s linear infinite;pointer-events:none;z-index:-1;box-shadow:0 0 9px #62b3991a}
+.lyrics-search-mode input,.lyrics-search-mode input:focus {background:#1c2928;border-color:transparent;color:#dce9e5}
+.lyrics-search-mode input::placeholder {color:#8ba59e}
+.lyrics-search-mode .search-mode-toggle,.lyrics-search-mode .search-clear,.lyrics-search-mode .search-shortcut {color:#8ebcac}
+.lyrics-search-mode .search-clear:hover {color:#dce9e5;background:#293b35}
+.lyrics-search-note {font-size:12px;color:var(--text-subdued);margin:8px 0 14px}
+@media (prefers-reduced-motion:reduce) {.lyrics-search-mode .search-field::before {animation:none}}
 </style>

@@ -1,0 +1,7 @@
+<script>
+document.addEventListener('alpine:init',()=>{
+    Alpine.store('lyricsSearch',{
+        text(key){const labels={normal:['Search titles and artists','Поиск по названиям и исполнителям'],lyrics:['Search lyrics','Поиск по текстам песен'],placeholder:['Remember a line or describe the lyrics…','Вспомните строчку или опишите текст песни…'],local:['Lyrics · local library','Тексты песен · локальная библиотека'],lexical:['Searching saved text. Semantic results will appear as the index becomes ready.','Поиск по сохранённому тексту. Смысловой поиск появится по мере готовности индекса.'],error:['Search failed. Try again.','Не удалось выполнить поиск. Попробуйте ещё раз.']};return labels[key]?.[document.documentElement.lang.startsWith('ru')?1:0]||key;},
+    });
+});
+</script>

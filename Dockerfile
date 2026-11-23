@@ -1,3 +1,7 @@
+FROM python:3.13-slim-bookworm AS lyrics-model
+COPY scripts/fetch-lyrics-model.py /fetch-lyrics-model.py
+RUN python /fetch-lyrics-model.py /model
+
 FROM rust:1.97.0-bookworm AS chef
 
 RUN apt-get update \
@@ -47,6 +51,7 @@ RUN apt-get update \
 WORKDIR /data
 COPY --from=builder /app/target/release/furumusic /usr/local/bin/furumusic
 COPY --from=deno /deno /usr/local/bin/deno
+COPY --from=lyrics-model /model /opt/furumusic/models/multilingual-e5-small
 
 EXPOSE 8000
 CMD ["furumusic", "-l", "0.0.0.0:8000"]

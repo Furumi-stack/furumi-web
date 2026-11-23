@@ -6683,6 +6683,58 @@ async fn history_handler(
 // GET /api/player/search?q=...&limit=N
 // ---------------------------------------------------------------------------
 
+// Reuse the ordinary search cards, ordered by each artist/release's best matching track.
+async fn lyrics_result_cards(
+    pool: &sqlx::PgPool,
+    tracks: &[TrackItem],
+) -> cot::Result<(Vec<ArtistCard>, Vec<ReleaseCard>)> {
+    let mut artist_ids = Vec::new();
+    let mut release_ids = Vec::new();
+    for track in tracks {
+        for artist in track.artists.iter().chain(&track.featured_artists) {
+            if !artist_ids.contains(&artist.id) {
+                artist_ids.push(artist.id);
+            }
+        }
+        if !release_ids.contains(&track.release_id) {
+            release_ids.push(track.release_id);
+        }
+    }
+    let artist_rows=sqlx::query_as::<_,SearchArtistRow>("SELECT a.id,a.name::text AS name,a.image_file_id,
+        (SELECT COUNT(DISTINCT r.id) FROM furumusic__release_artist ra JOIN furumusic__release r ON r.id=ra.release_id WHERE ra.artist_id=a.id AND NOT r.is_hidden) AS release_count,
+        (SELECT COUNT(DISTINCT t.id) FROM furumusic__track_artist ta JOIN furumusic__track t ON t.id=ta.track_id JOIN furumusic__release r ON r.id=t.release_id WHERE ta.artist_id=a.id AND NOT t.is_hidden AND NOT r.is_hidden) AS track_count
+        FROM furumusic__artist a WHERE a.id=ANY($1) AND NOT a.is_hidden ORDER BY array_position($1::bigint[],a.id) LIMIT 10").bind(&artist_ids).fetch_all(pool).await.map_err(|e|cot::Error::internal(e.to_string()))?;
+    let release_rows=sqlx::query_as::<_,SearchReleaseRow>("SELECT r.id,r.title::text AS title,r.release_type::text AS release_type,r.year,r.cover_file_id,
+        (SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id=r.id AND NOT t.is_hidden) AS track_count
+        FROM furumusic__release r WHERE r.id=ANY($1) AND NOT r.is_hidden ORDER BY array_position($1::bigint[],r.id) LIMIT 10").bind(&release_ids).fetch_all(pool).await.map_err(|e|cot::Error::internal(e.to_string()))?;
+    let mut uploaders = load_release_uploaders(pool, &release_ids)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let artists = artist_rows
+        .into_iter()
+        .map(|r| ArtistCard {
+            id: r.id,
+            name: r.name,
+            image_url: cover_variant_url(r.image_file_id, "medium"),
+            release_count: r.release_count,
+            track_count: r.track_count,
+        })
+        .collect();
+    let releases = release_rows
+        .into_iter()
+        .map(|r| ReleaseCard {
+            id: r.id,
+            title: r.title,
+            release_type: r.release_type,
+            year: r.year,
+            cover_url: cover_variant_url(r.cover_file_id, "medium"),
+            track_count: r.track_count,
+            uploaders: uploaders.remove(&r.id).unwrap_or_default(),
+        })
+        .collect();
+    Ok((artists, releases))
+}
+
 async fn search_handler(
     auth_ctx: auth::AuthContext,
     session: Session,
@@ -6695,6 +6747,27 @@ async fn search_handler(
     };
 
     let q = query.0.q.trim().to_lowercase();
+    if query.0.mode.as_deref() == Some("lyrics") {
+        if q.chars().count() > 500 {
+            return Ok(json_error(
+                StatusCode::BAD_REQUEST,
+                "lyrics query exceeds 500 characters",
+            ));
+        }
+        let manager = crate::lyrics::search::handle();
+        let result = manager
+            .search(pool, &q, query.0.limit.unwrap_or(30).clamp(1, 50) as usize)
+            .await
+            .map_err(|error| cot::Error::internal(format!("lyrics search: {error:#}")))?;
+        let ids: Vec<_> = result.hits.iter().map(|hit| hit.track_id).collect();
+        let tracks = load_track_items_by_ids(pool, &ids).await?;
+        let (artists, releases) = lyrics_result_cards(pool, &tracks).await?;
+        return Json(
+            serde_json::json!({"artists":artists,"releases":releases,"podcasts":[],"tracks":tracks,
+            "lyrics_status":manager.status(),"semantic_error":result.semantic_error}),
+        )
+        .into_response();
+    }
     if q.is_empty() {
         return Json(SearchResults {
             podcasts: Vec::new(),

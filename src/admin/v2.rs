@@ -511,6 +511,8 @@ struct AdminSettingsValues {
     lastfm_shared_secret: String,
     #[serde(default = "default_true")]
     lyrics_enrichment_enabled: bool,
+    #[serde(default = "default_true")]
+    lyrics_indexing_enabled: bool,
     agent_enabled: bool,
     agent_inbox_dir: String,
     agent_storage_dir: String,
@@ -596,6 +598,7 @@ struct AdminSettingsSources {
     lastfm_api_key: &'static str,
     lastfm_shared_secret: &'static str,
     lyrics_enrichment_enabled: &'static str,
+    lyrics_indexing_enabled: &'static str,
     agent_enabled: &'static str,
     agent_inbox_dir: &'static str,
     agent_storage_dir: &'static str,
@@ -636,6 +639,8 @@ pub(super) struct UpdateSettingsRequest {
     lastfm_shared_secret: String,
     #[serde(default = "default_true")]
     lyrics_enrichment_enabled: bool,
+    #[serde(default = "default_true")]
+    lyrics_indexing_enabled: bool,
     agent_enabled: bool,
     agent_inbox_dir: String,
     agent_storage_dir: String,
@@ -1355,6 +1360,10 @@ pub async fn update_settings(
             "lyrics_enrichment_enabled",
             body.lyrics_enrichment_enabled.to_string(),
         ),
+        (
+            "lyrics_indexing_enabled",
+            body.lyrics_indexing_enabled.to_string(),
+        ),
         ("federation_enabled", body.federation_enabled.to_string()),
         (
             "federation_network_id",
@@ -1394,6 +1403,7 @@ pub async fn update_settings(
     let (fresh, _) = AppConfig::load_with_db(&db).await;
     tokio::spawn(async move {
         crate::similarity::handle().apply(&fresh);
+        crate::lyrics::search::handle().apply(&fresh);
         crate::federation::handle().apply(&fresh).await;
     });
     Json(serde_json::json!({ "ok": true })).into_response()
@@ -1556,6 +1566,7 @@ pub async fn similarity_status(
     Json(serde_json::json!({
         "status": status,
         "models": crate::similarity::MODELS,
+        "lyrics_search": crate::lyrics::search::handle().status(),
         "profiles": profiles,
     }))
     .into_response()
@@ -1703,6 +1714,7 @@ fn settings_dto(
             lastfm_api_key: config.lastfm_api_key,
             lastfm_shared_secret: config.lastfm_shared_secret,
             lyrics_enrichment_enabled: config.lyrics_enrichment_enabled,
+            lyrics_indexing_enabled: config.lyrics_indexing_enabled,
             agent_enabled: config.agent_enabled,
             agent_inbox_dir: config.agent_inbox_dir,
             agent_storage_dir: config.agent_storage_dir,
@@ -1740,6 +1752,7 @@ fn settings_dto(
             lastfm_api_key: sources.lastfm_api_key.code(),
             lastfm_shared_secret: sources.lastfm_shared_secret.code(),
             lyrics_enrichment_enabled: sources.lyrics_enrichment_enabled.code(),
+            lyrics_indexing_enabled: sources.lyrics_indexing_enabled.code(),
             agent_enabled: sources.agent_enabled.code(),
             agent_inbox_dir: sources.agent_inbox_dir.code(),
             agent_storage_dir: sources.agent_storage_dir.code(),

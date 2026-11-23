@@ -323,16 +323,21 @@
                 {% endif %}
                 <div class="search-bar"
                      x-data="{ expanded:false, left:0, right:0, observer:null, init() { this.observer=new ResizeObserver(()=>this.measure()); this.observer.observe($el); }, destroy() { this.observer?.disconnect(); }, measure() { const bar=$el.getBoundingClientRect(); const panel=$el.closest('.content-topbar').getBoundingClientRect(); this.left=Math.max(0,bar.left-panel.left); this.right=Math.max(0,panel.right-bar.right); } }"
-                     :class="{ 'search-expanded':expanded }"
+                     :class="{ 'search-expanded':expanded, 'lyrics-search-mode':$store.library.searchMode==='lyrics' }"
                      :style="{ '--search-expand-left':left+'px', '--search-expand-right':right+'px' }"
                      @focusin="measure(); expanded=true; $store.user.menuOpen=false"
                      @focusout="if (!$el.contains($event.relatedTarget)) expanded=false"
                      @resize.window="measure()">
                     <div class="search-field">
-                    <span class="search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
-                    <input id="search-input" x-ref="searchInput" type="text" placeholder="{{ t.player_search_placeholder }}"
+                    <button class="search-icon search-mode-toggle" type="button" @pointerdown.prevent @click="$store.library.toggleSearchMode(); $refs.searchInput.focus()" :aria-pressed="$store.library.searchMode==='lyrics'" :aria-label="$store.lyricsSearch.text($store.library.searchMode==='lyrics'?'normal':'lyrics')" :title="$store.lyricsSearch.text($store.library.searchMode==='lyrics'?'normal':'lyrics')">
+                        <svg x-show="$store.library.searchMode!=='lyrics'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                        <svg x-show="$store.library.searchMode==='lyrics'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5h11M5 10h8M5 15h5M18 13v7M18 13l3-1"/><circle cx="15.5" cy="20" r="2.5"/></svg>
+                    </button>
+                    <input id="search-input" x-ref="searchInput" type="text" :placeholder="$store.library.searchMode==='lyrics'?$store.lyricsSearch.text('placeholder'):'{{ t.player_search_placeholder }}'"
+                           :maxlength="$store.library.searchMode==='lyrics'?500:null"
                            x-model="$store.library.searchQuery"
-                           @input.debounce.300ms="$store.library.search($store.library.searchQuery)"
+                           @input="$store.library.queueSearch()"
+                           @keydown.enter.prevent="$store.library.search($store.library.searchQuery)"
                            @keydown.escape="$store.library.clearSearch(); $el.blur()">
                     <template x-if="$store.library.searchQuery">
                         <button class="search-clear" @pointerdown.prevent @click="$store.library.clearSearch(); $refs.searchInput.focus()">
@@ -438,6 +443,8 @@
                             </template>
                         </div>
                     </div>
+                    <p class="lyrics-search-note" x-show="$store.library.searchMode==='lyrics'" x-text="$store.lyricsSearch.text('local')"></p>
+                    <p class="lyrics-search-note" role="status" x-show="$store.library.searchMode==='lyrics' && ($store.library.searchResults?.semantic_error || ($store.library.searchResults?.lyrics_status?.ready_chunks ?? 1)===0)" x-text="$store.lyricsSearch.text('lexical')"></p>
                     <template x-if="$store.library.searchLoading">
                         <div class="loading-spinner"><div class="spinner"></div></div>
                     </template>
@@ -533,6 +540,7 @@
                                                     </template>
                                                 </div>
                                             <div class="search-variant-detail" x-show="track._searchGroupChild" x-text="$store.searchGroups.description(track)"></div>
+
 </div>
                                             <span class="track-album" x-text="$store.searchGroups.description(track)"></span>
                                             <div class="track-actions">
@@ -580,7 +588,7 @@
                                     </div>
                                 </section>
                             </template>
-                            <div class="search-section federation-search-section"
+                            <div class="search-section federation-search-section" x-show="$store.library.searchMode!=='lyrics'"
                                  :class="{ 'similarity-federation-merged': $store.library.similaritySearchLabel }">
                                 <h2 class="search-section-title" x-show="!$store.library.similaritySearchLabel">
                                     Federation

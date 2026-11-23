@@ -14,7 +14,8 @@ that preference.
 
 ## Enrichment
 
-Admin Settings → **Lyrics · LRCLIB** controls only automatic enrichment.
+Admin Settings → **Lyrics** has separate controls for automatic enrichment and
+local search indexing.
 `FURU_LYRICS_ENRICHMENT_ENABLED` defaults to `true` and overrides the saved
 setting. Turning it off stops external requests, including during an active
 run; it does not hide or delete stored lyrics or disable manual editing.
@@ -86,10 +87,77 @@ step; it needs no LRCLIB client or enrichment task.
 
 Provider reference: <https://lrclib.net/docs.txt>.
 
+## Local lyrics search (0.13.1)
+
+The icon on the left of the search field switches between ordinary search and
+lyrics search. Lyrics mode uses the same artist/release cards, track rows,
+version groups and playback actions. It returns tracks found through their
+lyrics, plus those tracks' artists and releases, in order of their best matching
+track. It does not display lyrics excerpts or change the lyrics viewer.
+Enter searches immediately; otherwise lyrics search waits 1.8 seconds after the
+last input (ordinary search retains its 300 ms delay). Changing text, navigating
+or switching modes cancels pending requests and discards stale responses. Lyrics
+mode is local only; it never opens a federation search stream.
+
+`FURU_LYRICS_INDEXING_ENABLED` defaults to `true`, with a live toggle in the
+Lyrics settings block. A single background worker checks for new or edited
+versions approximately every 30 seconds and continuously drains the backlog in
+batches of four. Disabling it pauses new calculations and retains stored
+embeddings; lexical and semantic retrieval remain usable. This setting is
+independent of LRCLIB enrichment. Admin shows the profile, phase, unique texts,
+completed/total chunks, vector bytes and the latest error.
+
+All saved versions, including translations and LRC-only versions, participate.
+Instrumentals and hidden tracks/releases are excluded. Text is split into
+overlapping windows of at most 240 Unicode characters, overlapping by roughly
+60 characters and adjusted at word boundaries. Timestamp tags are removed;
+NFKC, lowercase, `ё`/`е` folding and alphanumeric tokens define shared chunk
+identities. Identical normalized chunks reuse a vector, across versions and
+tracks. Vectors are persisted as 384 little-endian float32 values under a
+versioned **lyrics** profile, separately from audio vectors. Profile changes
+create a fresh derived index. Cached vectors survive restarts and source edits.
+Source version timestamps and visibility are rechecked before returning tracks,
+so removed or edited text cannot be returned from an older memory snapshot.
+Rolling replicas serialize indexing batches with a PostgreSQL advisory lock.
+
+Inference uses Rust `fastembed`/ONNX Runtime on CPU (two inference threads).
+The official `intfloat/multilingual-e5-small` FP32 ONNX model and tokenizer are
+pinned to revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`, downloaded and
+checksum-verified **during Docker build**, and copied to
+`/opt/furumusic/models/multilingual-e5-small`. Native ONNX Runtime is linked into
+the executable. There are no runtime model downloads or external inference
+services. The model adds about 487 MB of uncompressed artifacts to the image.
+For development:
+
+```sh
+python scripts/fetch-lyrics-model.py target/lyrics-model
+export FURU_LYRICS_MODEL_DIR="$PWD/target/lyrics-model"
+```
+
+The encoder uses attention-mask mean pooling, L2 normalization and E5's
+`query:` / `passage:` prefixes. Ranking combines inverse-frequency weighted
+term coverage, longest contiguous phrase and term proximity with calibrated
+cosine similarity. Exact evidence dominates, with a bonus for agreement between
+lexical and semantic scores. Only the best fragment/version contributes to a
+track's rank; repetition never accumulates score. Retrieval scans the cached
+local vectors, like audio similarity, without a separate vector database.
+Text matching stays available while embeddings are pending or the model is
+unavailable. Scores are retrieval signals, not confidence percentages.
+
+Authenticated `GET /api/player/search?q=…&mode=lyrics&limit=30` returns the normal
+search arrays (`artists`, `releases`, `tracks`, empty `podcasts`) plus optional
+`lyrics_status` and `semantic_error` metadata. Queries are limited to 500
+characters and results to 50 tracks. Omitting `mode` preserves ordinary search.
+
 ## Validation
 
 - `node --test tests/*.test.cjs`
 - `cargo test lyrics`
+- Real E5 + disposable PostgreSQL: set `FURU_LYRICS_MODEL_DIR` and
+  `FURU_LYRICS_TEST_DATABASE_URL`, then
+  `cargo test lyrics::search -- --include-ignored`.
+- `node tests/browser-lyrics-search.cjs` checks standard results, mobile/desktop
+  layout, mode styling, Enter/debounce, local-only requests and reduced motion.
 - Against disposable PostgreSQL:
   `FURU_LYRICS_TEST_DATABASE_URL=… cargo test postgres_cache_retry_content_binding_and_manual_versions -- --include-ignored`
 - Browser fixtures: set `FURU_PODCAST_RENDER_FIXTURE=1`, run

@@ -2909,7 +2909,29 @@ pub mod db_migrations {
         const OPERATIONS: &'static [Operation] = &[Operation::custom(create_lyrics).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_lyrics_search(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        for statement in include_str!("../lyrics/search_schema.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        Ok(())
+    }
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0057CreateLyricsSearch;
+    impl migrations::Migration for M0057CreateLyricsSearch {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0057_create_lyrics_search";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0056_create_lyrics",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(create_lyrics_search).build()];
+    }
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0057CreateLyricsSearch,
         &M0056CreateLyrics,
         &M0006CreateMediaFile,
         &M0007CreateArtist,

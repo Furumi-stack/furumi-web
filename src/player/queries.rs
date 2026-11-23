@@ -78,6 +78,7 @@ pub(super) struct PathStringId {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SearchQuery {
+    pub mode: Option<String>,
     pub(super) q: String,
     pub(super) limit: Option<i32>,
 }

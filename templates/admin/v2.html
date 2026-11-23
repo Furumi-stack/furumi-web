@@ -1028,15 +1028,34 @@
                                     <input type="password" x-model="settingsDraft.lastfm_shared_secret" autocomplete="off" />
                                     <div class="setting-help">{{ t.settings_lastfm_shared_secret_help }}</div>
                                 </div>
+                                <div class="setting-field settings-wide">
+                                    <label for="lastfm-callback-url">Last.fm callback URL</label>
+                                    <input id="lastfm-callback-url" type="text" :value="lastfmCallbackUrl()" readonly @click="$el.select()" />
+                                    <div class="setting-help">Use this address in your Last.fm API application settings. The authentication state is added automatically.</div>
+                                </div>
                             </div>
                         </section>
 
                         <section class="panel settings-section settings-lyrics" id="settings-lyrics">
-                            <div class="panel-head"><div class="panel-title"><strong>Lyrics · LRCLIB</strong><span>Automatic library enrichment</span></div></div>
+                            <div class="panel-head"><div class="panel-title"><strong>Lyrics</strong><span>LRCLIB enrichment and local lyrics search</span></div></div>
                             <div class="setting-toggle">
                                 <label class="setting-toggle-row"><span>Fetch lyrics automatically</span><input type="checkbox" x-model="settingsDraft.lyrics_enrichment_enabled" /></label>
                                 <div class="setting-help">External LRCLIB requests reveal track metadata from this library. Saved lyrics remain available when disabled.</div>
                                 <span class="source-pill" :class="sourceClass('lyrics_enrichment_enabled')" x-text="settingSource('lyrics_enrichment_enabled')"></span>
+                            </div>
+                            <div class="setting-toggle">
+                                <label class="setting-toggle-row"><span>Index lyrics for local semantic search</span><input type="checkbox" x-model="settingsDraft.lyrics_indexing_enabled" /></label>
+                                <div class="setting-help">All saved versions and translations are indexed locally. Disabling pauses new embeddings; saved vectors and text search remain available. No lyrics or queries leave this instance.</div>
+                                <span class="source-pill" :class="sourceClass('lyrics_indexing_enabled')" x-text="settingSource('lyrics_indexing_enabled')"></span>
+                            </div>
+                            <div class="lyrics-search-status" aria-live="polite">
+                                <div class="probe-row"><span>Model</span><strong>multilingual-e5-small · 384 dimensions · CPU</strong></div>
+                                <div class="probe-row"><span>Profile</span><strong x-text="similarityStatus.lyrics_search?.profile || 'loading'"></strong></div>
+                                <div class="probe-row"><span>Status</span><strong x-text="similarityStatus.lyrics_search?.phase || 'starting'"></strong></div>
+                                <div class="probe-row"><span>Unique texts ready</span><strong x-text="`${similarityStatus.lyrics_search?.ready_texts || 0} / ${similarityStatus.lyrics_search?.texts || 0}`"></strong></div>
+                                <div class="probe-row"><span>Chunk embeddings</span><strong x-text="`${similarityStatus.lyrics_search?.ready_chunks || 0} / ${similarityStatus.lyrics_search?.chunks || 0} · ${formatBytes(similarityStatus.lyrics_search?.stored_bytes || 0)}`"></strong></div>
+                                <div class="setting-help">One background worker · 2 inference threads · batches of 4 · overlapping fragments · exact text + semantic ranking</div>
+                                <p class="setting-help" x-show="similarityStatus.lyrics_search?.last_error" x-text="similarityStatus.lyrics_search?.last_error"></p>
                             </div>
                         </section>
                         <section class="panel settings-section settings-developer" id="settings-developer">
@@ -2185,6 +2204,7 @@ function adminV2() {
             lastfm_api_key: '',
             lastfm_shared_secret: '',
             lyrics_enrichment_enabled: true,
+            lyrics_indexing_enabled: true,
             agent_enabled: false,
             agent_inbox_dir: '',
             agent_storage_dir: '',
@@ -3074,6 +3094,10 @@ function adminV2() {
 
         callbackUrl() {
             return `${window.location.origin}/auth/oidc/callback`;
+        },
+
+        lastfmCallbackUrl() {
+            return `${window.location.origin}/api/player/lastfm/callback`;
         },
 
         settingsProbeBadge() {

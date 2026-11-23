@@ -34,9 +34,14 @@ const html=fs.readFileSync('target/lyrics-admin-fixture.html','utf8'),alpine=fs.
    await page.screenshot({path:`target/lyrics-admin-${viewport.width}.png`,fullPage:true});
    const outside=await page.locator('.lyrics-editor-version').evaluateAll(elements=>elements.some(el=>el.getBoundingClientRect().right>innerWidth));assert.equal(outside,false);
    await page.evaluate(()=>{const app=Alpine.$data(document.querySelector('.admin-shell'));app.editorOpen=false;app.activeView='settings';});
-   const toggle=page.locator('#settings-lyrics input[type=checkbox]');await toggle.waitFor({state:'visible'});
+   const toggle=page.locator('#settings-lyrics input[x-model="settingsDraft.lyrics_enrichment_enabled"]');await toggle.waitFor({state:'visible'});
    const toggleBox=await toggle.boundingBox();assert.ok(toggleBox.width<=20&&toggleBox.height<=20);
    assert.equal(await toggle.isChecked(),true);
+   const indexing=page.locator('#settings-lyrics input[x-model="settingsDraft.lyrics_indexing_enabled"]');
+   assert.equal(await indexing.isChecked(),true);
+   await indexing.uncheck();assert.equal(await toggle.isChecked(),true,'local indexing and LRCLIB are independent');
+   await indexing.check();
+   assert.equal(await page.locator('#lastfm-callback-url').inputValue(),'http://lyrics-admin.test/api/player/lastfm/callback');
    const layout=await page.locator('.settings-layout').boundingBox(),lyrics=await page.locator('#settings-lyrics').boundingBox();
    assert.ok(lyrics.width>=layout.width*0.9,'lyrics must occupy the full settings row');
    assert.equal(await page.locator('#settings-lyrics').evaluate(el=>getComputedStyle(el).gridArea),'lyrics');

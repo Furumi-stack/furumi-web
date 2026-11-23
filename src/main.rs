@@ -566,6 +566,11 @@ impl Project for FuruProject {
             similarity::handle().boot(&similarity_config).await;
         });
 
+        let lyrics_config = Arc::clone(&self.app_config);
+        tokio::spawn(async move {
+            lyrics::search::handle().boot(&lyrics_config).await;
+        });
+
         apps.register(cot::session::db::SessionApp::new());
         apps.register_with_views(
             FuruApp {
