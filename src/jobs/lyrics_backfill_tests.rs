@@ -4,12 +4,14 @@ use sqlx::Connection;
 #[tokio::test]
 async fn http_misses_throttling_and_invalid_bodies_are_distinguished() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    for (status, body, retry, success) in [
-        ("200 OK", "[]", None, true),
-        ("404 Not Found", "{}", None, false),
-        ("429 Too Many Requests", "{}", Some(7200), false),
-        ("503 Service Unavailable", "{}", Some(30), false),
-        ("200 OK", "not JSON", None, false),
+    for (status, body, retry, success, cooldown) in [
+        ("200 OK", "[]", None, true, false),
+        ("404 Not Found", "{}", None, false, false),
+        ("429 Too Many Requests", "{}", Some(7200), false, true),
+        ("503 Service Unavailable", "{}", Some(30), false, true),
+        ("200 OK", "not JSON", None, false, false),
+        ("200 OK", "{}", None, false, false),
+        ("200 OK", "null", None, false, false),
     ] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -26,10 +28,11 @@ async fn http_misses_throttling_and_invalid_bodies_are_distinguished() {
             stream.read(&mut bytes).await.unwrap();
             stream.write_all(response.as_bytes()).await.unwrap();
         });
-        let result = get_json_url::<Vec<Record>>(&Client::new(), &url, &[]).await;
+        let result = get_json_url::<Vec<serde_json::Value>>(&Client::new(), &url, &[]).await;
         assert_eq!(result.is_ok(), success, "{status}");
         if let Err(error) = result {
             assert_eq!(error.retry_after, retry);
+            assert_eq!(error.service_unavailable, cooldown);
         }
         server.await.unwrap();
     }
@@ -85,6 +88,7 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
         sqlx::query_as::<_, Candidate>(CANDIDATES)
             .bind(200)
             .bind(false)
+            .bind(None::<&str>)
             .fetch_all(&pool)
     };
     assert!(is_manual_run(&pool, 1).await.unwrap());
@@ -136,6 +140,7 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
         sqlx::query_as::<_, Candidate>(CANDIDATES)
             .bind(200)
             .bind(true)
+            .bind(None::<&str>)
             .fetch_all(&pool)
             .await
             .unwrap()
@@ -172,6 +177,7 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
     let manual_candidates = sqlx::query_as::<_, Candidate>(CANDIDATES)
         .bind(200)
         .bind(true)
+        .bind(None::<&str>)
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -180,6 +186,15 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
         2,
         "manual runs bypass per-content retry delays"
     );
+    let remaining = sqlx::query_as::<_, Candidate>(CANDIDATES)
+        .bind(200)
+        .bind(true)
+        .bind(&manual_candidates[0].hash)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].hash, manual_candidates[1].hash);
     sqlx::query("UPDATE furumusic__lyrics_lookup SET retry_at=now()-interval '1 second'")
         .execute(&pool)
         .await

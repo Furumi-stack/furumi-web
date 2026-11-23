@@ -38,15 +38,17 @@ saved. Requests and provider search results are never sent from the browser.
 Successful and empty searches are cached durably, shared across equal metadata
 signatures. A completed content binding is skipped on later runs. Changing
 title, main artist, album or rounded duration makes the content eligible again.
-Network failures, malformed responses and HTTP errors remain retryable with
-exponential backoff. A durable service cooldown stops the run on such errors;
-`Retry-After` is honored with jitter. A transaction advisory lock prevents
-overlapping enrichment runs. Cancelled runs release the lock, and completed
-lookup results survive interruption before attachment to content.
+Malformed search records are skipped individually. If an incomplete response
+yields no usable match, or the request fails for an individual track, that
+signature is deferred for retry with exponential backoff and the run advances
+to the next track. Connection failures and HTTP 429/503 persist a service-wide
+cooldown and pause the run. Numeric `Retry-After` delays receive jitter.
+A transaction advisory lock prevents overlapping runs. Cancelled runs release
+the lock, and completed lookup results survive interruption before attachment.
 
 Manual runs bypass saved global cooldown and individual retry delays, while
-still skipping completed searches. A fresh API failure stops the run and saves
-backoff for subsequent automatic runs; request throttling remains in effect.
+still skipping completed searches. A deferred track is eligible again on the
+next manual run. Request throttling remains in effect.
 
 ## Manual editing and playback
 

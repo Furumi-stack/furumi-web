@@ -24,6 +24,17 @@ struct Candidate {
     signature: String,
 }
 
+impl Candidate {
+    fn log_context(&self) -> String {
+        format!(
+            "track {:?}, artist {:?}, audio {}",
+            self.title.chars().take(120).collect::<String>(),
+            self.artist.chars().take(120).collect::<String>(),
+            self.hash
+        )
+    }
+}
+
 // Signature changes automatically invalidate a previous positive or negative lookup.
 const CANDIDATES: &str = r#"WITH candidates AS (
     SELECT DISTINCT ON(m.sha256_hash) m.sha256_hash::text AS hash,t.title::text,
@@ -41,6 +52,7 @@ LEFT JOIN furumusic__lyrics_binding b ON b.audio_sha256=c.hash
 LEFT JOIN furumusic__lyrics_lookup l ON l.signature=c.signature
 WHERE (b.signature IS DISTINCT FROM c.signature OR l.signature IS NULL OR l.status='retry')
   AND ($2 OR l.retry_at IS NULL OR l.retry_at<=now())
+  AND ($3::text IS NULL OR c.hash > $3)
 ORDER BY c.hash LIMIT $1"#;
 
 #[async_trait::async_trait]
@@ -99,15 +111,20 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
     let mut processed = 0;
     let mut requests = 0;
     let mut found = 0;
-    loop {
+    let mut deferred = 0;
+    let mut cursor: Option<String> = None;
+    'scan: loop {
         let batch = sqlx::query_as::<_, Candidate>(CANDIDATES)
             .bind(BATCH_SIZE)
             .bind(manual)
+            .bind(cursor.as_deref())
             .fetch_all(&ctx.pool)
             .await?;
         if batch.is_empty() {
             break;
         }
+        // Advance past deferred rows even when a manual run ignores retry_at.
+        cursor = batch.last().map(|track| track.hash.clone());
         for track in batch {
             let (config, _) = crate::config::AppConfig::load_with_db(&ctx.db).await;
             if !config.lyrics_enrichment_enabled {
@@ -128,7 +145,7 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
                     Ok(Vec::new())
                 } else {
                     requests += 1;
-                    let result = lookup(&client, &track).await;
+                    let result = lookup(&client, &track, log).await;
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
                     result
                 };
@@ -140,13 +157,24 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
                         versions
                     }
                     Err(error) => {
-                        let delay = error.retry_after.unwrap_or(300).max(30);
-                        // Persist service-wide cooldown, including Retry-After, across runs.
-                        for signature in [track.signature.as_str(), "_lrclib_cooldown"] {
-                            save_retry(&ctx.pool, signature, delay).await?;
+                        let delay = error.retry_after.unwrap_or(300).clamp(30, 31_536_000);
+                        save_retry(&ctx.pool, &track.signature, delay).await?;
+                        let action = if error.service_unavailable {
+                            save_retry(&ctx.pool, "_lrclib_cooldown", delay).await?;
+                            "paused run and saved service cooldown"
+                        } else {
+                            "deferred track and continued"
+                        };
+                        log.warn(&format!(
+                            "LRCLIB /api/search for {}: {}; {action} (retry delay at least {delay}s).",
+                            track.log_context(),
+                            error.message
+                        ));
+                        deferred += 1;
+                        if error.service_unavailable {
+                            break 'scan;
                         }
-                        log.info(&format!("LRCLIB temporarily unavailable ({}); saved retry state and stopped requests.",error.message));
-                        return Ok(());
+                        continue;
                     }
                 }
             };
@@ -163,7 +191,7 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
         }
     }
     log.info(&format!(
-        "Lyrics complete: {processed} content items, {found} found, {requests} API lookups."
+        "Lyrics run summary: {processed} content items completed, {found} found, {deferred} deferred, {requests} API lookups."
     ));
     Ok(())
 }
@@ -220,7 +248,7 @@ struct Record {
     id: i64,
     track_name: String,
     artist_name: String,
-    album_name: String,
+    album_name: Option<String>,
     duration: Option<f64>,
     #[serde(default)]
     instrumental: bool,
@@ -230,38 +258,38 @@ struct Record {
 struct LookupError {
     message: String,
     retry_after: Option<u64>,
-}
-impl From<anyhow::Error> for LookupError {
-    fn from(e: anyhow::Error) -> Self {
-        Self {
-            message: e.to_string(),
-            retry_after: None,
-        }
-    }
+    service_unavailable: bool,
 }
 
-async fn get_json<T: serde::de::DeserializeOwned>(
-    client: &Client,
-    endpoint: &str,
-    query: &[(&str, String)],
-) -> std::result::Result<Option<T>, LookupError> {
-    get_json_url(client, &format!("https://lrclib.net/api/{endpoint}"), query).await
+impl LookupError {
+    fn bad_response(message: String) -> Self {
+        Self {
+            message,
+            retry_after: None,
+            service_unavailable: false,
+        }
+    }
 }
 
 async fn get_json_url<T: serde::de::DeserializeOwned>(
     client: &Client,
     url: &str,
     query: &[(&str, String)],
-) -> std::result::Result<Option<T>, LookupError> {
+) -> std::result::Result<T, LookupError> {
     let mut response = client
         .get(url)
         .query(query)
         .send()
         .await
-        .map_err(|e| LookupError::from(anyhow::Error::from(e)))?;
+        .map_err(|error| LookupError {
+            service_unavailable: error.is_connect(),
+            message: format!("request failed: {}", error.without_url()),
+            retry_after: None,
+        })?;
     if !response.status().is_success() {
         return Err(LookupError {
             message: format!("HTTP {}", response.status()),
+            service_unavailable: matches!(response.status().as_u16(), 429 | 503),
             retry_after: response
                 .headers()
                 .get("retry-after")
@@ -270,19 +298,28 @@ async fn get_json_url<T: serde::de::DeserializeOwned>(
         });
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| LookupError::from(anyhow::Error::from(e)))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        LookupError::bad_response(format!(
+            "reading response body failed: {}",
+            error.without_url()
+        ))
+    })? {
         if bytes.len() + chunk.len() > MAX_API_BYTES {
-            return Err(anyhow::anyhow!("oversized LRCLIB response").into());
+            return Err(LookupError::bad_response(format!(
+                "response exceeds {MAX_API_BYTES} bytes"
+            )));
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|e| LookupError::from(anyhow::Error::from(e)))
+    serde_json::from_slice(&bytes).map_err(|error| {
+        LookupError::bad_response(format!(
+            "invalid JSON search array ({} bytes, {:?} error at line {}, column {})",
+            bytes.len(),
+            error.classify(),
+            error.line(),
+            error.column()
+        ))
+    })
 }
 fn normalized(value: &str) -> String {
     value
@@ -302,7 +339,7 @@ fn version(mut record: Record) -> Option<LyricsVersion> {
     // JSON permits NUL, but PostgreSQL text/JSONB cannot represent it. Provider
     // texts occasionally contain these invisible bytes; remove them before
     // parsing LRC or writing either the lookup cache or the content binding.
-    record.album_name.retain(|c| c != '\0');
+    let album = without_nul(record.album_name.unwrap_or_default());
     record.plain_lyrics = record.plain_lyrics.map(without_nul);
     record.synced_lyrics = record.synced_lyrics.map(without_nul);
     let synced = record
@@ -310,10 +347,10 @@ fn version(mut record: Record) -> Option<LyricsVersion> {
         .filter(|v| !crate::lyrics::parse_lrc(v).is_empty());
     let value = LyricsVersion {
         id: format!("lrclib:{}", record.id),
-        label: if record.album_name.is_empty() {
+        label: if album.is_empty() {
             "LRCLIB".into()
         } else {
-            format!("LRCLIB · {}", record.album_name)
+            format!("LRCLIB · {album}")
         },
         source: "lrclib".into(),
         source_id: Some(record.id.to_string()),
@@ -332,16 +369,45 @@ fn without_nul(mut text: String) -> String {
 async fn lookup(
     client: &Client,
     track: &Candidate,
+    log: &mut JobLog,
 ) -> std::result::Result<Vec<LyricsVersion>, LookupError> {
     let query = vec![
         ("track_name", track.title.clone()),
         ("artist_name", track.artist.clone()),
     ];
     // Search returns all text representations in one request; no per-result fetches.
-    let records: Vec<Record> = get_json(client, "search", &query)
-        .await?
-        .unwrap_or_default();
-    Ok(select_versions(records, track))
+    let values: Vec<serde_json::Value> =
+        get_json_url(client, "https://lrclib.net/api/search", &query).await?;
+    let (records, rejected, first_rejected) = decode_records(values);
+    let versions = select_versions(records, track);
+    if let Some(index) = first_rejected {
+        let detail =
+            format!("skipped {rejected} malformed search records (first at index {index})");
+        if versions.is_empty() {
+            return Err(LookupError::bad_response(detail));
+        }
+        log.warn(&format!(
+            "LRCLIB /api/search for {}: {detail}.",
+            track.log_context()
+        ));
+    }
+    Ok(versions)
+}
+
+fn decode_records(values: Vec<serde_json::Value>) -> (Vec<Record>, usize, Option<usize>) {
+    let mut records = Vec::new();
+    let mut rejected = 0;
+    let mut first_rejected = None;
+    for (index, value) in values.into_iter().enumerate() {
+        match serde_json::from_value(value) {
+            Ok(record) => records.push(record),
+            Err(_) => {
+                rejected += 1;
+                first_rejected.get_or_insert(index);
+            }
+        }
+    }
+    (records, rejected, first_rejected)
 }
 
 fn select_versions(records: Vec<Record>, track: &Candidate) -> Vec<LyricsVersion> {
@@ -354,7 +420,9 @@ fn select_versions(records: Vec<Record>, track: &Candidate) -> Vec<LyricsVersion
                 r.synced_lyrics
                     .as_ref()
                     .is_some_and(|v| !crate::lyrics::parse_lrc(v).is_empty()),
-                normalized(&r.album_name) == normalized(&track.album),
+                r.album_name
+                    .as_deref()
+                    .is_some_and(|album| normalized(album) == normalized(&track.album)),
                 !r.instrumental,
             )
         };
@@ -376,6 +444,24 @@ fn select_versions(records: Vec<Record>, track: &Candidate) -> Vec<LyricsVersion
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_search_records_do_not_discard_valid_neighbors() {
+        let (records, rejected, first_rejected) = decode_records(vec![
+            serde_json::json!({"id": 1, "trackName": null, "artistName": "Artist"}),
+            serde_json::json!({"id": 2, "trackName": "Song", "artistName": "Artist",
+                               "albumName": null, "duration": 100, "plainLyrics": "Words"}),
+            serde_json::json!({"id": 3, "trackName": "Song", "artistName": "Artist",
+                               "syncedLyrics": ["wrong type"]}),
+            serde_json::Value::Null,
+        ]);
+        assert_eq!(rejected, 3);
+        assert_eq!(first_rejected, Some(0));
+        let lyrics = version(records.into_iter().next().unwrap()).unwrap();
+        assert_eq!(lyrics.id, "lrclib:2");
+        assert_eq!(lyrics.label, "LRCLIB");
+        assert_eq!(lyrics.plain_text.as_deref(), Some("Words"));
+    }
+
     #[test]
     fn nullable_duration_does_not_discard_valid_search_results() {
         let track = Candidate {
@@ -420,7 +506,7 @@ mod tests {
             id: 1,
             track_name: "SONG".into(),
             artist_name: "Artist".into(),
-            album_name: "Album".into(),
+            album_name: Some("Album".into()),
             duration: Some(102.0),
             instrumental: false,
             plain_lyrics: Some("words".into()),
