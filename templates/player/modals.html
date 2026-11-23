@@ -1188,7 +1188,8 @@
                             </div>
                             <div class="history-date" x-text="$store.history.date(item.played_at)"></div>
                             <div class="track-actions">
-                                <button class="track-action-btn lyrics-presence" type="button" x-show="item.track.has_lyrics" @click.stop="$store.lyrics.open(item.track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
+                                <span class="track-popularity-slot">
+<button class="track-action-btn lyrics-presence" type="button" x-show="item.track.has_lyrics" @click.stop="$store.lyrics.open(item.track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
 <button class="track-action-btn info-btn popularity-info-btn"
                                         :class="{ 'has-popularity': $store.library.hasPopularity(item.track), 'no-popularity': !$store.library.hasPopularity(item.track) }"
                                         :style="$store.library.popularityStyle(item.track)"
@@ -1198,6 +1199,7 @@
                                     <span x-show="$store.library.hasPopularity(item.track)" x-text="$store.library.popularityLabel(item.track)"></span>
                                     <span x-show="!$store.library.hasPopularity(item.track)" class="info-letter">i</span>
                                 </button>
+</span>
                                 <button class="like-btn" :class="{ liked: $store.likes.has(item.track_id) }" @click.stop="$store.likes.toggle(item.track_id)" title="{{ t.player_like }}">
                                     <svg viewBox="0 0 24 24" :fill="$store.likes.has(item.track_id) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
                                 </button>

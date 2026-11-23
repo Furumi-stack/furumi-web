@@ -30,6 +30,10 @@
 .lyrics-toggle-mobile {display:none!important}
 .lyrics-presence {color:var(--accent,#80bda6)!important;width:24px!important;min-width:24px!important;padding:3px!important}
 .lyrics-presence svg {width:15px;height:15px}
+.track-popularity-slot {position:relative;display:inline-flex;align-items:center;flex:none}
+.track-popularity-slot > .lyrics-presence {position:absolute;right:calc(100% + 2px);top:50%;transform:translateY(-50%);height:24px}
+.queue-track-info {padding-right:24px}
+.track-row > .track-album {padding-right:24px}
 @media(max-width:768px) {
  .lyrics-overlay {padding:12px}
  .lyrics-fullscreen {padding:0}
@@ -40,7 +44,11 @@
  .lyrics-scroll {padding:12px 24px}
  .lyrics-line {font-size:30px;padding:10px 0}
  .lyrics-footer {padding-left:20px;padding-right:20px;gap:8px;flex-wrap:wrap}
+}
+@media (max-width:900px), (pointer:coarse) and (max-width:1024px) {
  .lyrics-toggle-mobile {display:inline-flex!important}
+ .player-right > .lyrics-toggle {display:none}
+ .track-row .track-info {padding-right:24px}
 }
 @media(prefers-reduced-motion:reduce) {.lyrics-line {transition:none}}
 :root {
@@ -801,7 +809,7 @@ button.user-stat:hover {
 
 .track-list-header {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 154px 60px;
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 178px 60px;
     padding: 8px 16px;
     border-bottom: 1px solid var(--border-color);
     color: var(--text-subdued);
@@ -813,7 +821,7 @@ button.user-stat:hover {
 
 .track-row {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 154px 60px;
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 178px 60px;
     padding: 8px 16px;
     border-radius: 4px;
     cursor: default;
@@ -826,7 +834,7 @@ button.user-stat:hover {
 .track-row.playing .track-num { color: var(--accent); }
 .playlist-track-list-header.editing,
 .playlist-track-row.editing {
-    grid-template-columns: 32px 40px minmax(0, 1fr) minmax(0, 1fr) 154px 60px;
+    grid-template-columns: 32px 40px minmax(0, 1fr) minmax(0, 1fr) 178px 60px;
 }
 
 .playlist-track-row.editing {
@@ -5551,6 +5559,14 @@ button.user-stat:hover {
         display: none;
     }
 
+    /* Hidden edit controls still count for nth-child. Pin the normal playlist
+       cells so its spacer cannot push actions onto a second grid row. */
+    .playlist-track-row > span:nth-child(4) {display:none}
+    .playlist-track-row:not(.editing) .track-num {grid-column:1;grid-row:1}
+    .playlist-track-row:not(.editing) .playlist-track-info {grid-column:2;grid-row:1}
+    .playlist-track-row:not(.editing) .track-actions {grid-column:3;grid-row:1}
+    .playlist-track-row:not(.editing) .track-duration {grid-column:4;grid-row:1}
+
     .history-table-head,
     .history-row.track-row {
         grid-template-columns: 44px minmax(0, 1fr) auto;
@@ -5885,7 +5901,7 @@ button.user-stat:hover {
         align-items: center;
         gap: 6px;
         justify-self: center;
-        width: min(80vw, 360px);
+        width: min(100%, 360px);
         min-width: 0;
     }
 
@@ -6165,12 +6181,15 @@ button.user-stat:hover {
         justify-self: center;
         width: min(100%, 560px);
         flex: 0 0 auto;
-        grid-template-columns: minmax(0, 1fr) 48px 48px;
+        grid-template-columns: 44px minmax(0, 1fr) 48px 48px;
         gap: 8px;
         padding: 0;
         border-radius: 0;
         background: transparent;
     }
+
+    .player-bar.mobile-expanded .player-buttons > .lyrics-toggle-mobile {display:none!important}
+    .player-bar.mobile-expanded .player-right > .lyrics-toggle {display:flex}
 
     .player-bar.mobile-expanded .mobile-full-player .volume-control {
         grid-template-columns: 44px minmax(0, 1fr);
@@ -6951,7 +6970,7 @@ button.user-stat:hover {
 
     .volume-control {
         grid-template-columns: 22px minmax(0, 1fr);
-        width: min(80vw, 320px);
+        width: min(100%, 320px);
         gap: 4px;
     }
 
@@ -7024,7 +7043,7 @@ button.user-stat:hover {
     }
 
     .player-bar.mobile-expanded .mobile-full-player .player-buttons {
-        gap: 12px;
+        gap: clamp(2px, calc((100vw - 300px) / 8), 12px);
     }
 
     .player-bar.mobile-expanded .mobile-full-player .player-btn {
