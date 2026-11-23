@@ -1,6 +1,90 @@
 use super::*;
 use sqlx::Connection;
 
+#[test]
+#[ignore = "requires bundled E5 and the fixture prepared by tests/lyrics_rank_corpus.py"]
+fn lyrics_ranking_quality() {
+    use std::collections::BTreeMap;
+    #[derive(serde::Deserialize)]
+    struct Example {
+        text: String,
+        queries: BTreeMap<String, String>,
+    }
+    let path = std::env::var("FURU_LYRICS_RANK_EVAL").unwrap();
+    let examples: Vec<Example> =
+        serde_json::from_reader(std::fs::File::open(path).unwrap()).unwrap();
+    let labeled = examples
+        .iter()
+        .filter(|example| !example.queries.is_empty())
+        .count();
+    assert!(labeled > 0);
+    let mut corpus = Corpus::default();
+    let mut passages = BTreeMap::new();
+    let mut queries = Vec::new();
+    for example in examples {
+        let hash = blake3::hash(example.text.as_bytes()).to_hex().to_string();
+        let chunks = chunks(&example.text);
+        for chunk in &chunks {
+            passages
+                .entry(chunk.hash.clone())
+                .or_insert_with(|| format!("passage: {}", chunk.tokens.join(" ")));
+        }
+        for (kind, query) in example.queries {
+            queries.push((kind, query.to_lowercase(), hash.clone()));
+        }
+        corpus.docs.insert(
+            hash.clone(),
+            Arc::new(Document {
+                hash,
+                id: "original".into(),
+                stamp: String::new(),
+                chunks,
+            }),
+        );
+    }
+
+    let mut model = load_model().unwrap();
+    let (hashes, inputs): (Vec<_>, Vec<_>) = passages.into_iter().unzip();
+    println!(
+        "{} documents, {} chunks, {} queries",
+        corpus.docs.len(),
+        inputs.len(),
+        queries.len()
+    );
+    let vectors = model.embed(inputs, Some(BATCH)).unwrap();
+    corpus
+        .vectors
+        .write()
+        .unwrap()
+        .extend(hashes.into_iter().zip(vectors.into_iter().map(Arc::new)));
+    let inputs: Vec<_> = queries
+        .iter()
+        .map(|(_, query, _)| format!("query: {query}"))
+        .collect();
+    let vectors = model.embed(inputs, Some(BATCH)).unwrap();
+    let mut positions = BTreeMap::<String, Vec<usize>>::new();
+    for ((kind, query, expected), vector) in queries.into_iter().zip(vectors) {
+        let hits = rank(&corpus, &query, Some(&vector));
+        let position = hits
+            .iter()
+            .position(|hit| hit.hash == expected)
+            .map_or(0, |index| index + 1);
+        positions.entry(kind).or_default().push(position);
+    }
+    assert_eq!(positions.len(), 4);
+    for (kind, ranks) in positions {
+        assert_eq!(ranks.len(), labeled);
+        let top1 = ranks.iter().filter(|&&r| r == 1).count();
+        let top3 = ranks.iter().filter(|&&r| (1..=3).contains(&r)).count();
+        println!(
+            "{kind}: top1={top1}/{labeled} top3={top3}/{labeled} ranks={ranks:?} (0 = missing)"
+        );
+        if kind.ends_with("_quote") {
+            assert_eq!(top1, labeled, "verbatim quotes should rank first in {kind}");
+        }
+    }
+}
+
 fn manager() -> Arc<Manager> {
     Arc::new(Manager {
         enabled: AtomicBool::new(true),

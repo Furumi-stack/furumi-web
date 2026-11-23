@@ -586,80 +586,196 @@ pub struct SearchOutput {
     pub hits: Vec<Hit>,
     pub semantic_error: Option<String>,
 }
+
+struct QueryTerms<'a> {
+    words: &'a [String],
+    positions: HashMap<&'a str, Vec<usize>>,
+    idf: HashMap<&'a str, f64>,
+    total_idf: f64,
+    // Indexed by query start and span length minus one.
+    quotes: Vec<Vec<f64>>,
+    informative_len: usize,
+}
+
+#[derive(Default)]
+struct LexicalMatch {
+    score: f64,
+    coverage: f64,
+    quote: f64,
+}
+
+impl<'a> QueryTerms<'a> {
+    fn new(words: &'a [String], chunks: &[&Chunk], hybrid: bool) -> Self {
+        const STOP: &str = "и в во на не что там где про как а но это то the a an is of to in it and something about where";
+        // Ignore filler when mixing scores. Literal spans still include these
+        // words, and lexical-only searches keep their original vocabulary.
+        const FILLER: &str = "я ты он она они мы вы у к с со по из за от для мне его ее или же бы был была было that on with from was he she they i";
+        let mut stop: HashSet<_> = STOP.split_whitespace().collect();
+        if hybrid {
+            stop.extend(FILLER.split_whitespace());
+        }
+        let mut positions = HashMap::<_, Vec<_>>::new();
+        for (index, word) in words.iter().enumerate() {
+            positions.entry(word.as_str()).or_default().push(index);
+        }
+        let mut terms: Vec<_> = positions
+            .keys()
+            .copied()
+            .filter(|s| !stop.contains(s))
+            .collect();
+        let informative_len = terms.len();
+        if terms.is_empty() {
+            terms.extend(positions.keys().copied());
+        }
+        terms.sort_unstable();
+        let mut frequencies: HashMap<_, _> = terms.iter().map(|&s| (s, (0, None))).collect();
+        for (index, chunk) in chunks.iter().enumerate() {
+            for word in &chunk.tokens {
+                if let Some((count, last)) = frequencies.get_mut(word.as_str())
+                    && *last != Some(index)
+                {
+                    *count += 1;
+                    *last = Some(index);
+                }
+            }
+        }
+        let n = (chunks.len() + 1) as f64;
+        let idf: HashMap<_, _> = frequencies
+            .into_iter()
+            .map(|(word, (df, _))| (word, 1. + (n / (df + 1) as f64).ln()))
+            .collect();
+        let total_idf = terms.iter().map(|word| idf[word]).sum();
+        let quotes = if hybrid {
+            Self::quote_strengths(words, &idf, 1. + n.ln())
+        } else {
+            Vec::new()
+        };
+        Self {
+            words,
+            positions,
+            idf,
+            total_idf,
+            quotes,
+            informative_len,
+        }
+    }
+
+    fn quote_strengths(words: &[String], idf: &HashMap<&str, f64>, max_idf: f64) -> Vec<Vec<f64>> {
+        // Precompute evidence for every span of the bounded query once. Joined
+        // rare words are more specific than common words or repeated occurrences.
+        let mut quotes = Vec::with_capacity(words.len());
+        for start in 0..words.len() {
+            let mut seen = HashSet::new();
+            let mut mass = 0.;
+            let mut row = Vec::with_capacity(words.len() - start);
+            for word in &words[start..] {
+                if let Some(weight) = idf.get(word.as_str())
+                    && seen.insert(word.as_str())
+                {
+                    mass += weight;
+                }
+                row.push(if seen.len() >= 2 {
+                    (mass / (3. * max_idf)).min(1.)
+                } else {
+                    0.
+                });
+            }
+            quotes.push(row);
+        }
+        // Even a short or common verbatim query is a useful direct match.
+        if let Some(full) = quotes.first_mut().and_then(|row| row.last_mut()) {
+            *full = 1.;
+        }
+        quotes
+    }
+
+    fn lexical_match(&self, chunk: &Chunk) -> LexicalMatch {
+        let mut matched = HashSet::new();
+        let mut matched_idf = 0.;
+        let mut first = None;
+        let mut last = 0;
+        let mut occurrences = 0;
+        let mut longest = 0;
+        let mut quote: f64 = 0.;
+
+        for (i, word) in chunk.tokens.iter().map(String::as_str).enumerate() {
+            let Some(starts) = self.positions.get(word) else {
+                continue;
+            };
+            if let Some(weight) = self.idf.get(word) {
+                if matched.insert(word) {
+                    matched_idf += weight;
+                }
+                first.get_or_insert(i);
+                last = i;
+                occurrences += 1;
+            }
+            for &start in starts {
+                // Only visit the start of each contiguous match on this alignment.
+                if i > 0 && start > 0 && chunk.tokens[i - 1] == self.words[start - 1] {
+                    continue;
+                }
+                let len = chunk.tokens[i..]
+                    .iter()
+                    .zip(&self.words[start..])
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                longest = longest.max(len);
+                if let Some(strengths) = self.quotes.get(start) {
+                    quote = quote.max(strengths[len - 1]);
+                }
+            }
+        }
+        let Some(first) = first else {
+            return LexicalMatch::default();
+        };
+        let coverage = matched_idf / self.total_idf;
+        let phrase = longest.min(12) as f64 / self.words.len().min(12) as f64;
+        let proximity = if occurrences > 1 {
+            self.idf.len().min(occurrences) as f64 / (last - first + 1) as f64
+        } else {
+            0.
+        };
+        LexicalMatch {
+            score: (0.65 * coverage + 0.3 * phrase + 0.05 * proximity).min(1.),
+            coverage,
+            quote,
+        }
+    }
+
+    fn semantic_weight(&self, quote_confidence: f64, best_coverage: f64) -> f64 {
+        if self.informative_len == 0 {
+            return 0.30;
+        }
+        // A long prompt that already matches most words in one passage still
+        // behaves like a quote. Only its unexplained length earns the small boost.
+        let unmatched = self.informative_len as f64 * (1. - best_coverage.clamp(0., 1.));
+        let length = ((unmatched - 3.) / 9.).clamp(0., 1.);
+        let without_quote = 0.80 + 0.04 * length;
+        without_quote + quote_confidence.clamp(0., 1.) * (0.25 - without_quote)
+    }
+}
+
 fn rank(corpus: &Corpus, query: &str, vector: Option<&[f32]>) -> Vec<Hit> {
     let query_tokens = tokens(query);
     if query_tokens.is_empty() {
         return Vec::new();
     }
-    let stop:HashSet<_>="и в во на не что там где про как а но это то the a an is of to in it and something about where".split_whitespace().collect();
-    let terms: Vec<_> = query_tokens
-        .iter()
-        .filter(|s| !stop.contains(s.as_str()))
-        .cloned()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let terms = if terms.is_empty() {
-        query_tokens.clone()
-    } else {
-        terms
-    };
-    let unique_chunks: HashMap<_, _> = corpus
+    let unique_chunks: Vec<_> = corpus
         .docs
         .values()
         .flat_map(|d| &d.chunks)
         .map(|c| (&c.hash, c))
+        .collect::<HashMap<_, _>>()
+        .into_values()
         .collect();
-    let mut weights = HashMap::new();
-    for term in &terms {
-        let df = unique_chunks
-            .values()
-            .filter(|c| c.tokens.contains(term))
-            .count();
-        weights.insert(
-            term,
-            1. + ((unique_chunks.len() + 1) as f64 / (df + 1) as f64).ln(),
-        );
-    }
-    let total: f64 = weights.values().sum();
+    let terms = QueryTerms::new(&query_tokens, &unique_chunks, vector.is_some());
     let vectors = corpus.vectors.read().unwrap_or_else(|e| e.into_inner());
-    let mut scores = HashMap::new();
-    for chunk in unique_chunks.values() {
-        let coverage = terms
-            .iter()
-            .filter(|t| chunk.tokens.contains(t))
-            .map(|t| weights[t])
-            .sum::<f64>()
-            / total;
-        let mut longest = 0;
-        if coverage > 0. {
-            let mut previous = vec![0usize; chunk.tokens.len() + 1];
-            for term in &query_tokens {
-                let mut current = vec![0usize; chunk.tokens.len() + 1];
-                for (i, word) in chunk.tokens.iter().enumerate() {
-                    if word == term {
-                        current[i + 1] = (previous[i] + 1).min(12);
-                        longest = longest.max(current[i + 1]);
-                    }
-                }
-                previous = current;
-            }
-        }
-        let phrase = longest as f64 / query_tokens.len().min(12) as f64;
-        let positions: Vec<_> = chunk
-            .tokens
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| terms.contains(t))
-            .map(|(i, _)| i)
-            .collect();
-        let proximity = if positions.len() > 1 {
-            terms.len().min(positions.len()) as f64
-                / (positions.last().unwrap() - positions[0] + 1) as f64
-        } else {
-            0.
-        };
-        let lexical = (0.65 * coverage + 0.3 * phrase + 0.05 * proximity).min(1.);
+    let mut candidates = Vec::new();
+    let mut quote_confidence: f64 = 0.;
+    let mut best_coverage: f64 = 0.;
+    for chunk in unique_chunks {
+        let lexical = terms.lexical_match(chunk);
         let semantic = vector.and_then(|q| {
             vectors.get(&chunk.hash).map(|v| {
                 q.iter()
@@ -669,28 +785,37 @@ fn rank(corpus: &Corpus, query: &str, vector: Option<&[f32]>) -> Vec<Hit> {
                     .clamp(-1., 1.)
             })
         });
-        // E5 cosine scores are concentrated high; calibrate the useful interval.
-        // Exact evidence dominates, semantic agreement breaks ties and rescues paraphrases.
-        let dense = semantic
-            .map(|s| ((s - 0.65) / 0.3).clamp(0., 1.))
-            .unwrap_or(0.);
-        let score = if semantic.is_some() {
-            0.7 * lexical + 0.3 * dense + 0.15 * lexical * dense
-        } else {
-            lexical
-        };
-        if lexical > 0.12 || semantic.is_some_and(|s| s >= 0.78) {
-            scores.insert(chunk.hash.clone(), (score, lexical, semantic));
+        if lexical.score > 0.12 || semantic.is_some_and(|s| s >= 0.78) {
+            quote_confidence = quote_confidence.max(lexical.quote * lexical.coverage);
+            best_coverage = best_coverage.max(lexical.coverage);
+            candidates.push((chunk.hash.as_str(), lexical, semantic));
         }
     }
+    drop(vectors);
+    let weight = terms.semantic_weight(quote_confidence, best_coverage);
+    let scores: HashMap<_, _> = candidates
+        .into_iter()
+        .map(|(hash, lexical, cosine)| {
+            let blended = cosine.map_or(lexical.score, |s| {
+                let dense = ((s - 0.65) / 0.30).clamp(0., 1.);
+                (1. - weight) * lexical.score + weight * dense + 0.15 * lexical.score * dense
+            });
+            let quote_bonus = if vector.is_some() {
+                0.25 * lexical.quote
+            } else {
+                0.
+            };
+            (hash, (blended + quote_bonus, lexical.score))
+        })
+        .collect();
     let mut hits = Vec::new();
     for doc in corpus.docs.values() {
         let best = doc
             .chunks
             .iter()
-            .filter_map(|c| scores.get(&c.hash).map(|score| (c, score)))
-            .max_by(|a, b| a.1.0.total_cmp(&b.1.0));
-        if let Some((_chunk, (score, _lexical, _semantic))) = best {
+            .filter_map(|c| scores.get(c.hash.as_str()))
+            .max_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((score, _lexical)) = best {
             hits.push(Hit {
                 track_id: 0,
                 hash: doc.hash.clone(),
@@ -785,6 +910,72 @@ mod tests {
         q[0] = 1.;
         assert_eq!(rank(&c, "snow falls on graves", Some(&q))[0].hash, "0");
     }
+
+    #[test]
+    fn semantic_weight_uses_distinct_content_words_and_the_best_quote() {
+        let weight = |text: &str, confidence| {
+            let words = tokens(text);
+            QueryTerms::new(&words, &[], true).semantic_weight(confidence, 0.)
+        };
+        let short = "рассвет лодка берег";
+        let long = "рассвет лодка берег путник увидел свет башни вернулся домой";
+        assert_eq!(
+            weight(short, 0.),
+            weight("я на берег берег лодка и там рассвет", 0.)
+        );
+        assert!(weight(long, 0.) > weight(short, 0.));
+        assert!(weight(long, 0.) > weight(long, 1.));
+        let words = tokens(long);
+        let terms = QueryTerms::new(&words, &[], true);
+        assert!(terms.semantic_weight(0., 0.) > terms.semantic_weight(0., 0.8));
+        let capped = "a b c d e f g h j k l m n o p";
+        assert_eq!(weight(capped, 0.5), weight(&format!("{capped} q r s"), 0.5));
+    }
+
+    #[test]
+    fn direct_evidence_rewards_adjacent_rare_words_and_discounts_repeats() {
+        let passages = [
+            "серебряный компас",
+            "серебряный потерянный компас",
+            "летит птица",
+            "летит птица далеко",
+            "опять летит птица",
+            "летит птица домой",
+            "эхо эхо эхо",
+        ]
+        .map(|s| chunks(s).remove(0));
+        let chunks = passages.iter().collect::<Vec<_>>();
+        let words = tokens("серебряный компас летит птица эхо эхо там где волна");
+        let query = QueryTerms::new(&words, &chunks, true);
+        let rare = query.lexical_match(&passages[0]).quote;
+        let common = query.lexical_match(&passages[2]).quote;
+        assert!(rare > common && common > 0.);
+        assert_eq!(query.lexical_match(&passages[1]).quote, 0.);
+        assert_eq!(query.lexical_match(&passages[6]).quote, 0.);
+    }
+
+    #[test]
+    fn scattered_hits_allow_semantic_retrieval_and_unindexed_quotes_still_surface() {
+        let c = corpus(&[
+            "маяк посреди моря",
+            "путеводная звезда ведёт домой",
+            "горный приют",
+        ]);
+        let mut q = vec![0.; DIMENSIONS];
+        q[0] = 1.;
+        let mut passage = vec![0.; DIMENSIONS];
+        passage[0] = 0.94;
+        let hash = c.docs["1"].chunks[0].hash.clone();
+        c.vectors.write().unwrap().insert(hash, Arc::new(passage));
+        let recall = "маяк звездочёт возвращение корабля ночью";
+        assert_eq!(rank(&c, recall, None)[0].hash, "0");
+        assert_eq!(rank(&c, recall, Some(&q))[0].hash, "1");
+        for vector in [None, Some(q.as_slice())] {
+            assert_eq!(rank(&c, "маяк посреди моря", vector)[0].hash, "0");
+            assert!(rank(&c, "…", vector).is_empty());
+        }
+    }
+
     #[test]
     fn malformed_vectors_are_rejected() {
         assert!(decode_vector(&[0; 4]).is_none());
