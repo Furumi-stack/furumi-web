@@ -10,6 +10,14 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.14.0 — 2026-11-23
+
+- Artist pages count guest appearances as tracks and include them in the Listen
+  queue. A guest appearance leaves the artist's release count unchanged.
+- The player can open an audio similarity search for the current library track.
+  Hover over the cover to enlarge it, or click to pin it. On touchscreens, tap
+  the cover in the expanded player.
+
 ## v0.13.2 — 2026-11-23
 
 - Search brings local and federated artists, releases and tracks into the same
