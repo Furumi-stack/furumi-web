@@ -2488,6 +2488,18 @@ button.user-stat:hover {
     min-width: 0;
 }
 
+.search-field {position:relative;left:0;width:100%}
+
+@media (max-width:560px) {
+    .content-topbar div.search-bar {flex:1 1 0;z-index:5}
+    .search-field {transition:left 160ms ease-out,width 160ms ease-out}
+    .search-expanded .search-field {
+        left:calc(-1 * var(--search-expand-left,0px));
+        width:calc(100% + var(--search-expand-left,0px) + var(--search-expand-right,0px));
+    }
+}
+@media (prefers-reduced-motion:reduce) {.search-field {transition:none}}
+
 .version-chip {
     flex: 0 0 auto;
     color: var(--text-subdued);

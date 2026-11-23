@@ -321,20 +321,28 @@
                     <a x-show="$store.user.accessStatus === 'anonymous'" href="/login?next=/share/{{ share_token }}">{{ t.guest_login }}</a>
                 </div>
                 {% endif %}
-                <div class="search-bar">
+                <div class="search-bar"
+                     x-data="{ expanded:false, left:0, right:0, measure() { const bar=$el.getBoundingClientRect(); const panel=$el.closest('.content-topbar').getBoundingClientRect(); this.left=Math.max(0,bar.left-panel.left); this.right=Math.max(0,panel.right-bar.right); } }"
+                     :class="{ 'search-expanded':expanded }"
+                     :style="{ '--search-expand-left':left+'px', '--search-expand-right':right+'px' }"
+                     @focusin="measure(); expanded=true; $store.user.menuOpen=false"
+                     @focusout="if (!$el.contains($event.relatedTarget)) expanded=false"
+                     @resize.window="measure()">
+                    <div class="search-field">
                     <span class="search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
-                    <input id="search-input" type="text" placeholder="{{ t.player_search_placeholder }}"
+                    <input id="search-input" x-ref="searchInput" type="text" placeholder="{{ t.player_search_placeholder }}"
                            x-model="$store.library.searchQuery"
                            @input.debounce.300ms="$store.library.search($store.library.searchQuery)"
                            @keydown.escape="$store.library.clearSearch(); $el.blur()">
                     <template x-if="$store.library.searchQuery">
-                        <button class="search-clear" @click="$store.library.clearSearch()">
+                        <button class="search-clear" @pointerdown.prevent @click="$store.library.clearSearch(); $refs.searchInput.focus()">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                     </template>
                     <template x-if="!$store.library.searchQuery">
                         <span class="search-shortcut">Ctrl+K</span>
                     </template>
+                    </div>
                 </div>
                 {% if downloads_enabled %}
                 <button class="torrent-import-btn"
