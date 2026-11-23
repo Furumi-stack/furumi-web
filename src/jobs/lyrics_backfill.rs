@@ -40,7 +40,7 @@ const CANDIDATES: &str = r#"WITH candidates AS (
 LEFT JOIN furumusic__lyrics_binding b ON b.audio_sha256=c.hash
 LEFT JOIN furumusic__lyrics_lookup l ON l.signature=c.signature
 WHERE (b.signature IS DISTINCT FROM c.signature OR l.signature IS NULL OR l.status='retry')
-  AND (l.retry_at IS NULL OR l.retry_at<=now())
+  AND ($2 OR l.retry_at IS NULL OR l.retry_at<=now())
 ORDER BY c.hash LIMIT $1"#;
 
 #[async_trait::async_trait]
@@ -80,10 +80,13 @@ impl Job for LyricsBackfillJob {
 }
 
 async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
-    let cooldown: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM furumusic__lyrics_lookup WHERE signature='_lrclib_cooldown' AND retry_at>now())").fetch_one(&ctx.pool).await?;
-    if cooldown {
+    let manual = is_manual_run(&ctx.pool, ctx.run_id).await?;
+    if cooldown_active(&ctx.pool, manual).await? {
         log.info("LRCLIB retry cooldown is active.");
         return Ok(());
+    }
+    if manual {
+        log.info("Manual run: bypassing saved LRCLIB cooldown and retry delays.");
     }
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(25))
@@ -99,6 +102,7 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
     loop {
         let batch = sqlx::query_as::<_, Candidate>(CANDIDATES)
             .bind(BATCH_SIZE)
+            .bind(manual)
             .fetch_all(&ctx.pool)
             .await?;
         if batch.is_empty() {
@@ -162,6 +166,18 @@ async fn enrich(ctx: &JobContext, log: &mut JobLog) -> Result<()> {
         "Lyrics complete: {processed} content items, {found} found, {requests} API lookups."
     ));
     Ok(())
+}
+
+async fn is_manual_run(pool: &sqlx::PgPool, run_id: i64) -> Result<bool> {
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM furumusic__job_run WHERE id=$1 AND job_name='lyrics_backfill' AND trigger='manual')")
+        .bind(run_id).fetch_one(pool).await?)
+}
+
+async fn cooldown_active(pool: &sqlx::PgPool, manual: bool) -> Result<bool> {
+    if manual {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM furumusic__lyrics_lookup WHERE signature='_lrclib_cooldown' AND retry_at>now())").fetch_one(pool).await?)
 }
 
 async fn save_retry(pool: &sqlx::PgPool, signature: &str, delay: u64) -> Result<()> {

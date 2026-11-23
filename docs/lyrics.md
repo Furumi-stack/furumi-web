@@ -43,6 +43,10 @@ exponential backoff. A durable service cooldown stops the run on such errors;
 overlapping enrichment runs. Cancelled runs release the lock, and completed
 lookup results survive interruption before attachment to content.
 
+Manual runs bypass saved global cooldown and individual retry delays, while
+still skipping completed searches. A fresh API failure stops the run and saves
+backoff for subsequent automatic runs; request throttling remains in effect.
+
 ## Manual editing and playback
 
 The track editor in Admin → Library supports adding, editing and removing

@@ -69,6 +69,8 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
         CREATE TABLE furumusic__track(id BIGINT PRIMARY KEY,title TEXT,release_id BIGINT,audio_file_id BIGINT,duration_seconds DOUBLE PRECISION,is_hidden BOOLEAN DEFAULT false);
         CREATE TABLE furumusic__track_artist(track_id BIGINT,artist_id BIGINT,role TEXT,position INTEGER);
         CREATE TABLE furumusic__federation_content_id_cache(media_file_id BIGINT,sha256_hash TEXT,content_id TEXT);
+        CREATE TABLE furumusic__job_run(id BIGINT PRIMARY KEY,job_name TEXT,trigger TEXT);
+        INSERT INTO furumusic__job_run VALUES(1,'lyrics_backfill','manual'),(2,'lyrics_backfill','scheduled'),(3,'lyrics_backfill','programmatic'),(4,'other','manual');
         INSERT INTO furumusic__release VALUES(1,'Album',false);
         INSERT INTO furumusic__artist VALUES(1,'Artist');
         INSERT INTO furumusic__media_file VALUES(1,'audio-a'),(2,'audio-b'),(3,'audio-a');
@@ -82,8 +84,13 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
     let candidates = || {
         sqlx::query_as::<_, Candidate>(CANDIDATES)
             .bind(200)
+            .bind(false)
             .fetch_all(&pool)
     };
+    assert!(is_manual_run(&pool, 1).await.unwrap());
+    for id in [2, 3, 4, 999] {
+        assert!(!is_manual_run(&pool, id).await.unwrap());
+    }
     let rows = candidates().await.unwrap();
     assert_eq!(rows.len(), 2, "identical bytes have one lookup binding");
     assert_eq!(
@@ -125,6 +132,26 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
         candidates().await.unwrap().is_empty(),
         "a miss is never looked up again"
     );
+    assert!(
+        sqlx::query_as::<_, Candidate>(CANDIDATES)
+            .bind(200)
+            .bind(true)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .is_empty(),
+        "manual runs still skip completed lookups"
+    );
+    save_retry(&pool, "_lrclib_cooldown", 300).await.unwrap();
+    assert!(cooldown_active(&pool, false).await.unwrap());
+    assert!(
+        !cooldown_active(&pool, true).await.unwrap(),
+        "manual runs bypass global cooldown"
+    );
+    assert!(
+        cooldown_active(&pool, false).await.unwrap(),
+        "manual bypass preserves automatic cooldown"
+    );
     save_retry(&pool, &signature, 120_000).await.unwrap();
     save_retry(&pool, &signature, 120_000).await.unwrap();
     let seconds:f64=sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM retry_at-now())::float8 FROM furumusic__lyrics_lookup WHERE signature=$1").bind(&signature).fetch_one(&pool).await.unwrap();
@@ -141,6 +168,17 @@ async fn postgres_cache_retry_content_binding_and_manual_versions() {
     assert!(
         candidates().await.unwrap().is_empty(),
         "temporary failure honors cooldown"
+    );
+    let manual_candidates = sqlx::query_as::<_, Candidate>(CANDIDATES)
+        .bind(200)
+        .bind(true)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        manual_candidates.len(),
+        2,
+        "manual runs bypass per-content retry delays"
     );
     sqlx::query("UPDATE furumusic__lyrics_lookup SET retry_at=now()-interval '1 second'")
         .execute(&pool)
