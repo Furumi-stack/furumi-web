@@ -19,7 +19,7 @@
     </div>
     <section class="music-shortcuts"
              x-data="{ get shortcuts() {
-                 if (this.$store.pins.items.length) return this.$store.pins.items;
+                 if (this.$store.pins.items.length || this.$store.pins.undoNotices.length) return this.$store.pins.items;
                  return this.$store.playlists.regularList().filter(p => p.kind === 'user' && p.is_own).slice(0, 3)
                      .map(p => ({ href: '#playlist/' + p.id, title: p.title, cover_url: p.cover_url, kind: 'playlist' }));
              } }">
@@ -32,18 +32,42 @@
             <span class="music-shortcut-title">{{ t.player_likes_playlist }}</span>
             <span class="music-shortcut-count" x-text="$store.playlists.list.find(p => p.kind === 'likes')?.track_count ?? ''"></span>
         </a>
-        <template x-for="item in shortcuts" :key="item.href">
-            <a class="music-shortcut" :href="item.href" :aria-current="$store.library._activeHash === item.href ? 'page' : null">
-                <span class="music-shortcut-art" :class="{ 'shortcut-artist': item.kind === 'artist' }">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path x-show="item.kind === 'playlist'" d="M3 6h13M3 11h9M3 16h5m8-3v7l5-3.5z"/>
-                        <g x-show="item.kind === 'artist'"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></g>
-                        <g x-show="item.kind === 'release'"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></g>
-                    </svg>
-                    <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy" @error="$el.hidden = true" @load="$el.hidden = false"></template>
-                </span>
-                <span class="music-shortcut-title" x-text="item.title"></span>
-            </a>
-        </template>
+        <h3 class="shortcut-suggestions-label" x-show="!$store.pins.items.length && shortcuts.length" x-cloak>{{ t.player_my_playlists }}</h3>
+        <ol class="shortcut-pin-list" :class="{ 'drop-at-end': $store.pins.dragHref && $store.pins.dropBeforeHref === null }">
+            <template x-for="item in shortcuts" :key="item.href">
+                <li class="shortcut-pin-row" :data-pin-href="$store.pins.items.length ? item.href : null"
+                    :class="{ 'is-dragging': $store.pins.dragHref === item.href, 'is-drop-before': $store.pins.dropBeforeHref === item.href }">
+                    <a class="music-shortcut" :href="item.href" :title="item.title" :aria-current="$store.library._activeHash === item.href ? 'page' : null">
+                        <span class="music-shortcut-art" :class="{ 'shortcut-artist': item.kind === 'artist' }">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path x-show="item.kind === 'playlist'" d="M3 6h13M3 11h9M3 16h5m8-3v7l5-3.5z"/>
+                                <g x-show="item.kind === 'artist'"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></g>
+                                <g x-show="item.kind === 'release'"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></g>
+                            </svg>
+                            <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy" @error="$el.hidden = true" @load="$el.hidden = false"></template>
+                        </span>
+                        <span class="music-shortcut-title" x-text="item.title"></span>
+                    </a>
+                    <template x-if="$store.pins.items.length">
+                        <div class="shortcut-pin-actions" @keydown.space.stop>
+                            <button type="button" class="shortcut-pin-grip" x-show="$store.pins.items.length > 1"
+                                    :aria-label="'{{ t.player_reorder_pin }} · ' + item.title"
+                                    title="{{ t.player_reorder_hint }}" aria-description="{{ t.player_reorder_hint }}"
+                                    aria-keyshortcuts="ArrowUp ArrowDown"
+                                    @pointerdown="$store.pins.startDrag($event, item)"
+                                    @keydown.arrow-up.stop.prevent="$store.pins.moveBy(item, -1, $el)"
+                                    @keydown.arrow-down.stop.prevent="$store.pins.moveBy(item, 1, $el)">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke-width="3.8"/></svg>
+                            </button>
+                            <button type="button" class="shortcut-unpin"
+                                    :aria-label="'{{ t.player_sidebar_unpin }} · ' + item.title" title="{{ t.player_sidebar_unpin }}"
+                                    @click.stop="$store.pins.unpin(item, $event)">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M8.3 8.3l-2.8 3-2 1.1 8.1 8.1 1.1-2 3-2.8M17.5 12.7l1.1-1.1 2.1-.7-7.6-7.6-.7 2.1-1 1M8.4 15.6 4 20"/></svg>
+                            </button>
+                        </div>
+                    </template>
+                </li>
+            </template>
+        </ol>
     </section>
 </nav>

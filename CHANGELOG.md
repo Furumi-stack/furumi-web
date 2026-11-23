@@ -10,6 +10,13 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.15.2 — 2026-11-24
+
+- Reorder pinned sidebar shortcuts by dragging or using the arrow keys. The
+  order is saved for the account on desktop and mobile.
+- Unpin shortcuts directly from the menu. Each removal can be undone for ten
+  seconds to restore the shortcut to its previous position.
+
 ## v0.15.1 — 2026-11-24
 
 - My listening now finds local artist portraits for Cyrillic and other Unicode

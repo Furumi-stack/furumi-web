@@ -1,0 +1,10 @@
+<div class="pin-feedback" aria-live="polite" aria-relevant="additions text" @keydown.space.stop>
+    <template x-for="notice in $store.pins.undoNotices" :key="notice.id">
+        <div class="pin-undo-notice" :data-undo-id="notice.id">
+            <span><span>{{ t.player_pin_removed }}</span> · <strong x-text="notice.item.title"></strong></span>
+            <button type="button" :disabled="notice.restoring" :aria-label="'{{ t.player_pin_undo }} · ' + notice.item.title"
+                    @click="$store.pins.undo(notice.id, $event)">{{ t.player_pin_undo }}</button>
+        </div>
+    </template>
+    <div class="pin-action-error" x-show="$store.pins.errorVisible" x-cloak>{{ t.player_pin_failed }}</div>
+</div>

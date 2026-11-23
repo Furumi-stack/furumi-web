@@ -41,7 +41,7 @@
 }
 .music-nav a[aria-current] { background: var(--bg-active); color: var(--text-primary); }
 .music-nav-pages a[aria-current] svg { color: var(--accent); }
-.music-nav a:focus-visible, .sidebar-account button:focus-visible, .account-action-list > :focus-visible {
+.music-nav :is(a, button):focus-visible, .sidebar-account button:focus-visible, .account-action-list > :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
 }
@@ -69,6 +69,29 @@
 .music-shortcut-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .music-shortcut-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
 .music-shortcut-count { margin-left: auto; font-size: 12px; color: var(--text-subdued); font-variant-numeric: tabular-nums; }
+.shortcut-suggestions-label { margin: 12px 10px 3px; color: var(--text-subdued); font-size: 11px; font-weight: 600; }
+.shortcut-pin-list { position: relative; list-style: none; margin: 0; padding: 0; }
+.shortcut-pin-row { position: relative; display: flex; align-items: center; min-width: 0; border-radius: 7px; }
+.shortcut-pin-row > a { flex: 1; }
+.shortcut-pin-row[data-pin-href]:is(:hover,:focus-within) { background: var(--bg-hover); }
+.shortcut-pin-row:has(> a[aria-current]) { background: var(--bg-active); }
+.shortcut-pin-row.is-dragging { background: var(--bg-active); }
+.shortcut-pin-row.is-dragging .shortcut-pin-grip { color: var(--accent); cursor: grabbing; }
+.shortcut-pin-row.is-drop-before::before, .shortcut-pin-list.drop-at-end::after {
+    content: ''; position: absolute; left: 6px; right: 6px; height: 2px;
+    border-radius: 2px; background: var(--accent); z-index: 1; pointer-events: none;
+}
+.shortcut-pin-row.is-drop-before::before { top: -1px; }
+.shortcut-pin-list.drop-at-end::after { bottom: -1px; }
+.shortcut-pin-actions { display: flex; align-items: center; padding-right: 2px; }
+.shortcut-pin-actions button {
+    display: grid; place-items: center; flex: none; width: 28px; height: 34px; padding: 0;
+    border: 0; border-radius: 5px; background: transparent; color: var(--text-subdued); cursor: pointer;
+}
+.shortcut-pin-actions button:is(:hover,:focus-visible) { color: var(--text-primary); background: var(--bg-active); }
+.shortcut-pin-actions svg { width: 15px; height: 15px; pointer-events: none; }
+.shortcut-pin-actions .shortcut-pin-grip { touch-action: none; user-select: none; cursor: grab; }
+.mobile-library-drawer .shortcut-pin-actions button { width: 44px; height: 44px; }
 .sidebar-account { position: relative; flex: 0 0 auto; padding: 8px; border-top: 1px solid var(--border-color); }
 .sidebar-account-trigger { width: 100%; padding: 7px 10px; }
 .sidebar-account-trigger .user-avatar { width: 29px; height: 29px; flex-shrink: 0; font-size: 12px; }

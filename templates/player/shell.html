@@ -26,6 +26,9 @@
                 </div>
             </div>
         </aside>
+        <template x-if="!$store.mobile.libraryOpen">
+            {% include "player/pin_undo.html" %}
+        </template>
         <template x-if="$store.mobile.libraryOpen">
             <dialog class="mobile-library-backdrop" aria-label="{{ t.player_library }}"
                     x-init="$nextTick(() => $el.isConnected && $el.showModal())"
@@ -43,6 +46,7 @@
                          @click="if ($event.target.closest('a[href]') && !($event.ctrlKey || $event.metaKey || $event.shiftKey || $event.altKey)) $store.mobile.closeLibrary()">
                         {% include "player/sidebar_nav.html" %}
                     </div>
+                    {% include "player/pin_undo.html" %}
                 </div>
             </dialog>
         </template>

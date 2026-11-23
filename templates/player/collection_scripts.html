@@ -1,16 +1,39 @@
 <script>
 document.addEventListener('alpine:init', () => {
+    let writes = Promise.resolve();
+    let noticeId = 0;
+    let errorTimer;
+    let cancelPointer;
+    const undoWindow = 10_000;
+
+    // Preserve relative positions even when several neighbours are unpinned
+    // and their Undo buttons are used in a different order.
+    function neighbors(order, href, present) {
+        const index = order.indexOf(href);
+        return {
+            before_href: order.slice(index + 1).find(key => present.includes(key)) ?? null,
+            after_href: order.slice(0, index).reverse().find(key => present.includes(key)) ?? null,
+        };
+    }
+
     Alpine.store('pins', {
-        items: [], busy: false, generation: 0,
+        items: [], undoNotices: [], pendingWrites: 0, generation: 0, errorVisible: false,
+        dragHref: '', dropBeforeHref: undefined,
+        get busy() { return this.pendingWrites > 0; },
         init() { if (!GUEST) this.reload(); },
+        async read() {
+            const response = await fetch('/api/player/pins');
+            if (!response.ok) throw new Error('Could not load shortcuts');
+            const items = await response.json();
+            if (!Array.isArray(items)) throw new Error('Invalid shortcut list');
+            return items;
+        },
         async reload() {
-            if (this.busy) return;
+            while (this.busy) await writes;
             const generation = ++this.generation;
             try {
-                const response = await fetch('/api/player/pins');
-                if (!response.ok) return;
-                const items = await response.json();
-                if (generation === this.generation && Array.isArray(items)) this.items = items;
+                const items = await this.read();
+                if (generation === this.generation && !this.busy) this.items = items;
             } catch {}
         },
         has(target) {
@@ -25,22 +48,193 @@ document.addEventListener('alpine:init', () => {
             if (kind === 'playlist' && entity.id > 0) href = '#playlist/' + entity.id;
             return href ? {href, title: entity.name || entity.title, cover_url: entity.image_url || entity.cover_url || null} : null;
         },
-        async toggle(target) {
-            if (!target || this.busy) return;
-            const pinned = !this.has(target);
-            this.busy = true;
+        enqueue(action) {
+            ++this.pendingWrites;
             ++this.generation;
+            const next = writes.then(action).finally(() => { --this.pendingWrites; });
+            writes = next.catch(() => {});
+            return next;
+        },
+        async write(method, payload, matches) {
+            this.errorVisible = false;
             try {
-                const response = await fetch('/api/player/pins', { method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({...target, pinned}) });
+                const response = await fetch('/api/player/pins', {method, headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)});
                 if (!response.ok) throw new Error();
-                this.items = await response.json();
-                if (this.has(target) !== pinned) throw new Error();
+                const items = await response.json();
+                if (!Array.isArray(items)) throw new Error();
+                this.items = items;
+                if (!matches(items)) throw new Error();
+                return true;
             } catch {
-                Alpine.store('info').open('{{ t.player_error }}', '{{ t.player_pin_failed }}');
-            } finally {
-                this.busy = false;
+                // A lost response can follow a successful write. A stale drop
+                // target can also disappear in another tab while dragging.
+                try {
+                    this.items = await this.read();
+                    if (matches(this.items)) return true;
+                } catch {}
+                this.errorVisible = true;
+                clearTimeout(errorTimer);
+                errorTimer = setTimeout(() => { this.errorVisible = false; }, 6000);
+                return false;
             }
+        },
+        toggle(target) {
+            if (!target || this.busy) return;
+            if (this.has(target)) return this.unpin(target);
+            return this.enqueue(async () => {
+                if (await this.write('POST', {...target, pinned:true}, items => items.some(i => i.href === target.href))) {
+                    this.undoNotices = this.undoNotices.filter(n => n.item.href !== target.href);
+                }
+            });
+        },
+        orderWithRemoved() {
+            const order = this.items.map(item => item.href);
+            for (const notice of [...this.undoNotices].reverse()) {
+                const href = notice.item.href;
+                if (order.includes(href)) continue;
+                const {before_href, after_href} = neighbors(notice.order, href, order);
+                const index = before_href ? order.indexOf(before_href) : after_href ? order.indexOf(after_href) + 1 : order.length;
+                order.splice(index, 0, href);
+            }
+            return order;
+        },
+        unpin(target, event) {
+            const keyboard = event?.detail === 0;
+            return this.enqueue(async () => {
+                const item = this.items.find(i => i.href === target.href);
+                if (!item) return;
+                const order = this.orderWithRemoved();
+                if (!await this.write('POST', {...item, pinned:false}, items => !items.some(i => i.href === item.href))) return;
+                const id = ++noticeId;
+                this.undoNotices.push({id, item, order, expires:Date.now() + undoWindow, restoring:false});
+                setTimeout(() => this.expireUndo(id), undoWindow);
+                if (keyboard) Alpine.nextTick(() => this.focusVisible('.pin-undo-notice[data-undo-id="' + id + '"] button'));
+            });
+        },
+        expireUndo(id) {
+            this.undoNotices = this.undoNotices.filter(n => n.id !== id || n.restoring);
+        },
+        undo(id, event) {
+            const notice = this.undoNotices.find(n => n.id === id);
+            if (!notice || notice.restoring) return;
+            if (Date.now() >= notice.expires) return this.expireUndo(id);
+            // Accept an in-time click even if another write is still in flight.
+            notice.restoring = true;
+            const keyboard = event?.detail === 0;
+            return this.enqueue(async () => {
+                const href = notice.item.href;
+                const anchors = neighbors(notice.order, href, this.items.map(item => item.href));
+                const ok = await this.write('POST', {...notice.item, pinned:true, ...anchors}, items => items.some(i => i.href === href));
+                notice.restoring = false;
+                if (ok || Date.now() >= notice.expires) this.expireUndo(id);
+                if (ok && keyboard) Alpine.nextTick(() => this.focusVisible('.shortcut-pin-row[data-pin-href="' + CSS.escape(href) + '"] .shortcut-unpin'));
+            });
+        },
+        focusVisible(selector) {
+            const element = Array.from(document.querySelectorAll(selector)).find(el => el.getClientRects().length && !el.closest('[inert]'));
+            element?.focus({preventScroll:true});
+        },
+        moveBy(item, offset, handle) {
+            const nav = handle?.closest('.music-nav');
+            return this.enqueue(async () => {
+                const index = this.items.findIndex(i => i.href === item.href);
+                const destination = index + offset;
+                if (index < 0 || destination < 0 || destination >= this.items.length) return;
+                const rest = this.items.filter(i => i.href !== item.href);
+                await this.move(item.href, rest[destination]?.href ?? null);
+                await Alpine.nextTick();
+                const active = document.activeElement;
+                if (nav?.isConnected && (active === handle || active === document.body || active?.matches('dialog'))) {
+                    nav.querySelector('[data-pin-href="' + CSS.escape(item.href) + '"] .shortcut-pin-grip')?.focus({preventScroll:true});
+                }
+            });
+        },
+        async move(href, before) {
+            const matches = items => {
+                const index = items.findIndex(item => item.href === href);
+                return index >= 0 && (items[index + 1]?.href ?? null) === before;
+            };
+            if (matches(this.items)) return;
+            const previous = this.items;
+            const moved = previous.find(item => item.href === href);
+            const rest = previous.filter(item => item.href !== href);
+            const destination = before === null ? rest.length : rest.findIndex(item => item.href === before);
+            if (!moved || destination < 0) return;
+            rest.splice(destination, 0, moved);
+            this.items = rest;
+            const preview = this.items;
+            const saved = await this.write('PUT', {href, before_href:before}, matches);
+            if (!saved && this.items === preview) this.items = previous;
+        },
+        cancelDrag() { cancelPointer?.(); },
+        startDrag(event, item) {
+            if (!event.isPrimary || event.button !== 0 || this.busy || this.items.length < 2) return;
+            this.cancelDrag();
+            const handle = event.currentTarget;
+            const list = handle.closest('.shortcut-pin-list');
+            const scroller = list.closest('.mobile-drawer-body') || list.closest('.music-nav');
+            const pointer = event.pointerId;
+            const listeners = new AbortController();
+            const options = {signal:listeners.signal};
+            let x = event.clientX, y = event.clientY;
+            const startX = x, startY = y;
+            let frame = 0;
+            const update = () => {
+                frame = 0;
+                const bounds = list.getBoundingClientRect();
+                const port = scroller.getBoundingClientRect();
+                this.dropBeforeHref = undefined;
+                if (x < bounds.left || x > bounds.right || y < Math.max(bounds.top, port.top) - 8 || y > Math.min(bounds.bottom, port.bottom) + 8) return;
+                this.dropBeforeHref = null;
+                for (const row of list.querySelectorAll('[data-pin-href]')) {
+                    if (row.dataset.pinHref === item.href) continue;
+                    const rect = row.getBoundingClientRect();
+                    if (y < rect.top + rect.height / 2) {
+                        this.dropBeforeHref = row.dataset.pinHref;
+                        break;
+                    }
+                }
+                const lastScroll = scroller.scrollTop;
+                if (y < port.top + 28) scroller.scrollTop -= 8;
+                else if (y > port.bottom - 28) scroller.scrollTop += 8;
+                if (scroller.scrollTop !== lastScroll) frame = requestAnimationFrame(update);
+            };
+            const finish = (commit = false) => {
+                if (frame) cancelAnimationFrame(frame);
+                const before = this.dropBeforeHref;
+                const moved = !!this.dragHref && before !== undefined;
+                listeners.abort();
+                if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer);
+                cancelPointer = null;
+                this.dragHref = '';
+                this.dropBeforeHref = undefined;
+                if (commit && moved) this.enqueue(() => this.move(item.href, before));
+            };
+            cancelPointer = () => finish();
+            handle.setPointerCapture(pointer);
+            handle.addEventListener('pointermove', e => {
+                if (e.pointerId !== pointer) return;
+                x = e.clientX; y = e.clientY;
+                if (!this.dragHref && Math.hypot(x - startX, y - startY) < 4) return;
+                this.dragHref = item.href;
+                if (!frame) frame = requestAnimationFrame(update);
+            }, options);
+            handle.addEventListener('pointerup', e => {
+                if (e.pointerId !== pointer) return;
+                if (this.dragHref) {
+                    if (frame) cancelAnimationFrame(frame);
+                    x = e.clientX; y = e.clientY;
+                    update();
+                }
+                finish(true);
+            }, options);
+            handle.addEventListener('lostpointercapture', cancelPointer, options);
+            handle.addEventListener('pointercancel', cancelPointer, options);
+            window.addEventListener('blur', cancelPointer, options);
+            window.addEventListener('keydown', e => {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(); }
+            }, {...options, capture:true});
         },
     });
 });

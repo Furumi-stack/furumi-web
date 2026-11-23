@@ -325,6 +325,7 @@ document.addEventListener('alpine:init', () => {
             if (this.libraryOpen) Alpine.store('user').menuOpen = false;
         },
         closeLibrary() {
+            Alpine.store('pins')?.cancelDrag();
             document.querySelector('dialog.mobile-library-backdrop[open]')?.close();
             this.libraryOpen = false;
         },

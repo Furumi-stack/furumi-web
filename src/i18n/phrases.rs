@@ -284,6 +284,7 @@ translations! {
     player_my_music:         "My music"                        , "Моя музыка";
     player_my_listening:     "My listening"                    , "Мои прослушивания";
     player_quick_access:     "Quick access"                    , "Быстрый доступ";
+    player_my_playlists:     "My playlists"                    , "Мои плейлисты";
     player_pinned:           "Pinned"                          , "Закреплено";
     player_account_menu:     "Account menu"                    , "Меню аккаунта";
     player_featured_only_artists: "Featured only"               , "Только фиты";
@@ -328,6 +329,10 @@ translations! {
     player_new_playlist:     "New Playlist"                    , "Новый плейлист";
     player_sidebar_pin:      "Pin to sidebar"                   , "Закрепить в меню";
     player_sidebar_unpin:    "Unpin from sidebar"               , "Открепить из меню";
+    player_reorder_pin:      "Move shortcut"                    , "Переместить в меню";
+    player_reorder_hint:     "Drag or use the up and down arrows", "Перетащите или нажмите стрелку вверх или вниз";
+    player_pin_removed:      "Unpinned"                         , "Откреплено";
+    player_pin_undo:         "Undo"                             , "Отменить";
     player_pin_failed:       "Could not update this shortcut."   , "Не удалось обновить закрепление.";
     player_more_actions:     "More actions"                     , "Ещё";
     player_collection_empty: "No playlists yet."                , "Плейлистов пока нет.";

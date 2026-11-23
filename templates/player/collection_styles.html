@@ -25,4 +25,23 @@
 .collection-popup {position:absolute;right:0;top:100%;z-index:5;min-width:135px;background:var(--bg-elevated);padding:4px;border:1px solid var(--border-color);border-radius:6px;box-shadow:0 4px 14px #0005}
 .collection-popup button {display:block;width:100%;border:0;padding:8px 12px;text-align:left;background:transparent;color:var(--text-primary);cursor:pointer}
 .collection-popup button:hover,.collection-more:hover {background:var(--bg-active)}
+.pin-feedback {
+    position:fixed; z-index:1000; left:16px; bottom:calc(var(--player-bar-space) + 12px);
+    display:grid; grid-template-columns:minmax(0,1fr); gap:6px; max-width:min(360px,calc(100vw - 32px)); max-height:35dvh;
+    overflow:auto; overscroll-behavior:contain; scrollbar-width:thin;
+}
+.pin-undo-notice,.pin-action-error {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:6px 8px 6px 14px; min-width:0; min-height:40px; border:1px solid var(--border-color);
+    border-radius:8px; background:var(--bg-elevated); color:var(--text-primary); font-size:13px;
+}
+.pin-undo-notice > span {overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
+.pin-undo-notice button {
+    flex:none; padding:6px 10px; min-height:32px; border:0; border-radius:5px;
+    background:transparent; color:var(--accent); font:inherit; font-weight:600; cursor:pointer;
+}
+.pin-undo-notice button:hover,.pin-undo-notice button:focus-visible {background:var(--bg-active)}
+.pin-undo-notice button:disabled {opacity:.6}
+.mobile-library-drawer .pin-feedback {position:static; flex:0 0 auto; max-width:100%}
+.mobile-library-drawer .pin-undo-notice button {min-height:44px}
 </style>

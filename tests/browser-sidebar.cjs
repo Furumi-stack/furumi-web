@@ -83,6 +83,10 @@ async function checkSidebar(browser, mobile) {
     const nav = page.locator(mobile ? 'dialog .music-nav' : '.sidebar-left .music-nav');
     if (mobile) await menuButton.click();
     await nav.getByRole('link', { name: mobile ? pin.title : owned.title }).waitFor();
+    if (!mobile) {
+        assert.equal(await nav.locator('.shortcut-pin-grip:visible, .shortcut-unpin:visible').count(), 0,
+            'automatic shortcuts cannot be moved or unpinned');
+    }
     assert.deepEqual(await nav.locator('.music-nav-pages a').allTextContents().then(values => values.map(value => value.trim())),
         ['Catalog', 'My music', 'Podcasts', 'My listening']);
     await nav.getByRole('link', { name: /Liked songs/ }).click();
@@ -122,6 +126,185 @@ async function checkSidebar(browser, mobile) {
     await page.close();
 }
 
+async function dragShortcut(page, nav, source, destination, touch, cancel = false) {
+    const grip = nav.locator('[data-pin-href="' + source.href + '"] .shortcut-pin-grip');
+    const row = nav.locator('[data-pin-href="' + destination.href + '"]');
+    const handle = await grip.boundingBox(), target = await row.boundingBox();
+    assert.ok(handle && target);
+    const x = Math.round(handle.x + handle.width / 2);
+    const y = Math.round(handle.y + handle.height / 2);
+    const end = Math.round(target.y + target.height * .8);
+    if (touch) {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Input.dispatchTouchEvent', {type:'touchStart',touchPoints:[{x,y}]});
+        for (let step = 1; step <= 8; step++) {
+            await cdp.send('Input.dispatchTouchEvent', {type:'touchMove',touchPoints:[{x,y:y+(end-y)*step/8}]});
+        }
+        await cdp.send('Input.dispatchTouchEvent', {type:cancel ? 'touchCancel' : 'touchEnd', touchPoints:[]});
+        await cdp.detach();
+    } else {
+        await page.mouse.move(x,y);
+        await page.mouse.down();
+        await page.mouse.move(x,end,{steps:8});
+        if (cancel) await page.keyboard.press('Escape');
+        await page.mouse.up();
+    }
+}
+
+async function checkPinActions(browser, mobile) {
+    const page = await browser.newPage({viewport:{width:mobile ? 375 : 1280,height:800}, hasTouch:mobile, isMobile:mobile});
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+    await page.clock.install();
+    const [a,b,c,d] = ['Low','Hounds of Love','Discovery · '+ 'Anniversary Edition '.repeat(7).trim(),'Kind of Blue'].map((title,index) => (
+        {title,href:'#release/'+(index+101),id:index+101,kind:'release'}
+    ));
+    let stored = [a,b,c,d];
+    let rejectMove = false;
+    let loseUnpinReply = false;
+    let offlineMove = false;
+    let offlineRead = false;
+    const writes = [];
+    await page.route('**/*', route => {
+        const {hostname,pathname} = new URL(route.request().url());
+        if (hostname === 'sidebar.test' && pathname === '/') return route.fulfill({contentType:'text/html',body:html});
+        if (hostname === 'cdn.jsdelivr.net' && pathname.includes('alpine')) return route.fulfill({contentType:'application/javascript',body:alpine});
+        if (pathname === '/api/player/pins') {
+            const method = route.request().method();
+            if (offlineMove && method === 'PUT') {
+                offlineMove = false;
+                offlineRead = true;
+                return route.abort('internetdisconnected');
+            }
+            if (offlineRead && method === 'GET') {
+                offlineRead = false;
+                return route.abort('internetdisconnected');
+            }
+            if (method === 'GET') return route.fulfill({json:stored});
+            const change = route.request().postDataJSON();
+            writes.push({method,...change});
+            if (method === 'PUT' && rejectMove) {
+                stored = stored.filter(item => item.href !== c.href);
+                return route.fulfill({status:409,json:{error:'Order changed'}});
+            }
+            const item = [a,b,c,d].find(item => item.href === change.href);
+            assert.ok(item, 'only pinned entries can be modified');
+            stored = stored.filter(entry => entry.href !== item.href);
+            if (method === 'PUT' || change.pinned) {
+                const before = stored.findIndex(entry => entry.href === change.before_href);
+                const after = stored.findIndex(entry => entry.href === change.after_href);
+                stored.splice(before >= 0 ? before : after >= 0 ? after + 1 : stored.length, 0, item);
+            }
+            if (loseUnpinReply && method === 'POST' && !change.pinned) {
+                loseUnpinReply = false;
+                return route.abort('failed');
+            }
+            return route.fulfill({json:stored});
+        }
+        const responses = {
+            '/api/player/artists': {items:[],total:0,has_more:false},
+            '/api/player/me': {id:1,name:'Listener'}, '/api/player/playlists':[likes,owned],
+            ['/api/player/releases/'+a.id]: {...a,artists:[],tracks:[]},
+        };
+        return route.fulfill({json:responses[pathname] || []});
+    });
+    const root = mobile ? 'dialog .music-shortcuts' : '.sidebar-left .music-shortcuts';
+    const nav = page.locator(root);
+    const menuButton = page.locator('.mobile-library-btn');
+    const openDrawer = async () => {
+        await menuButton.click();
+        await page.locator('dialog:modal').waitFor();
+    };
+    const row = item => nav.locator('[data-pin-href="' + item.href + '"]');
+    const notice = item => page.locator('.pin-undo-notice:visible').filter({hasText:item.title});
+    const unpin = async item => {
+        await row(item).locator('.shortcut-unpin').click();
+        await notice(item).getByRole('button',{name:/Undo/i}).waitFor();
+        assert.ok(await notice(item).evaluate(el =>
+            el.scrollWidth <= el.clientWidth + 1 &&
+            el.querySelector('button').getBoundingClientRect().right <= el.closest('.pin-feedback').getBoundingClientRect().right + 1
+        ), 'Undo remains fully visible for long titles');
+    };
+    const undo = item => notice(item).getByRole('button',{name:/Undo/i}).click();
+    async function expectOrder(expected) {
+        const hrefs = expected.map(item => item.href);
+        await page.waitForFunction(({root,hrefs}) => {
+            const actual = Array.from(document.querySelectorAll(root+' [data-pin-href]'), el => el.dataset.pinHref);
+            return !Alpine.store('pins').busy && actual.length === hrefs.length &&
+                actual.every((href,index) => href === hrefs[index]);
+        }, {root,hrefs});
+        assert.deepEqual(stored.map(item => item.href), hrefs);
+    }
+    await page.goto('http://sidebar.test/');
+    if (mobile) await openDrawer();
+    await expectOrder([a,b,c,d]);
+    const initialHash = new URL(page.url()).hash;
+    await dragShortcut(page,nav,a,c,mobile,true);
+    await expectOrder([a,b,c,d]);
+    assert.equal(writes.length, 0, 'a cancelled drag leaves the order intact');
+    await dragShortcut(page,nav,a,c,mobile);
+    await expectOrder([b,c,a,d]);
+    assert.equal(new URL(page.url()).hash, initialHash, 'dragging a pin cannot navigate');
+    assert.deepEqual(writes.map(({method,href,before_href})=>[method,href,before_href]),[['PUT',a.href,d.href]]);
+    await page.reload();
+    if (mobile) await openDrawer();
+    await expectOrder([b,c,a,d]);
+    const grip = row(b).locator('.shortcut-pin-grip');
+    await grip.focus();
+    await page.keyboard.press('ArrowDown');
+    await expectOrder([c,b,a,d]);
+    assert.ok(await grip.evaluate(button => document.activeElement === button), 'keyboard reordering retains focus');
+
+    // Remove adjacent head entries; the first undo no longer has its old next neighbour.
+    await unpin(c);
+    await unpin(b);
+    await expectOrder([a,d]);
+    if (mobile) {
+        await page.keyboard.press('Escape');
+        await page.locator('dialog').waitFor({state:'detached'});
+    }
+    await undo(c);
+    if (mobile) await openDrawer();
+    await expectOrder([c,a,d]);
+    await undo(b);
+    await expectOrder([c,b,a,d]);
+
+    loseUnpinReply = true;
+    await unpin(d);
+    await page.clock.fastForward(8000);
+    assert.ok(await notice(d).isVisible(), 'undo remains available before ten seconds');
+    await page.clock.fastForward(2200);
+    await notice(d).waitFor({state:'hidden'});
+    await expectOrder([c,b,a]);
+    if (!mobile) {
+        offlineMove = true;
+        await row(b).locator('.shortcut-pin-grip').focus();
+        await Promise.all([
+            page.waitForEvent('requestfailed', req => req.url().endsWith('/api/player/pins') && req.method() === 'GET'),
+            page.keyboard.press('ArrowUp'),
+        ]);
+        await expectOrder([c,b,a]);
+        await page.locator('.pin-action-error:visible').waitFor();
+        rejectMove = true;
+        await row(b).locator('.shortcut-pin-grip').focus();
+        await page.keyboard.press('ArrowUp');
+        await expectOrder([b,a]);
+        await unpin(b);
+        await unpin(a);
+        await expectOrder([]);
+        assert.equal(await nav.getByRole('link',{name:owned.title}).count(), 0);
+        await page.clock.fastForward(10_100);
+        await nav.getByRole('link',{name:owned.title}).waitFor();
+        assert.equal(await nav.locator('.shortcut-unpin:visible, .shortcut-pin-grip:visible').count(), 0);
+    } else {
+        await row(a).getByRole('link').tap();
+        await page.waitForURL('**/'+a.href);
+        await page.locator('dialog').waitFor({state:'detached'});
+    }
+    assert.deepEqual(errors, []);
+    await page.close();
+}
+
 (async () => {
     const browser = await chromium.launch({
         headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}),
@@ -130,7 +313,9 @@ async function checkSidebar(browser, mobile) {
         await checkSidebar(browser, false);
         await checkSidebar(browser, true);
         await checkCollection(browser);
-        console.log('Desktop and mobile navigation and account controls passed.');
+        await checkPinActions(browser, false);
+        await checkPinActions(browser, true);
+        console.log('Desktop and mobile sidebar navigation, account controls, pin reordering and undo passed.');
     } finally {
         await browser.close();
     }
