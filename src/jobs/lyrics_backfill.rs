@@ -205,7 +205,7 @@ struct Record {
     track_name: String,
     artist_name: String,
     album_name: String,
-    duration: f64,
+    duration: Option<f64>,
     #[serde(default)]
     instrumental: bool,
     plain_lyrics: Option<String>,
@@ -278,8 +278,9 @@ fn normalized(value: &str) -> String {
 fn matching(record: &Record, track: &Candidate) -> bool {
     normalized(&record.track_name) == normalized(&track.title)
         && normalized(&record.artist_name) == normalized(&track.artist)
-        && record.duration.is_finite()
-        && (record.duration - track.duration).abs() <= 2.0
+        && record.duration.is_some_and(|duration| {
+            duration.is_finite() && (duration - track.duration).abs() <= 2.0
+        })
 }
 fn version(mut record: Record) -> Option<LyricsVersion> {
     // JSON permits NUL, but PostgreSQL text/JSONB cannot represent it. Provider
@@ -324,6 +325,12 @@ async fn lookup(
     let records: Vec<Record> = get_json(client, "search", &query)
         .await?
         .unwrap_or_default();
+    Ok(select_versions(records, track))
+}
+
+fn select_versions(records: Vec<Record>, track: &Candidate) -> Vec<LyricsVersion> {
+    // LRCLIB may return null/missing durations among otherwise valid search
+    // results. These cannot be matched safely, but must not reject the batch.
     let mut records: Vec<_> = records.into_iter().filter(|r| matching(r, track)).collect();
     records.sort_by(|a, b| {
         let rank = |r: &Record| {
@@ -338,18 +345,42 @@ async fn lookup(
         rank(b)
             .cmp(&rank(a))
             .then_with(|| {
-                (a.duration - track.duration)
-                    .abs()
-                    .total_cmp(&(b.duration - track.duration).abs())
+                let difference = |r: &Record| {
+                    r.duration
+                        .map(|duration| (duration - track.duration).abs())
+                        .unwrap_or(f64::INFINITY)
+                };
+                difference(a).total_cmp(&difference(b))
             })
             .then(a.id.cmp(&b.id))
     });
-    Ok(records.into_iter().find_map(version).into_iter().collect())
+    records.into_iter().find_map(version).into_iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nullable_duration_does_not_discard_valid_search_results() {
+        let track = Candidate {
+            hash: "hash".into(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration: 100.0,
+            signature: "signature".into(),
+        };
+        let records: Vec<Record> = serde_json::from_str(r#"[
+            {"id":1,"trackName":"Song","artistName":"Artist","albumName":"Album","duration":null,"syncedLyrics":"[00:01]Unknown timing"},
+            {"id":2,"trackName":"Song","artistName":"Artist","albumName":"Album","plainLyrics":"Missing duration"},
+            {"id":3,"trackName":"Song","artistName":"Artist","albumName":"Album","duration":101,"syncedLyrics":"[00:01]Verified timing"}
+        ]"#).unwrap();
+        assert!(!matching(&records[0], &track));
+        assert!(!matching(&records[1], &track));
+        let result = select_versions(records, &track);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source_id.as_deref(), Some("3"));
+    }
     #[test]
     fn provider_nul_is_removed_before_cache_and_lrc_parsing() {
         let record:Record=serde_json::from_str(r#"{"id":7,"trackName":"Song","artistName":"Artist","albumName":"Al\u0000bum","duration":100,"plainLyrics":"\u0000Words 🎵","syncedLyrics":"\u0000[00:01]Wo\u0000rds 🎵"}"#).unwrap();
@@ -374,13 +405,13 @@ mod tests {
             track_name: "SONG".into(),
             artist_name: "Artist".into(),
             album_name: "Album".into(),
-            duration: 102.0,
+            duration: Some(102.0),
             instrumental: false,
             plain_lyrics: Some("words".into()),
             synced_lyrics: Some("[00:01]words".into()),
         };
         assert!(matching(&record, &track));
-        record.duration = 102.01;
+        record.duration = Some(102.01);
         assert!(!matching(&record, &track));
         record.synced_lyrics = Some("invalid".into());
         assert!(version(record).unwrap().synced_lrc.is_none());
