@@ -18,6 +18,7 @@ mod oidc;
 mod player;
 mod podcasts;
 mod scheduler;
+mod search_relevance;
 mod similarity;
 mod torrents;
 mod user;

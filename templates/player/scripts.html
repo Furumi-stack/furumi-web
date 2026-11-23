@@ -343,14 +343,6 @@ document.addEventListener('alpine:init', () => {
                 }
             }
         },
-        navigate(link) {
-            if (GUEST) return;
-            if (!link || !link.id) return;
-            this.close();
-            const library = Alpine.store('library');
-            if (link.type === 'release') library.openRelease(link.id);
-            if (link.type === 'artist') library.openArtist(link.id);
-        },
     });
 
     Alpine.store('sharing', {
@@ -2620,11 +2612,25 @@ document.addEventListener('alpine:init', () => {
         similaritySearchError: '',
         similaritySearchStats: { loading: false, tracks: 0, artists: 0, peers: 0, elapsed_ms: 0 },
         federationSearch: { loading: false, error: '', artists: [], releases: [], tracks: [] },
+        unifiedSearch: { artists: [], releases: [], tracks: [], podcasts: [] },
+        get ordinarySearch() {
+            return this.searchMode === 'normal' && !this.similaritySearchLabel
+                && !this._activeHash?.startsWith('#similar/');
+        },
+        get displaySearchResults() {
+            if (this.searchMode !== 'lyrics') return this.unifiedSearch;
+            return this.searchResults || { artists: [], releases: [], tracks: [], podcasts: [] };
+        },
+        get hasDisplaySearchResults() {
+            const data = this.displaySearchResults;
+            return !!(data.artists?.length || data.releases?.length || data.tracks?.length || data.podcasts?.length);
+        },
         artistFederation: { loading: false, error: '', releases: [], tracks: [] },
         federationPreparing: {},
         federationFailures: {},
         trackAvailability: {},
-        _federatedReleaseCache: {},
+        _navigationVersion: 0,
+        releaseUnavailable: false,
         federationLiked: [],
         _cancelFederationSearch: null,
         failedFederationArtwork: new Set(),
@@ -2702,17 +2708,15 @@ document.addEventListener('alpine:init', () => {
             } else if (view === 'artist' && id) {
                 this.openArtist(id, options);
             } else if (view === 'artistfed') {
-                const nameMatch = params.match(/name=([^&]*)/);
-                if (nameMatch) this.openFederatedArtist(decodeURIComponent(nameMatch[1]), options);
+                const name = new URLSearchParams(params).get('name');
+                if (name) this.openFederatedArtist(name, options);
+                else this.goArtists(options);
             } else if (view === 'release' && id) {
                 this.openRelease(id, options);
             } else if (view === 'releasefed') {
-                const keyMatch = params.match(/key=([^&]*)/);
-                const release = keyMatch
-                    ? this._federatedReleaseCache[decodeURIComponent(keyMatch[1])]
-                    : null;
-                if (release) this.openFederatedRelease(release, options);
-                else this.goArtists(options);
+                let key;
+                try { key = JSON.parse(new URLSearchParams(params).get('key')); } catch {}
+                this.openFederatedRelease({ key }, options);
             } else if (view === 'playlist' && id) {
                 this.openPlaylist(id, options);
             } else if (view === 'search') {
@@ -2772,6 +2776,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _beginNavigation(hash, options = {}) {
+            this._navigationVersion++;
             this.cancelPendingSearch();
             if (this._cancelFederationSearch && !hash.startsWith('#search?')) this.stopFederationSearch();
             if (!hash.startsWith('#artistfed')) this.stopArtistFederation();
@@ -2876,6 +2881,7 @@ document.addEventListener('alpine:init', () => {
             if (GUEST) return;
             this.stopArtistFederation();
             this._beginNavigation('#artist/' + id, options);
+            const version = this._navigationVersion;
             this.searchQuery = '';
             this.searchResults = null;
             this.view = 'artist_detail';
@@ -2883,10 +2889,12 @@ document.addEventListener('alpine:init', () => {
             try {
                 const res = await fetch(`/api/player/artists/${id}`);
                 if (!res.ok) throw new Error('failed');
-                this.currentArtist = await res.json();
+                const artist = await res.json();
+                if (version !== this._navigationVersion) return;
+                this.currentArtist = artist;
                 this.startArtistFederation(this.currentArtist.name);
             } catch {}
-            this._afterNavigation(options);
+            if (version === this._navigationVersion) this._afterNavigation(options);
         },
 
         stopArtistFederation() {
@@ -2899,10 +2907,12 @@ document.addEventListener('alpine:init', () => {
 
         async openFederatedArtist(artist, options = {}) {
             const name = typeof artist === 'string' ? artist : artist?.name;
-            if (!name) return;
+            if (!name || GUEST) return;
+            if (artist.local_id) return this.openArtist(artist.local_id, options);
             this.stopFederationSearch();
             this.stopArtistFederation();
             this._beginNavigation('#artistfed?name=' + encodeURIComponent(name), options);
+            const version = this._navigationVersion;
             this.searchQuery = '';
             this.searchResults = null;
             this.view = 'artist_detail';
@@ -2917,28 +2927,41 @@ document.addEventListener('alpine:init', () => {
                 total_play_count: 0,
                 federated: true,
             };
+            const id = await this.resolveFederatedId('artist', { name });
+            if (version !== this._navigationVersion) return;
+            if (id) {
+                history.replaceState(history.state, '', '#artist/' + id);
+                return this.openArtist(id, { ...options, fromHash: true });
+            }
             this.startArtistFederation(name);
-            const requestedKey = name.trim().toLocaleLowerCase();
-            try {
-                const search = await fetch(`/api/player/search?q=${encodeURIComponent(name)}&limit=50`);
-                if (search.ok) {
-                    const results = await search.json();
-                    const local = (results.artists || []).find(candidate =>
-                        candidate.name?.trim().toLocaleLowerCase() === requestedKey
-                    );
-                    if (local && this.view === 'artist_detail'
-                        && this.currentArtist?.name?.trim().toLocaleLowerCase() === requestedKey) {
-                        const detail = await fetch(`/api/player/artists/${local.id}`);
-                        if (detail.ok) {
-                            const localArtist = await detail.json();
-                            if (this.currentArtist?.name?.trim().toLocaleLowerCase() === requestedKey) {
-                                this.currentArtist = { ...localArtist, federated: true };
-                            }
-                        }
-                    }
-                }
-            } catch {}
             this._afterNavigation(options);
+        },
+
+        async resolveFederatedId(kind, params) {
+            try {
+                const res = await fetch(`/api/player/federation/${kind}/resolve?${new URLSearchParams(params)}`);
+                if (res.ok) return (await res.json()).local_id;
+            } catch {}
+            return null;
+        },
+
+        normalizeFederationName(value) {
+            return typeof value === 'string'
+                ? Array.from(value.normalize('NFKC'), letter =>
+                    /[\p{Alphabetic}\p{N}]/u.test(letter) ? letter.toLowerCase() : ' '
+                ).join('').trim().replace(/ +/g, ' ')
+                : '';
+        },
+
+        federationReleaseKey(title, names, year, releaseType = null) {
+            const normalizedTitle = this.normalizeFederationName(title);
+            if (!normalizedTitle || !Array.isArray(names)) return null;
+            return {
+                normalized_title: normalizedTitle,
+                primary_artists: [...new Set(names.map(name => this.normalizeFederationName(name)).filter(Boolean))].sort(),
+                release_type: this.normalizeFederationName(releaseType) || null,
+                year: year ?? null,
+            };
         },
 
         startArtistFederation(name) {
@@ -2966,44 +2989,16 @@ document.addEventListener('alpine:init', () => {
                         release_type: appearance.release_type,
                         year: appearance.year,
                         tracks: [appearance.track],
+                        artists: appearance.track?.artists,
                     })),
                 ];
                 for (const release of catalogReleases) {
-                    const releaseKey = [
-                        release.title?.trim().toLocaleLowerCase(),
-                        release.year || '',
-                        release.release_type || '',
-                    ].join('|');
-                    const wireTracks = (release.tracks || [])
-                        .filter(item => item.content_id && item.item_id)
-                        .map(item => this.withTrackAvailability({
-                            key: { content_id: item.content_id },
-                            metadata: {
-                                title: item.title,
-                                artists: (item.artists || []).map(value => ({
-                                    key: { normalized_name: value.trim().toLocaleLowerCase() },
-                                    name: value,
-                                    local_id: null,
-                                })),
-                                featured_artists: (item.featured_artists || []).map(value => ({
-                                    key: { normalized_name: value.trim().toLocaleLowerCase() },
-                                    name: value,
-                                    local_id: null,
-                                })),
-                                release: { title: release.title },
-                                year: release.year,
-                                duration_seconds: item.duration_seconds,
-                                track_number: item.track_number,
-                                disc_number: item.disc_number,
-                                cover_url: `/api/player/federation/tracks/artwork?owner=${owner}&item_id=${item.item_id}`,
-                            },
-                            availability: {
-                                state: 'federated',
-                                local: null,
-                                federation: [{ owner, item_id: item.item_id }],
-                            },
-                        }));
-                    const existingRelease = releases.find(item => item.key === releaseKey);
+                    const artists = release.artists?.length ? release.artists : [artistName];
+                    const key = this.federationReleaseKey(release.title, artists, release.year, release.release_type);
+                    if (!key) continue;
+                    const identity = JSON.stringify(key);
+                    const wireTracks = this.catalogReleaseTracks(release, owner, key);
+                    const existingRelease = releases.find(item => item.identity === identity);
                     if (existingRelease) {
                         const known = new Set(existingRelease.tracks.map(item => item.key.content_id));
                         existingRelease.tracks = [
@@ -3013,9 +3008,9 @@ document.addEventListener('alpine:init', () => {
                         if (!existingRelease.owners.includes(owner)) existingRelease.owners.push(owner);
                     } else {
                         releases.push({
-                            key: releaseKey,
+                            key, identity, artists,
                             title: release.title,
-                            release_type: release.release_type || 'other',
+                            release_type: release.release_type || null,
                             year: release.year,
                             owners: [owner],
                             cover_url: this.federationDiscoveredArtwork(artistName, release.title),
@@ -3104,16 +3099,54 @@ document.addEventListener('alpine:init', () => {
                 }));
         },
 
+        followsHere(event) {
+            return event.currentTarget.hasAttribute('href') && !event.ctrlKey && !event.metaKey
+                && !event.shiftKey && !event.altKey && event.button === 0;
+        },
+
+        artistHref(artist) {
+            if (!artist || GUEST) return null;
+            const id = artist.local_id ?? artist.id;
+            if (id) return '#artist/' + id;
+            const name = typeof artist === 'string' ? artist : artist.name;
+            return name ? '#artistfed?name=' + encodeURIComponent(name) : null;
+        },
+
+        releaseHref(release) {
+            if (!release || GUEST) return null;
+            const id = release.local_id ?? release.id;
+            if (id) return '#release/' + id;
+            if (!release.key) return null;
+            const key = typeof release.key === 'string' ? release.key : JSON.stringify(release.key);
+            return '#releasefed?key=' + encodeURIComponent(key);
+        },
+
+        trackRelease(track) {
+            const data = track?.metadata || track;
+            if (!data || data.podcast) return null;
+            const release = data.release || track._federationTrack?.metadata?.release;
+            const id = data.release_id ?? release?.local_id;
+            const title = data.release_title || release?.title;
+            if (!title && !id) return null;
+            const key = data.release_key || release?.key || (!id && this.federationReleaseKey(
+                title, (data.artists || []).map(artist => artist.name || artist), data.release_year ?? data.year,
+            ));
+            return { id, title: title || T.unknownRelease, key: key || null };
+        },
+
         trackArtistLinks(track) {
-            const main = (track?.artists || []).map(artist => ({
-                id: artist.id,
-                label: artist.name,
-            }));
-            const featured = (track?.featured_artists || []).map(artist => ({
-                id: artist.id,
-                label: 'ft. ' + artist.name,
-            }));
-            return [...main, ...featured];
+            const data = track?.metadata || track;
+            const links = [];
+            const add = (artists, prefix) => {
+                for (const artist of artists || []) {
+                    const name = typeof artist === 'string' ? artist : artist?.name;
+                    if (!name) continue;
+                    links.push({ label: prefix + name, href: data.podcast ? null : this.artistHref(artist) });
+                }
+            };
+            add(data?.artists, '');
+            add(data?.featured_artists, 'ft. ');
+            return links;
         },
 
         bytes(value) {
@@ -3178,6 +3211,8 @@ document.addEventListener('alpine:init', () => {
         openTrackInfo(track) {
             const rows = this.trackInfoRows(track).map(row => GUEST && row.links
                 ? {...row, value: row.links.map(link => link.label).join(', '), links: null} : row);
+            const peers = new Set((track._federationTrack?.availability?.federation || []).map(source => source.owner));
+            if (peers.size) rows.push({ label: T.peers, value: peers.size });
             rows.push({label:Alpine.store('lyrics').text('lyrics'), value:track.has_lyrics ? Alpine.store('lyrics').text('available') : Alpine.store('lyrics').text('unavailable'), run:()=>{Alpine.store('info').close();Alpine.store('lyrics').open(track,false);}});
             const actions = [{label:T.download, run:() => this.downloadTrack(track)}];
             if (!GUEST) actions.push({label:T.findSimilar, run:() => this.searchSimilar(track)});
@@ -3198,9 +3233,9 @@ document.addEventListener('alpine:init', () => {
                 release.title || T.unknownRelease,
                 `${T.type}: ${release.release_type || T.unknown}`,
                 `${T.year}: ${release.year || T.unknown}`,
-                `${T.tracks}: ${release.track_count || release.tracks?.length || 0}`,
-                `${T.uploaders}: ${this.uploadersInfo(release.uploaders || [])}`,
+                `${T.tracks}: ${release.track_count ?? release.tracks?.length ?? T.unknown}`,
             ];
+            if (release.uploaders) lines.push(`${T.uploaders}: ${this.uploadersInfo(release.uploaders)}`);
             return lines.join('\n');
         },
 
@@ -3208,23 +3243,23 @@ document.addEventListener('alpine:init', () => {
             Alpine.store('info').openRows(T.releaseInfoTitle, this.releaseInfoRows(release));
         },
 
-        infoLinks(items, type) {
-            const seen = new Set();
-            return (items || [])
-                .filter(item => item && item.id && !seen.has(Number(item.id)) && seen.add(Number(item.id)))
-                .map(item => ({ type, id: item.id, label: item.label || item.name || item.title || String(item.id) }));
-        },
-
         releaseInfoRows(release) {
             if (!release) return [];
+            const title = release.title || T.unknownRelease;
+            const href = this.releaseHref(release);
             const rows = [
-                { label: T.release, value: release.title || T.unknownRelease },
+                { label: T.release, value: title, links: href ? [{ href, label: title }] : [] },
                 { label: T.type, value: release.release_type || T.unknown },
                 { label: T.year, value: release.year || T.unknown },
-                { label: T.tracks, value: release.track_count || release.tracks?.length || 0 },
-                { label: T.uploaders, value: this.uploadersInfo(release.uploaders || []) },
+                { label: T.tracks, value: release.track_count ?? release.tracks?.length ?? T.unknown },
             ];
-            const artistLinks = this.infoLinks(release.artists || [], 'artist');
+            if (release.uploaders) rows.push({ label: T.uploaders, value: this.uploadersInfo(release.uploaders) });
+            const peers = new Set([
+                ...(release.federationPeers || []),
+                ...(release._federationRelease?.sources || []).map(source => source.owner),
+            ].filter(Boolean));
+            if (peers.size) rows.push({ label: T.peers, value: peers.size });
+            const artistLinks = this.trackArtistLinks(release.artists ? release : (release._federationRelease || release));
             if (artistLinks.length) rows.splice(1, 0, { label: T.artists, links: artistLinks });
             return rows;
         },
@@ -3261,10 +3296,9 @@ document.addEventListener('alpine:init', () => {
 
         trackInfoRows(track) {
             if (!track) return [];
-            const artistLinks = this.infoLinks(this.trackArtistLinks(track), 'artist');
-            const releaseLinks = track.release_id
-                ? [{ type: 'release', id: track.release_id, label: track.release_title || T.unknownRelease }]
-                : [];
+            const artistLinks = this.trackArtistLinks(track);
+            const release = this.trackRelease(track);
+            const releaseLinks = release ? [{ href: this.releaseHref(release), label: release.title }] : [];
             const audio = [
                 track.audio_format || null,
                 track.audio_bitrate ? `${track.audio_bitrate} kbps` : null,
@@ -3307,6 +3341,8 @@ document.addEventListener('alpine:init', () => {
             if (GUEST) return;
             this.stopReleaseFederation();
             this._beginNavigation('#release/' + id, options);
+            const version = this._navigationVersion;
+            this.releaseUnavailable = false;
             this.searchQuery = '';
             this.searchResults = null;
             this.view = 'release_detail';
@@ -3314,7 +3350,9 @@ document.addEventListener('alpine:init', () => {
             try {
                 const res = await fetch(`/api/player/releases/${id}`);
                 if (!res.ok) throw new Error('failed');
-                this.currentRelease = await res.json();
+                const release = await res.json();
+                if (version !== this._navigationVersion) return;
+                this.currentRelease = release;
                 if (!this.currentRelease.cover_url && this.currentRelease.artists?.[0]?.name) {
                     this.currentRelease = {
                         ...this.currentRelease,
@@ -3325,8 +3363,10 @@ document.addEventListener('alpine:init', () => {
                     };
                 }
                 this.startReleaseFederation(this.currentRelease);
-            } catch {}
-            this._afterNavigation(options);
+            } catch {
+                if (version === this._navigationVersion) this.releaseUnavailable = true;
+            }
+            if (version === this._navigationVersion) this._afterNavigation(options);
         },
 
         stopReleaseFederation() {
@@ -3337,87 +3377,104 @@ document.addEventListener('alpine:init', () => {
             this.releaseFederationLoading = false;
         },
 
+        catalogReleaseTracks(release, owner, key, localReleaseId = null, known = new Set()) {
+            const tracks = [];
+            for (const item of release.tracks || []) {
+                if (!item?.content_id || !item.item_id || known.has(item.content_id)) continue;
+                const track = this.federationTrackFromWire({
+                    ...item, owner, artist_names: item.artists, featured_artist_names: item.featured_artists,
+                    release_title: release.title, year: release.year,
+                });
+                track.metadata.release = { key, title: release.title, local_id: localReleaseId };
+                tracks.push(track);
+                known.add(item.content_id);
+            }
+            return tracks;
+        },
+
+        releaseArtworkFailed(image) {
+            const release = this.currentRelease;
+            if (!release || release.cover_url !== image.getAttribute('src')) return;
+            this.federationArtworkFailed(image);
+            const fallback = this.federationDiscoveredArtwork(release.artists?.[0]?.name, release.title);
+            this.currentRelease = { ...release, cover_url: this.availableFederationArtwork(fallback) || null };
+        },
+
         startReleaseFederation(release) {
             const artistName = release?.artists?.[0]?.name;
-            if (!artistName || !release?.title) return;
+            const artists = (release?.artists || []).map(artist => artist.name);
+            const key = release?.federationRelease?.key ||
+                this.federationReleaseKey(release?.title, artists, release?.year, release?.release_type);
+            if (!artistName || !key) {
+                this.releaseUnavailable = !this.currentRelease;
+                return;
+            }
             this.stopReleaseFederation();
             this.releaseFederationLoading = true;
             const source = new EventSource(
                 `/api/player/federation/artists/events?name=${encodeURIComponent(artistName)}`
             );
             this._releaseFederationSource = source;
-            const wantedTitle = this.normalizeFederationSearchText(release.title);
+            const requestedArtist = this.normalizeFederationName(artistName);
             source.addEventListener('federation.artist.catalog', event => {
-                if (this._releaseFederationSource !== source || !this.currentRelease) return;
+                if (this._releaseFederationSource !== source) return;
                 const payload = JSON.parse(event.data);
                 const owner = payload.peer;
                 const catalog = payload.entity || {};
+                if (!owner || this.normalizeFederationName(catalog.name) !== requestedArtist) return;
                 const matches = (catalog.releases || []).filter(candidate =>
-                    this.normalizeFederationSearchText(candidate.title) === wantedTitle
-                    && (!release.year || !candidate.year || Number(candidate.year) === Number(release.year))
+                    this.normalizeFederationName(candidate.title) === key.normalized_title
+                    && (key.year == null || key.year === candidate.year)
+                    && (!key.release_type || key.release_type === this.normalizeFederationName(candidate.release_type))
                 );
-                if (!matches.length) return;
+                if (matches.length !== 1) return;
+                const candidate = matches[0];
+                const current = this.currentRelease || release;
+                // A legacy URL can omit the year or type. Never mix different
+                // editions received for that URL from different peers.
+                if (current.year && candidate.year && current.year !== candidate.year) return;
+                if (current.release_type && candidate.release_type &&
+                    this.normalizeFederationName(current.release_type) !== this.normalizeFederationName(candidate.release_type)) return;
+                const names = artists.map((name, index) => index === 0 ? (catalog.name || name) : name);
+                const releaseKey = this.federationReleaseKey(candidate.title, names, candidate.year, candidate.release_type);
                 const existing = new Set(
-                    (this.currentRelease.tracks || []).map(track => track.content_id).filter(Boolean)
+                    current.tracks.map(track => track.content_id).filter(Boolean)
                 );
-                const additions = [];
-                for (const candidate of matches) {
-                    for (const item of candidate.tracks || []) {
-                        if (!item.content_id || !item.item_id || existing.has(item.content_id)) continue;
-                        const federated = this.withTrackAvailability({
-                            key: { content_id: item.content_id },
-                            metadata: {
-                                title: item.title,
-                                artists: (item.artists || []).map(name => ({
-                                    key: { normalized_name: this.normalizeFederationSearchText(name) },
-                                    name,
-                                    local_id: null,
-                                })),
-                                featured_artists: (item.featured_artists || []).map(name => ({
-                                    key: { normalized_name: this.normalizeFederationSearchText(name) },
-                                    name,
-                                    local_id: null,
-                                })),
-                                release: { title: candidate.title },
-                                year: candidate.year,
-                                duration_seconds: item.duration_seconds,
-                                track_number: item.track_number,
-                                disc_number: item.disc_number,
-                                cover_url: this.federationDiscoveredArtwork(artistName, candidate.title),
-                            },
-                            availability: {
-                                state: 'federated',
-                                local: null,
-                                federation: [{ owner, item_id: item.item_id }],
-                            },
-                        });
-                        additions.push(this.federationQueueTrack(federated));
-                        existing.add(item.content_id);
-                    }
-                }
-                if (additions.length) {
-                    const tracks = [...this.currentRelease.tracks, ...additions].sort((left, right) =>
+                const additions = this.catalogReleaseTracks(candidate, owner, releaseKey, current.id, existing)
+                    .map(track => this.federationQueueTrack(track));
+                const peers = current.federationPeers || [];
+                if (!additions.length && peers.includes(owner) && this.currentRelease) return;
+                const tracks = additions.length
+                    ? [...current.tracks, ...additions].sort((left, right) =>
                         Number(left.disc_number || 1) - Number(right.disc_number || 1)
                         || Number(left.track_number || 9999) - Number(right.track_number || 9999)
                         || String(left.title).localeCompare(String(right.title))
-                    );
-                    this.currentRelease = { ...this.currentRelease, tracks };
+                    ) : current.tracks;
+                const detail = { ...current, tracks, federationPeers: [...new Set([...peers, owner])] };
+                if (current.federated) {
+                    detail.title = candidate.title;
+                    detail.year = candidate.year;
+                    detail.release_type = candidate.release_type || current.release_type;
+                    detail.artists = names.map(name => ({ id: null, name }));
+                    detail.cover_url = this.federationReleaseCover({
+                        cover_url: current.federationRelease.cover_url, artists: names, title: candidate.title,
+                    });
+                    if (!peers.includes(owner)) detail.uploaders = [...current.uploaders, {
+                        name: `Federation ${owner.slice(0, 10)}`, track_count: candidate.tracks?.length || 0,
+                    }];
                 }
+                this.currentRelease = detail;
             });
-            source.addEventListener('artist.completed', () => {
+            const finish = () => {
                 if (this._releaseFederationSource === source) {
                     this._releaseFederationSource = null;
                     this.releaseFederationLoading = false;
-                }
-                source.close();
-            });
-            source.onerror = () => {
-                if (this._releaseFederationSource === source) {
-                    this._releaseFederationSource = null;
-                    this.releaseFederationLoading = false;
+                    this.releaseUnavailable = !this.currentRelease;
                 }
                 source.close();
             };
+            source.addEventListener('artist.completed', finish);
+            source.onerror = finish;
         },
 
         async openPlaylist(id, options = {}) {
@@ -3520,6 +3577,7 @@ document.addEventListener('alpine:init', () => {
             if (this.view!=='search') this._previousView=this.view;
             this.view='search';this.searchLoading=true;this.searchResults=null;
             this.similaritySearchLabel='';this.similaritySearchError='';
+            this.similaritySearchStats = { loading: false, tracks: 0, artists: 0, peers: 0, elapsed_ms: 0 };
             if (mode==='lyrics') this.stopFederationSearch();else this.startFederationSearch(q);
             try {
                 const res=await fetch(`/api/player/search?q=${encodeURIComponent(q)}&limit=${mode==='lyrics'?30:10}&mode=${mode}`,{signal:controller.signal});
@@ -3527,6 +3585,12 @@ document.addEventListener('alpine:init', () => {
                 const data=await res.json();
                 if(generation!==this._searchGeneration || controller.signal.aborted)return;
                 this.searchResults=data;
+                if (mode === 'normal') {
+                    this.unifiedSearch.podcasts = data.podcasts || [];
+                    for (const kind of ['artists', 'releases', 'tracks']) {
+                        this.updateUnifiedSearch(kind);
+                    }
+                }
             } catch(error) {
                 if(generation!==this._searchGeneration || controller.signal.aborted)return;
                 this.searchResults={artists:[],releases:[],tracks:[]};
@@ -3548,6 +3612,7 @@ document.addEventListener('alpine:init', () => {
                 ? [track.title, artist].filter(Boolean).join(' — ')
                 : '';
             this._beginNavigation(`#similar/${id}`, options);
+            const generation = this._searchGeneration;
             if (this.view !== 'search') this._previousView = this.view;
             this.stopFederationSearch();
             this.view = 'search';
@@ -3560,9 +3625,10 @@ document.addEventListener('alpine:init', () => {
             this.similaritySearchStats = { loading: true, tracks: 0, artists: 0, peers: 0, elapsed_ms: 0 };
             Alpine.store('info').close();
             try {
-                const completeRequest = fetch(`/api/player/similarity/${id}`);
+                const completeRequest = fetch(`/api/player/similarity/${id}`).then(response => ({ response }), error => ({ error }));
                 const localResponse = await fetch(`/api/player/similarity/${id}?local_only=true`);
                 const localData = await localResponse.json().catch(() => ({}));
+                if (generation !== this._searchGeneration) return;
                 if (!localResponse.ok) throw new Error(localData.error || T.similarityFailed);
                 this.similaritySearchLabel = localData.label || initialLabel;
                 this.searchQuery = this.similaritySearchLabel;
@@ -3571,15 +3637,18 @@ document.addEventListener('alpine:init', () => {
                     releases: [],
                     tracks: Array.isArray(localData.tracks) ? localData.tracks : [],
                 };
+                this.updateUnifiedSearch('tracks', true);
                 this.searchLoading = false;
                 this.similaritySearchStats = {
                     loading: true,
-                    ...this.similarityResultCounts(this.searchResults.tracks, []),
+                    ...this.similarityResultCounts(),
                     peers: 0,
                     elapsed_ms: localData.elapsed_ms || 0,
                 };
-                const response = await completeRequest;
+                const { response, error } = await completeRequest;
+                if (error) throw error;
                 const data = await response.json().catch(() => ({}));
+                if (generation !== this._searchGeneration) return;
                 if (!response.ok) throw new Error(data.error || T.similarityFailed);
                 this.federationSearch = {
                     loading: false,
@@ -3588,16 +3657,15 @@ document.addEventListener('alpine:init', () => {
                     releases: [],
                     tracks: Array.isArray(data.federation_tracks) ? data.federation_tracks : [],
                 };
+                this.updateUnifiedSearch('tracks', true);
                 this.similaritySearchStats = {
                     loading: false,
-                    ...this.similarityResultCounts(
-                        this.searchResults.tracks,
-                        this.federationSearch.tracks
-                    ),
+                    ...this.similarityResultCounts(),
                     peers: Number(data.queried_peers || 0),
                     elapsed_ms: Number(data.elapsed_ms || 0),
                 };
             } catch (error) {
+                if (generation !== this._searchGeneration) return;
                 if (!this.searchResults) {
                     this.searchResults = { artists: [], releases: [], tracks: [] };
                     this.similaritySearchError = error?.message || T.similarityFailed;
@@ -3617,50 +3685,20 @@ document.addEventListener('alpine:init', () => {
             this._afterNavigation(options);
         },
 
-        similarityResultCounts(localTracks = [], federationTracks = []) {
+        similarityResultCounts() {
             const artists = new Set();
-            for (const track of localTracks) {
+            for (const track of this.unifiedSearch.tracks) {
                 for (const artist of [...(track?.artists || []), ...(track?.featured_artists || [])]) {
                     const name = this.normalizeFederationSearchText(artist?.name);
                     if (name) artists.add(name);
                 }
             }
-            for (const track of federationTracks) {
-                const metadata = track?.metadata || {};
-                for (const artist of [...(metadata.artists || []), ...(metadata.featured_artists || [])]) {
-                    const name = this.normalizeFederationSearchText(artist?.name);
-                    if (name) artists.add(name);
-                }
-            }
-            return {
-                tracks: localTracks.length + federationTracks.length,
-                artists: artists.size,
-            };
-        },
-
-        similarityTrackOrder(track) {
-            const score = Number(track?.similarity_score);
-            if (!Number.isFinite(score)) return 1000000;
-            return Math.max(0, Math.round((1 - score) * 100000));
-        },
-
-        similarityQueueTracks() {
-            const local = (this.searchResults?.tracks || []).map(track => ({ ...track }));
-            const federated = (this.federationSearch?.tracks || []).map(track => ({
-                ...this.federationQueueTrack(track),
-                similarity_score: track.similarity_score,
-            }));
-            return [...local, ...federated].sort((left, right) => {
-                const score = Number(right?.similarity_score || 0)
-                    - Number(left?.similarity_score || 0);
-                if (score) return score;
-                return String(left?.title || '').localeCompare(String(right?.title || ''));
-            });
+            return { tracks: this.unifiedSearch.tracks.length, artists: artists.size };
         },
 
         playSimilarityResult(track) {
             const queue = Alpine.store('queue');
-            const tracks = this.similarityQueueTracks();
+            const tracks = this.displaySearchResults.tracks;
             const key = queue._trackIdentity(track);
             const index = tracks.findIndex(item => queue._trackIdentity(item) === key);
             if (index >= 0) queue.playRelease(tracks, index);
@@ -3698,10 +3736,56 @@ document.addEventListener('alpine:init', () => {
         stopFederationSearch() {
             this._cancelFederationSearch?.();
             this.federationSearch = { loading: false, error: '', artists: [], releases: [], tracks: [] };
+            this.unifiedSearch = { artists: [], releases: [], tracks: [], podcasts: [] };
+        },
+
+        updateUnifiedSearch(kind, audioSimilarity = false) {
+            const localScores = this.searchResults?.scores?.[kind] || {};
+            const rows = (this.searchResults?.[kind] || []).map(item => ({
+                ...item, searchKey: 'local:' + item.id, search_score: localScores[item.id] ?? 0,
+            }));
+            const byId = new Map(rows.map(row => [row.id, row]));
+            const byContent = new Map(rows.filter(row => row.content_id).map(row => [row.content_id, row]));
+            for (const entity of this.federationSearch[kind]) {
+                const isTrack = kind === 'tracks';
+                const localId = isTrack ? entity.availability?.local?.track_id : entity.local_id;
+                let row = byId.get(localId) || byContent.get(entity.key.content_id);
+                if (!row) {
+                    row = isTrack ? { ...(entity.local_track || this.federationQueueTrack(entity)) }
+                        : { ...entity, id: localId ?? null };
+                    const remoteKey = entity.key.content_id || entity.key.normalized_name || JSON.stringify(entity.key);
+                    row.searchKey = localId ? 'local:' + localId : 'fed:' + remoteKey;
+                    row.federation_only = !localId;
+                    rows.push(row);
+                    if (localId) byId.set(localId, row);
+                    if (row.content_id) byContent.set(row.content_id, row);
+                }
+                if (audioSimilarity) {
+                    row.similarity_score = Math.max(row.similarity_score ?? -1, entity.similarity_score ?? -1);
+                } else {
+                    row.search_score = Math.max(row.search_score || 0, entity.search_score || 0);
+                }
+                if (isTrack) row._federationTrack = entity;
+                else if (kind === 'artists') row._federationArtist = entity;
+                else row._federationRelease = entity;
+            }
+            // Stable sort preserves the local catalogue order for equally ranked hits.
+            this.unifiedSearch[kind] = rows.sort(audioSimilarity
+                ? (a, b) => (b.similarity_score ?? -1) - (a.similarity_score ?? -1) || a.title.localeCompare(b.title)
+                : (a, b) => b.search_score - a.search_score);
+        },
+
+        localSearchArtwork(kind, item) {
+            const local = this.availableFederationArtwork(item.image_url || item.cover_url);
+            if (local) return local;
+            const remote = item._federationArtist || item._federationRelease;
+            if (!remote) return '';
+            return kind === 'artists' ? this.federationArtistImage(remote) : this.federationReleaseCover(remote);
         },
 
         startFederationSearch(query) {
             this._cancelFederationSearch?.();
+            this.unifiedSearch = { artists: [], releases: [], tracks: [], podcasts: [] };
             this.failedFederationArtwork = new Set();
             this.federationSearch = { loading: true, error: '', artists: [], releases: [], tracks: [] };
             const source = new EventSource(`/api/player/federation/search/events?q=${encodeURIComponent(query)}`);
@@ -3716,15 +3800,17 @@ document.addEventListener('alpine:init', () => {
                 for (const kind of changed) {
                     const ranked = Array.from(results[kind].values());
                     ranked.sort((a, b) => b.score - a.score || collator.compare(a.label, b.label));
-                    this.federationSearch[kind] = ranked.map(({ entity }) =>
-                        kind === 'tracks' ? this.withTrackAvailability(entity) : entity
-                    );
+                    this.federationSearch[kind] = ranked.map(({ entity, score }) => ({
+                        ...(kind === 'tracks' ? this.withTrackAvailability(entity) : entity),
+                        search_score: score,
+                    }));
+                    this.updateUnifiedSearch(kind);
                 }
                 changed.clear();
             };
-            const add = (kind, key, entity, label = '') => {
+            const add = (kind, key, entity, label, score) => {
                 if (!active || !key) return;
-                results[kind].set(key, { entity, label, score: this.federationSearchScore(label, query) });
+                results[kind].set(key, { entity, label, score: score ?? 0 });
                 changed.add(kind);
                 if (batchTimer === null) batchTimer = window.setTimeout(publish, 50);
             };
@@ -3745,16 +3831,16 @@ document.addEventListener('alpine:init', () => {
             };
 
             source.addEventListener('federation.track', event => {
-                const track = JSON.parse(event.data).entity;
-                add('tracks', track?.key?.content_id, track, track?.metadata?.title);
+                const { entity: track, score } = JSON.parse(event.data);
+                add('tracks', track?.key?.content_id, track, track?.metadata?.title, score);
             });
             source.addEventListener('federation.artist', event => {
-                const artist = JSON.parse(event.data).entity;
-                add('artists', artist?.key?.normalized_name, artist, artist?.name);
+                const { entity: artist, score } = JSON.parse(event.data);
+                add('artists', artist?.key?.normalized_name, artist, artist?.name, score);
             });
             source.addEventListener('federation.release', event => {
-                const release = JSON.parse(event.data).entity;
-                if (release?.key) add('releases', JSON.stringify(release.key), release, release.title);
+                const { entity: release, score } = JSON.parse(event.data);
+                if (release?.key) add('releases', JSON.stringify(release.key), release, release.title, score);
             });
             source.addEventListener('search.completed', () => finish());
             source.addEventListener('search.failed', event => {
@@ -3777,34 +3863,6 @@ document.addEventListener('alpine:init', () => {
                 .replace(/\s+/g, ' ');
         },
 
-        federationSearchScore(value, query) {
-            const candidate = this.normalizeFederationSearchText(value);
-            const wanted = this.normalizeFederationSearchText(query);
-            if (!candidate || !wanted) return 0;
-            if (candidate === wanted) return 100000;
-            if (candidate.startsWith(wanted + ' ')) return 90000;
-            if (candidate.includes(wanted)) return 80000;
-            const candidateWords = candidate.split(' ');
-            const wantedWords = wanted.split(' ');
-            const exactWords = wantedWords.filter(word => candidateWords.includes(word)).length;
-            const prefixWords = wantedWords.filter(word =>
-                candidateWords.some(candidateWord => candidateWord.startsWith(word))
-            ).length;
-            const allExact = exactWords === wantedWords.length;
-            const allPrefixes = prefixWords === wantedWords.length;
-            if (allExact) return 70000 - Math.abs(candidateWords.length - wantedWords.length) * 100;
-            if (allPrefixes) return 60000 - Math.abs(candidateWords.length - wantedWords.length) * 100;
-            return exactWords * 5000 + prefixWords * 2500
-                - Math.abs(candidate.length - wanted.length);
-        },
-
-        federationArtistLine(track) {
-            return [...(track?.metadata?.artists || []), ...(track?.metadata?.featured_artists || [])]
-                .map(artist => artist.name)
-                .filter(Boolean)
-                .join(', ');
-        },
-
         availableFederationArtwork(url) {
             return url && !this.failedFederationArtwork.has(url) ? url : '';
         },
@@ -3817,31 +3875,21 @@ document.addEventListener('alpine:init', () => {
 
         federationArtistImage(artist) {
             if (!artist?.name) return '';
-            return this.availableFederationArtwork(this.federationDiscoveredArtwork(artist.name))
-                || this.availableFederationArtwork(this.localArtistImage(artist.name));
-        },
-
-        localArtistImage(name) {
-            const key = this.normalizeFederationSearchText(name);
-            return (this.searchResults?.artists || []).find(candidate =>
-                this.normalizeFederationSearchText(candidate.name) === key
-            )?.image_url || '';
+            return this.availableFederationArtwork(artist.image_url)
+                || this.availableFederationArtwork(this.federationDiscoveredArtwork(artist.name));
         },
 
         hydrateFederationSearchRelease(release) {
-            if (!release) return release;
-            const title = this.normalizeFederationSearchText(release.title);
-            const primaryArtists = (release.key?.primary_artists || [])
-                .map(name => this.normalizeFederationSearchText(name));
+            if (!release?.key || release.local_id) return release;
+            const key = release.key;
+            const artistSet = names => JSON.stringify([...new Set(names || [])].sort());
+            const artists = artistSet(key.primary_artists);
             const tracks = this.federationSearch.tracks.filter(track => {
-                const metadata = track?.metadata || {};
-                if (this.normalizeFederationSearchText(metadata.release?.title) !== title) return false;
-                if (release.year && metadata.year && Number(release.year) !== Number(metadata.year)) return false;
-                if (!primaryArtists.length) return true;
-                const trackArtists = (metadata.artists || []).map(artist =>
-                    this.normalizeFederationSearchText(artist.name)
-                );
-                return primaryArtists.some(artist => trackArtists.includes(artist));
+                const candidate = track.metadata?.release?.key;
+                return key.primary_artists?.length && candidate?.normalized_title === key.normalized_title
+                    && (candidate.year ?? null) === (key.year ?? null)
+                    && (candidate.release_type || null) === (key.release_type || null)
+                    && artistSet(candidate.primary_artists) === artists;
             });
             const owners = [...new Set([
                 ...(release.sources || []).map(source => source.owner),
@@ -3927,8 +3975,10 @@ document.addEventListener('alpine:init', () => {
 
         federationQueueTrack(track) {
             const metadata = track?.metadata || {};
+            const release = this.trackRelease(track);
+            const local = track.availability?.local;
             return {
-                id: `fed:${track.key.content_id}`,
+                id: local?.track_id ?? `fed:${track.key.content_id}`,
                 content_id: track.key.content_id,
                 title: metadata.title || 'Unknown track',
                 track_number: metadata.track_number,
@@ -3942,11 +3992,12 @@ document.addEventListener('alpine:init', () => {
                     id: artist.local_id || null,
                     name: artist.name,
                 })),
-                release_id: null,
-                release_title: metadata.release?.title || '',
-                release_year: metadata.year || null,
+                release_id: release?.id ?? null,
+                release_key: release?.key || null,
+                release_title: release?.title || '',
+                release_year: release?.key?.year ?? metadata.year ?? null,
                 cover_url: metadata.cover_url || null,
-                stream_url: '',
+                stream_url: local?.stream_url || '',
                 uploader_name: 'Federation',
                 federation_pending: true,
                 _federationTrack: track,
@@ -3954,32 +4005,56 @@ document.addEventListener('alpine:init', () => {
             };
         },
 
-        openFederatedRelease(release, options = {}) {
-            if (!release?.key) return;
-            const cacheKey = typeof release.key === 'string'
-                ? release.key
-                : JSON.stringify(release.key);
-            this._federatedReleaseCache[cacheKey] = release;
-            this._beginNavigation('#releasefed?key=' + encodeURIComponent(cacheKey), options);
+        async openFederatedRelease(release, options = {}) {
+            if (GUEST || !release) return;
+            if (release.local_id) return this.openRelease(release.local_id, options);
+            const input = release.key;
+            const key = Array.isArray(input?.primary_artists) && input.primary_artists.every(name => typeof name === 'string')
+                && (input.year == null || Number.isInteger(input.year))
+                && (input.release_type == null || typeof input.release_type === 'string')
+                ? this.federationReleaseKey(input.normalized_title, input.primary_artists, input.year, input.release_type)
+                : null;
+            this._beginNavigation(key ? this.releaseHref({ key }) : location.hash, options);
+            const version = this._navigationVersion;
+            this.view = 'release_detail';
+            this.searchQuery = '';
+            this.searchResults = null;
+            this.currentRelease = null;
+            this.releaseUnavailable = !key;
+            if (!key) return;
+            const id = await this.resolveFederatedId('release', { key: JSON.stringify(key) });
+            if (version !== this._navigationVersion) return;
+            if (id) {
+                history.replaceState(history.state, '', '#release/' + id);
+                return this.openRelease(id, { ...options, fromHash: true });
+            }
             const queuedTracks = (release.tracks || []).map(track => this.federationQueueTrack(track));
-            const first = queuedTracks[0];
-            this.currentRelease = {
+            const detail = {
                 id: null,
-                title: release.title,
-                release_type: release.release_type || release.key?.release_type || 'release',
-                year: release.year,
+                title: release.title || key.normalized_title,
+                release_type: release.release_type || key.release_type,
+                year: release.year ?? key.year,
                 cover_url: this.federationReleaseCover(release),
-                artists: first?.artists || (release.artists || []).map(name => ({ id: null, name })),
+                artists: (release.artists || key.primary_artists).map(name => ({ id: null, name })),
                 tracks: queuedTracks,
+                federationPeers: release.owners || [],
                 uploaders: (release.owners || []).map(owner => ({
                     name: `Federation ${owner.slice(0, 10)}`,
                     track_count: queuedTracks.length,
                 })),
                 federated: true,
-                federationRelease: release,
+                federationRelease: { ...release, key },
             };
-            this.view = 'release_detail';
+            if (release.title) this.currentRelease = detail;
+            this.startReleaseFederation(detail);
             this._afterNavigation(options);
+        },
+
+        openSearchRelease(release) {
+            if (release.federation_only) {
+                return this.openFederatedRelease(this.hydrateFederationSearchRelease(release._federationRelease));
+            }
+            return this.openRelease(release.id);
         },
 
         playFederatedRelease(release) {
@@ -3996,10 +4071,11 @@ document.addEventListener('alpine:init', () => {
         openFederationTrackInfo(track) {
             const metadata = track?.metadata || {};
             const sources = track?.availability?.federation || [];
+            const release = this.trackRelease(track);
             const rows = [
                 { label: T.title, value: metadata.title || T.unknown },
-                { label: T.artists, value: this.federationArtistLine(track) || T.unknown },
-                { label: T.release, value: metadata.release?.title || T.unknown },
+                { label: T.artists, links: this.trackArtistLinks(track), value: T.unknown },
+                { label: T.release, links: release ? [{ href: this.releaseHref(release), label: release.title }] : [], value: T.unknown },
                 { label: T.year, value: metadata.year || T.unknown },
                 { label: T.duration, value: formatTime(metadata.duration_seconds) },
                 { label: 'Content ID', value: track?.key?.content_id || T.unknown },
@@ -4045,7 +4121,12 @@ document.addEventListener('alpine:init', () => {
                 : track;
             const searchTracks = this.federationSearch.tracks;
             const index = searchTracks.findIndex(track => track.key?.content_id === contentId);
-            if (index >= 0) searchTracks[index] = this.withTrackAvailability(searchTracks[index]);
+            if (index >= 0) {
+                searchTracks[index] = this.withTrackAvailability(searchTracks[index]);
+                if (this.view === 'search' && this.searchMode !== 'lyrics') {
+                    this.updateUnifiedSearch('tracks', !this.ordinarySearch);
+                }
+            }
             this.artistFederation = {
                 ...this.artistFederation,
                 tracks: this.artistFederation.tracks.map(updateTrack),
@@ -4300,20 +4381,11 @@ document.addEventListener('alpine:init', () => {
                     const tracks = await tracksResponse.json();
                     playable = tracks?.[0];
                 } else {
-                    const metadata = track.metadata || {};
                     playable = {
+                        ...this.federationQueueTrack(track),
                         id: `fed:${contentId}`,
-                        content_id: contentId,
-                        title: metadata.title || 'Unknown track',
-                        duration_seconds: metadata.duration_seconds || 0,
-                        artists: metadata.artists || [],
-                        featured_artists: metadata.featured_artists || [],
-                        release_id: null,
-                        release_title: metadata.release?.title || '',
-                        release_year: metadata.year || metadata.release?.key?.year || null,
-                        cover_url: metadata.cover_url || null,
                         stream_url: prepared.stream_url,
-                        uploader_name: 'Federation',
+                        federation_pending: false,
                         federated_cache: true,
                         federation: { content_id: contentId, sources: track.availability.federation },
                     };
@@ -4408,12 +4480,25 @@ document.addEventListener('alpine:init', () => {
             return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
         },
 
+        searchTrackLiked(track) {
+            return track.federation_only ? this.federationIsLiked(track._federationTrack) : Alpine.store('likes').has(track.id);
+        },
+
+        searchTrackNumber(track) {
+            if (track.federation_only) {
+                const progress = this.federationDownload(track.content_id);
+                if (progress) return progress.total ? Math.round(progress.percent) + '%' : '…';
+                if (this.federationFailure(track.content_id)) return '!';
+            }
+            return track._searchGroupChild ? '↳' : track._searchGroupNumber;
+        },
+
         playSearchTrack(idx) {
-            if (!this.searchResults || !this.searchResults.tracks) return;
-            const groups=Alpine.store('searchGroups');
-            const visible=groups ? groups.rows(this.searchResults.tracks,'local',!this.similaritySearchLabel).filter(track=>!track._searchGroupHidden) : this.searchResults.tracks;
-            const position=groups ? visible.findIndex(track=>track._searchSourceIndex===idx) : idx;
-            if(position>=0) Alpine.store('queue').playRelease(visible, position);
+            const tracks = this.displaySearchResults.tracks;
+            const visible = Alpine.store('searchGroups').rows(tracks, 'search')
+                .filter(row => !row._searchGroupHidden);
+            const position = visible.findIndex(row => row._searchSourceIndex === idx);
+            if (position >= 0) Alpine.store('queue').playRelease(visible.map(row => tracks[row._searchSourceIndex]), position);
         },
 
         _setupScroll() {

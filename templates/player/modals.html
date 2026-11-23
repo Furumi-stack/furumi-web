@@ -29,8 +29,10 @@
                                             <template x-if="typeof row.run === 'function'"><button class="info-link" type="button" @click="row.run()" x-text="row.value"></button></template>
                                             <template x-if="row.links && row.links.length">
                                                 <div class="info-link-list">
-                                                    <template x-for="link in row.links" :key="link.type + '-' + link.id + '-' + link.label">
-                                                        <button class="info-link" type="button" @click="$store.info.navigate(link)" x-text="link.label"></button>
+                                                    <template x-for="(link, idx) in row.links" :key="link.href + '-' + idx">
+                                                        <a :class="link.href && 'info-link'" :href="link.href"
+                                                           @click="if ($store.library.followsHere($event)) $store.info.close()"
+                                                           x-text="link.label"></a>
                                                     </template>
                                                 </div>
                                             </template>
@@ -1169,10 +1171,11 @@
                                           x-text="item.device_name"></span>
                                 </div>
                                 <div class="track-artists-inline">
-                                    <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
+                                    <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.href + '-' + artistIdx">
                                         <span>
                                             <template x-if="artistIdx > 0"><span>, </span></template>
-                                            <a class="artist-link" @click.stop="$store.history.close(); $store.library.openArtist(artist.id)" x-text="artist.label"></a>
+                                            <a class="artist-link" :href="artist.href"
+                                               @click.stop="if ($store.library.followsHere($event)) $store.history.close()" x-text="artist.label"></a>
                                         </span>
                                     </template>
                                     <template x-if="!item.track || !$store.library.trackArtistLinks(item.track).length">
@@ -1181,8 +1184,9 @@
                                 </div>
                                 <div class="history-release-line">
                                     <a class="artist-link"
-                                       x-show="item.track && item.track.release_id"
-                                       @click.stop="$store.history.close(); $store.library.openRelease(item.track.release_id)"
+                                       x-show="item.track?.release_title"
+                                       :href="$store.library.releaseHref($store.library.trackRelease(item.track))"
+                                       @click.stop="if ($store.library.followsHere($event)) $store.history.close()"
                                        x-text="item.track?.release_title || item.release_title || '{{ t.player_unknown_release }}'"></a>
                                 </div>
                             </div>

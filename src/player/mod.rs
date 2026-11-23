@@ -33,7 +33,8 @@ mod rows;
 mod sharing;
 
 use dto::*;
-use helpers::{cover_variant_url, load_release_uploaders, track_cover_variant_url};
+pub(crate) use helpers::cover_variant_url;
+use helpers::{load_release_uploaders, track_cover_variant_url};
 use queries::*;
 use rows::*;
 
@@ -4608,7 +4609,10 @@ async fn build_playlist_track_items(
         .collect())
 }
 
-async fn load_track_items_by_ids(pool: &sqlx::PgPool, ids: &[i64]) -> cot::Result<Vec<TrackItem>> {
+pub(crate) async fn load_track_items_by_ids(
+    pool: &sqlx::PgPool,
+    ids: &[i64],
+) -> cot::Result<Vec<TrackItem>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -6770,6 +6774,7 @@ async fn search_handler(
     }
     if q.is_empty() {
         return Json(SearchResults {
+            scores: SearchScores::default(),
             podcasts: Vec::new(),
             artists: Vec::new(),
             releases: Vec::new(),
@@ -6808,6 +6813,8 @@ async fn search_handler(
 
         let r = sqlx::query_as::<_, SearchReleaseRow>(
             r#"SELECT r.id, r.title::text AS title, r.release_type::text AS release_type,
+                      ARRAY(SELECT a.name::text FROM furumusic__release_artist ra JOIN furumusic__artist a ON a.id=ra.artist_id
+                            WHERE ra.release_id=r.id AND NOT a.is_hidden ORDER BY ra.position,a.id) AS artists,
                       r.year, r.cover_file_id,
                       COALESCE((SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id = r.id AND t.is_hidden = false), 0) AS track_count
                FROM furumusic__release r
@@ -6821,8 +6828,8 @@ async fn search_handler(
         .bind(&normalized_q)
         .fetch_all(pool);
 
-        let t = sqlx::query_as::<_, SearchTrackRow>(
-            r#"SELECT t.id, t.title::text AS title, t.track_number, t.disc_number,
+        let t = sqlx::query_as::<_, PlaylistTrackRow>(
+            r#"SELECT NULL::bigint AS playlist_track_id, t.id, t.title::text AS title, t.track_number, t.disc_number,
                       t.duration_seconds, t.cover_file_id,
                       rel.cover_file_id AS release_cover_file_id,
                       rel.id AS release_id,
@@ -6841,7 +6848,7 @@ async fn search_handler(
                FROM furumusic__track t
                JOIN furumusic__release rel ON rel.id = t.release_id
                LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
-               WHERE t.is_hidden = false
+               WHERE t.is_hidden = false AND NOT rel.is_hidden
                  AND (t.title_sort ILIKE '%' || $1 || '%'
                       OR t.title_sort ILIKE '%' || $3 || '%')
                ORDER BY t.title_sort LIMIT $2"#,
@@ -6887,7 +6894,9 @@ async fn search_handler(
         .fetch_all(pool);
 
         let r = sqlx::query_as::<_, SearchReleaseRow>(
-            r#"SELECT id, title, release_type, year, cover_file_id, track_count FROM (
+            r#"SELECT id, title, release_type, year, cover_file_id, track_count,
+                      ARRAY(SELECT a.name::text FROM furumusic__release_artist ra JOIN furumusic__artist a ON a.id=ra.artist_id
+                            WHERE ra.release_id=sub.id AND NOT a.is_hidden ORDER BY ra.position,a.id) AS artists FROM (
                 SELECT r.id, r.title::text AS title, r.release_type::text AS release_type,
                        r.year, r.cover_file_id,
                        COALESCE((SELECT COUNT(*) FROM furumusic__track t WHERE t.release_id = r.id AND t.is_hidden = false), 0) AS track_count,
@@ -6914,8 +6923,8 @@ async fn search_handler(
         .bind(&normalized_q)
         .fetch_all(pool);
 
-        let t = sqlx::query_as::<_, SearchTrackRow>(
-            r#"SELECT id, title, track_number, disc_number, duration_seconds, cover_file_id,
+        let t = sqlx::query_as::<_, PlaylistTrackRow>(
+            r#"SELECT NULL::bigint AS playlist_track_id, id, title, track_number, disc_number, duration_seconds, cover_file_id,
                       release_cover_file_id, release_id, release_title, release_year, uploader_name, audio_format, audio_bitrate,
                       audio_sample_rate, audio_bit_depth, file_size_bytes, lastfm_listeners, lastfm_playcount, lastfm_rating, lastfm_updated_at FROM (
                 SELECT t.id, t.title::text AS title, t.track_number, t.disc_number,
@@ -6950,7 +6959,7 @@ async fn search_handler(
                       AND (title_sort ILIKE '%' || $1 || '%'
                            OR title_sort ILIKE '%' || $3 || '%')
                 ) t
-                JOIN furumusic__release rel ON rel.id = t.release_id
+                JOIN furumusic__release rel ON rel.id = t.release_id AND NOT rel.is_hidden
                 LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
                 GROUP BY t.id, t.title, t.track_number, t.disc_number, t.duration_seconds, t.cover_file_id, rel.cover_file_id, rel.id, rel.title, rel.year,
                          mf.uploader_name, mf.audio_format, mf.audio_bitrate, mf.audio_sample_rate, mf.audio_bit_depth, mf.file_size_bytes,
@@ -6967,50 +6976,7 @@ async fn search_handler(
         tokio::try_join!(a, r, t).map_err(|e| cot::Error::internal(e.to_string()))?
     };
 
-    // Collect track IDs for batch artist lookup
-    let track_ids: Vec<i64> = track_rows.iter().map(|t| t.id).collect();
-    let lyrics_ids = crate::lyrics::available_track_ids(pool, &track_ids)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-
-    let track_artists = if track_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, TrackArtistRow>(
-            r#"SELECT ta.track_id, ta.artist_id, a.name::text AS artist_name, ta.role::text AS role
-               FROM furumusic__track_artist ta
-               JOIN furumusic__artist a ON a.id = ta.artist_id
-               WHERE ta.track_id = ANY($1)
-               ORDER BY ta.track_id, ta.position"#,
-        )
-        .bind(&track_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?
-    };
-
-    let mut track_main_artists: std::collections::HashMap<i64, Vec<ArtistRef>> =
-        std::collections::HashMap::new();
-    let mut track_feat_artists: std::collections::HashMap<i64, Vec<ArtistRef>> =
-        std::collections::HashMap::new();
-
-    for ta in &track_artists {
-        let artist_ref = ArtistRef {
-            id: ta.artist_id,
-            name: ta.artist_name.clone(),
-        };
-        if ta.role == "featuring" {
-            track_feat_artists
-                .entry(ta.track_id)
-                .or_default()
-                .push(artist_ref);
-        } else {
-            track_main_artists
-                .entry(ta.track_id)
-                .or_default()
-                .push(artist_ref);
-        }
-    }
+    let tracks = build_track_items(track_rows, pool).await?;
 
     let artists: Vec<ArtistCard> = artist_rows
         .into_iter()
@@ -7028,57 +6994,26 @@ async fn search_handler(
         .await
         .map_err(|e| cot::Error::internal(e.to_string()))?;
 
-    let releases: Vec<ReleaseCard> = release_rows
+    let releases: Vec<_> = release_rows
         .into_iter()
-        .map(|r| ReleaseCard {
-            id: r.id,
-            title: r.title,
-            release_type: r.release_type,
-            year: r.year,
-            cover_url: cover_variant_url(r.cover_file_id, "medium"),
-            track_count: r.track_count,
-            uploaders: release_uploaders.remove(&r.id).unwrap_or_default(),
+        .map(|r| SearchReleaseCard {
+            artists: r.artists,
+            release: ReleaseCard {
+                id: r.id,
+                title: r.title,
+                release_type: r.release_type,
+                year: r.year,
+                cover_url: cover_variant_url(r.cover_file_id, "medium"),
+                track_count: r.track_count,
+                uploaders: release_uploaders.remove(&r.id).unwrap_or_default(),
+            },
         })
         .collect();
 
-    let tracks: Vec<TrackItem> = track_rows
-        .into_iter()
-        .map(|t| {
-            let tid = t.id;
-            TrackItem {
-                id: t.id,
-                content_id: None,
-                title: t.title,
-                track_number: t.track_number,
-                disc_number: t.disc_number,
-                duration_seconds: t.duration_seconds,
-                artists: track_main_artists.remove(&tid).unwrap_or_default(),
-                featured_artists: track_feat_artists.remove(&tid).unwrap_or_default(),
-                release_id: t.release_id,
-                release_title: t.release_title,
-                release_year: t.release_year,
-                cover_url: track_cover_variant_url(
-                    t.cover_file_id,
-                    t.release_cover_file_id,
-                    "medium",
-                ),
-                stream_url: format!("/api/player/stream/{tid}"),
-                uploader_name: t.uploader_name,
-                audio_format: t.audio_format,
-                audio_bitrate: t.audio_bitrate,
-                audio_sample_rate: t.audio_sample_rate,
-                audio_bit_depth: t.audio_bit_depth,
-                file_size_bytes: t.file_size_bytes,
-                lastfm_listeners: t.lastfm_listeners,
-                lastfm_playcount: t.lastfm_playcount,
-                lastfm_rating: t.lastfm_rating,
-                lastfm_updated_at: t.lastfm_updated_at,
-                has_lyrics: lyrics_ids.contains(&tid),
-            }
-        })
-        .collect();
+    let scores = catalogue_scores(&q, &artists, &releases, &tracks);
 
     Json(SearchResults {
+        scores,
         podcasts: crate::podcasts::search(pool, user.id, &q, limit)
             .await
             .map_err(|e| cot::Error::internal(e.to_string()))?,
@@ -7089,10 +7024,100 @@ async fn search_handler(
     .into_response()
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/player/federation/search/events?q=...
-// ---------------------------------------------------------------------------
+fn catalogue_scores(
+    query: &str,
+    artists: &[ArtistCard],
+    releases: &[SearchReleaseCard],
+    tracks: &[TrackItem],
+) -> SearchScores {
+    let relevance = crate::search_relevance::SearchRelevance::new(query);
+    SearchScores {
+        artists: artists
+            .iter()
+            .map(|a| {
+                (
+                    a.id,
+                    relevance
+                        .score(&a.name, std::iter::empty(), None)
+                        .unwrap_or_default(),
+                )
+            })
+            .collect(),
+        releases: releases
+            .iter()
+            .map(|r| {
+                (
+                    r.release.id,
+                    relevance
+                        .score(&r.release.title, r.artists.iter().map(String::as_str), None)
+                        .unwrap_or_default(),
+                )
+            })
+            .collect(),
+        tracks: tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.id,
+                    relevance
+                        .score(
+                            &t.title,
+                            t.artists
+                                .iter()
+                                .chain(&t.featured_artists)
+                                .map(|a| a.name.as_str()),
+                            Some(&t.release_title),
+                        )
+                        .unwrap_or_default(),
+                )
+            })
+            .collect(),
+    }
+}
 
+#[cfg(test)]
+mod catalogue_score_tests {
+    use super::*;
+
+    #[test]
+    fn local_fuzzy_hits_and_multi_artist_credits_share_federated_ranking() {
+        let releases = [SearchReleaseCard {
+            artists: vec!["Первая группа".into(), "Второй артист".into()],
+            release: ReleaseCard {
+                id: 442,
+                title: "Совместный релиз".into(),
+                release_type: "album".into(),
+                year: None,
+                cover_url: None,
+                track_count: 1,
+                uploaders: vec![],
+            },
+        }];
+        let artists = [ArtistCard {
+            id: 7,
+            name: "Похожая строка".into(),
+            image_url: None,
+            release_count: 1,
+            track_count: 1,
+        }];
+        let scores = catalogue_scores("второй артист", &artists, &releases, &[]);
+        let wire = serde_json::to_value(scores).unwrap();
+        assert_eq!(
+            wire["artists"]["7"], 0,
+            "keep unmatched local fuzzy candidates"
+        );
+        assert_eq!(
+            wire["releases"]["442"], 800,
+            "all album credits participate"
+        );
+        assert_eq!(
+            catalogue_scores("совместный релиз", &[], &releases, &[]).releases[&442],
+            1000
+        );
+    }
+}
+
+// GET /api/player/federation/search/events?q=...
 async fn federation_search_events_handler(
     auth_ctx: auth::AuthContext,
     session: Session,
@@ -7156,6 +7181,50 @@ async fn federation_search_events_handler(
         .header("x-accel-buffering", "no")
         .body(body)
         .map_err(|err| cot::Error::internal(err.to_string()))
+}
+
+async fn federation_release_resolve_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    UrlQuery(query): UrlQuery<FederationReleaseQuery>,
+) -> cot::Result<cot::response::Response> {
+    if auth::get_request_user(&auth_ctx, &session, &db)
+        .await
+        .is_none()
+    {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    }
+    let Some(key) = crate::federation::client::ReleaseKeyDto::from_url(&query.key) else {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid release key"));
+    };
+    let local_id = crate::federation::handle()
+        .local_release_id(&key)
+        .await
+        .map_err(|err| cot::Error::internal(err.to_string()))?;
+    Json(serde_json::json!({"local_id":local_id})).into_response()
+}
+
+async fn federation_artist_resolve_handler(
+    auth_ctx: auth::AuthContext,
+    session: Session,
+    db: Database,
+    UrlQuery(query): UrlQuery<FederationArtistQuery>,
+) -> cot::Result<cot::response::Response> {
+    if auth::get_request_user(&auth_ctx, &session, &db)
+        .await
+        .is_none()
+    {
+        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
+    }
+    if query.name.chars().count() > 255 || music_dht::normalize_name(&query.name).is_empty() {
+        return Ok(json_error(StatusCode::BAD_REQUEST, "invalid artist name"));
+    }
+    let local_id = crate::federation::handle()
+        .local_artist_id(&query.name)
+        .await
+        .map_err(|err| cot::Error::internal(err.to_string()))?;
+    Json(serde_json::json!({"local_id":local_id})).into_response()
 }
 
 async fn federation_artist_events_handler(
@@ -10685,6 +10754,16 @@ impl App for PlayerApp {
                     }
                 }),
                 "player_similarity_search",
+            ),
+            Route::with_handler_and_name(
+                "/federation/release/resolve",
+                get(federation_release_resolve_handler),
+                "player_federation_release_resolve",
+            ),
+            Route::with_handler_and_name(
+                "/federation/artist/resolve",
+                get(federation_artist_resolve_handler),
+                "player_federation_artist_resolve",
             ),
             Route::with_handler_and_name(
                 "/federation/search/events",

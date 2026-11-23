@@ -571,6 +571,9 @@ translations! {
     player_seen:             "seen"                            , "видели";
     player_eta:              "eta"                             , "осталось";
     player_loading_history:  "Loading history..."              , "Загрузка истории...";
+    player_loading_release:  "Loading release…"                , "Загрузка релиза…";
+    player_release_unavailable: "Release unavailable"          , "Релиз недоступен";
+    player_federated_result: "Available from the federation"   , "Доступно в федерации";
     player_loading_more:     "Loading more..."                 , "Загружаю ещё...";
     player_failed_load_history: "Failed to load history"        , "Не удалось загрузить историю";
     player_total_plays:      "total plays"                     , "прослушиваний всего";

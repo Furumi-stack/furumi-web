@@ -1,0 +1,2 @@
+<a class="artist-link" :href="$store.library.releaseHref($store.library.trackRelease(track))"
+   @click.stop @dblclick.stop x-text="track.metadata?.release?.title || track.release_title"></a><span x-text="$store.searchGroups.recordingDetails(track)"></span>

@@ -215,36 +215,14 @@ pub(super) struct SearchArtistRow {
 
 #[derive(sqlx::FromRow)]
 pub(super) struct SearchReleaseRow {
+    #[sqlx(default)]
+    pub(super) artists: Vec<String>,
     pub(super) id: i64,
     pub(super) title: String,
     pub(super) release_type: String,
     pub(super) year: Option<i32>,
     pub(super) cover_file_id: Option<i64>,
     pub(super) track_count: i64,
-}
-
-#[derive(sqlx::FromRow)]
-pub(super) struct SearchTrackRow {
-    pub(super) id: i64,
-    pub(super) title: String,
-    pub(super) track_number: Option<i32>,
-    pub(super) disc_number: Option<i32>,
-    pub(super) duration_seconds: f64,
-    pub(super) cover_file_id: Option<i64>,
-    pub(super) release_cover_file_id: Option<i64>,
-    pub(super) release_id: i64,
-    pub(super) release_title: String,
-    pub(super) release_year: Option<i32>,
-    pub(super) uploader_name: String,
-    pub(super) audio_format: Option<String>,
-    pub(super) audio_bitrate: Option<i32>,
-    pub(super) audio_sample_rate: Option<i32>,
-    pub(super) audio_bit_depth: Option<i32>,
-    pub(super) file_size_bytes: Option<i64>,
-    pub(super) lastfm_listeners: Option<i64>,
-    pub(super) lastfm_playcount: Option<i64>,
-    pub(super) lastfm_rating: Option<f64>,
-    pub(super) lastfm_updated_at: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]

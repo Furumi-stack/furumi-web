@@ -445,7 +445,7 @@
                     </div>
                     <p class="lyrics-search-note" x-show="$store.library.searchMode==='lyrics'" x-text="$store.lyricsSearch.text('local')"></p>
                     <p class="lyrics-search-note" role="status" x-show="$store.library.searchMode==='lyrics' && ($store.library.searchResults?.semantic_error || ($store.library.searchResults?.lyrics_status?.ready_chunks ?? 1)===0)" x-text="$store.lyricsSearch.text('lexical')"></p>
-                    <template x-if="$store.library.searchLoading">
+                    <template x-if="!$store.library.hasDisplaySearchResults && ($store.library.searchLoading || ($store.library.ordinarySearch && $store.library.federationSearch.loading))">
                         <div class="loading-spinner"><div class="spinner"></div></div>
                     </template>
                     <template x-if="!$store.library.searchLoading && $store.library.similaritySearchError">
@@ -453,53 +453,69 @@
                             <p x-text="$store.library.similaritySearchError"></p>
                         </div>
                     </template>
-                    <template x-if="!$store.library.searchLoading && $store.library.searchResults">
-                        <div :class="{ 'similarity-unified-results': $store.library.similaritySearchLabel }">
-                            <template x-if="!$store.library.similaritySearchError && $store.library.searchResults.artists.length === 0 && $store.library.searchResults.releases.length === 0 && $store.library.searchResults.tracks.length === 0 && !($store.library.searchResults.podcasts || []).length">
+                    <template x-if="$store.library.displaySearchResults">
+                        <div>
+                            <template x-if="!$store.library.hasDisplaySearchResults && !$store.library.searchLoading && !$store.library.federationSearch.loading && !$store.library.similaritySearchStats.loading && !$store.library.similaritySearchError && !$store.library.federationSearch.error">
                                 <div class="empty-state">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                                     <p>{{ t.player_no_results }}</p>
                                 </div>
                             </template>
                             <!-- Artists section -->
-                            <template x-if="$store.library.searchResults.artists.length > 0">
+                            <template x-if="$store.library.displaySearchResults.artists.length">
                                 <div class="search-section">
                                     <h2 class="search-section-title">{{ t.player_artists }}</h2>
                                     <div class="search-artists-row">
-                                        <template x-for="artist in $store.library.searchResults.artists" :key="artist.id">
-                                            <div class="search-artist-card" @click="$store.library.openArtist(artist.id)">
+                                        <template x-for="artist in $store.library.displaySearchResults.artists" :key="artist.searchKey ?? artist.id">
+                                            <div class="search-artist-card"
+                                                 :class="{ 'search-result-enter': $store.library.ordinarySearch, 'search-federation-only': artist.federation_only }"
+                                                 :data-search-key="artist.searchKey"
+                                                 @click="artist.federation_only ? $store.library.openFederatedArtist(artist._federationArtist) : $store.library.openArtist(artist.id)">
                                                 <div class="search-artist-img">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
-                                                    <template x-if="artist.image_url">
-                                                        <img class="artwork-image" :src="artist.image_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
+                                                    <template x-if="$store.library.localSearchArtwork('artists', artist)">
+                                                        <img class="artwork-image" :src="$store.library.localSearchArtwork('artists', artist) || null" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$store.library.federationArtworkFailed($event.currentTarget)">
                                                     </template>
                                                 </div>
-                                                <div class="search-artist-name" x-text="artist.name"></div>
+                                                <div class="search-artist-name"><a class="artist-link"
+                                                    :href="$store.library.artistHref(artist.federation_only ? artist._federationArtist : artist)"
+                                                    :aria-label="artist.federation_only ? artist.name + ' · {{ t.player_federated_result }}' : null"
+                                                    @click.stop x-text="artist.name"></a></div>
                                             </div>
                                         </template>
                                     </div>
                                 </div>
                             </template>
                             <!-- Releases section -->
-                            <template x-if="$store.library.searchResults.releases.length > 0">
+                            <template x-if="$store.library.displaySearchResults.releases.length">
                                 <div class="search-section">
                                     <h2 class="search-section-title">{{ t.player_releases }}</h2>
                                     <div class="search-releases-row">
-                                        <template x-for="release in $store.library.searchResults.releases" :key="release.id">
-                                            <div class="search-release-card" @click="$store.library.openRelease(release.id)" style="position:relative">
+                                        <template x-for="release in $store.library.displaySearchResults.releases" :key="release.searchKey ?? release.id">
+                                            <div class="search-release-card"
+                                                 :class="{ 'search-result-enter': $store.library.ordinarySearch, 'search-federation-only': release.federation_only }"
+                                                 :data-search-key="release.searchKey"
+                                                 @click="$store.library.openSearchRelease(release)">
                                                 <div class="search-release-cover" style="position:relative">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
-                                                    <template x-if="release.cover_url">
-                                                        <img class="artwork-image" :src="release.cover_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
+                                                    <template x-if="$store.library.localSearchArtwork('releases', release)">
+                                                        <img class="artwork-image" :src="$store.library.localSearchArtwork('releases', release) || null" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$store.library.federationArtworkFailed($event.currentTarget)">
                                                     </template>
                                                     <button class="card-info-btn" @click.stop="$store.library.openReleaseInfo(release)" :title="$store.library.releaseInfo(release)" aria-label="{{ t.player_release_info }}">
                                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                                                     </button>
                                                 </div>
-                                                <div class="card-title" x-text="release.title"></div>
+                                                <div class="card-title"><a class="artist-link"
+                                                    :href="$store.library.releaseHref(release.federation_only ? release._federationRelease : release)"
+                                                    :aria-label="release.federation_only ? release.title + ' · {{ t.player_federated_result }}' : null"
+                                                    @click.stop="if (release.federation_only && $store.library.followsHere($event)) { $event.preventDefault(); $store.library.openSearchRelease(release) }"
+                                                    x-text="release.title"></a></div>
                                                 <div class="card-subtitle">
                                                     <span x-text="release.year || ''"></span>
-                                                    <span x-text="release.release_type"></span>
+                                                    <span x-text="release.release_type || ''"></span>
+                                                    <template x-for="(artist, idx) in release.artists || release._federationRelease?.artists || []" :key="idx">
+                                                        <span><span x-show="release.year || release.release_type || idx"> · </span><a class="artist-link" :href="$store.library.artistHref(artist)" @click.stop x-text="artist.name || artist"></a></span>
+                                                    </template>
                                                 </div>
                                             </div>
                                         </template>
@@ -507,7 +523,7 @@
                                 </div>
                             </template>
                             <!-- Tracks section -->
-                            <template x-if="$store.library.searchResults.tracks.length > 0">
+                            <template x-if="$store.library.displaySearchResults.tracks.length">
                                 <div class="search-section">
                                     <h2 class="search-section-title">{{ t.player_tracks }}</h2>
                                     <div class="track-list-header">
@@ -517,13 +533,14 @@
                                         <span></span>
                                         <span style="text-align:right">{{ t.player_duration }}</span>
                                     </div>
-                                    <template x-for="(track, idx) in $store.searchGroups.rows($store.library.searchResults.tracks,'local',!$store.library.similaritySearchLabel)" :key="track.id">
-                                        <div class="search-result-entry" data-search-source="local" :id="track._searchRowId" :class="{ 'search-result-variant':track._searchGroupChild, 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null" :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"><div class="search-result-clip">
+                                    <template x-for="track in $store.searchGroups.rows($store.library.displaySearchResults.tracks, 'search', !$store.library.similaritySearchLabel)" :key="track.searchKey || track.id">
+                                        <div class="search-result-entry search-standard-entry" :data-search-source="track.federation_only ? 'federation' : 'local'" :id="track._searchRowId" :class="{ 'search-result-variant':track._searchGroupChild, 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null"><div class="search-result-clip">
 <div class="track-row"
-                                             :class="{ 'search-track-variant':track._searchGroupChild, playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id }"
-
+                                             :class="{ 'search-track-variant':track._searchGroupChild, 'search-result-enter':$store.library.searchMode === 'normal', 'search-federation-only':track.federation_only, playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id }"
+                                             :aria-description="track.federation_only ? '{{ t.player_federated_result }}' : null"
                                              tabindex="0" @click="if ($event.detail < 2) { $store.library.similaritySearchLabel ? $store.library.playSimilarityResult(track) : $store.library.playSearchTrack(track._searchSourceIndex) }" @dblclick.stop @keydown.enter.self.prevent="$store.library.similaritySearchLabel ? $store.library.playSimilarityResult(track) : $store.library.playSearchTrack(track._searchSourceIndex)">
-                                            <span class="track-num" x-text="track._searchGroupChild ? '↳' : track._searchGroupNumber"></span>
+                                            <span class="track-num" x-text="$store.library.searchTrackNumber(track)"
+                                                  :title="track.federation_only ? $store.library.federationDownloadTooltip(track.content_id) || $store.library.federationFailure(track.content_id)?.message : null"></span>
                                             <div class="track-info">
                                                 <div class="track-title search-track-title">
     <button class="search-version-toggle" type="button" x-show="!track._searchGroupChild && track._searchGroupCount>1" @click.stop="$store.searchGroups.toggle(track)" @dblclick.stop :aria-expanded="track._searchGroupExpanded" :aria-controls="track._searchGroupControls" :title="$store.searchGroups.label(track)" :aria-label="$store.searchGroups.label(track)">
@@ -532,32 +549,27 @@
     <span class="search-track-name" x-text="track.title"></span>
 </div>
                                                 <div class="track-artists-inline">
-                                                    <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
-                                                        <span>
-                                                            <template x-if="artistIdx > 0"><span>, </span></template>
-                                                            <a class="artist-link" @click.stop="$store.library.openArtist(artist.id)" x-text="artist.label"></a>
-                                                        </span>
-                                                    </template>
+                                                    {% include "player/track_artist_links.html" %}
                                                 </div>
-                                            <div class="search-variant-detail" x-show="track._searchGroupChild" x-text="$store.searchGroups.description(track)"></div>
+                                            <div class="search-variant-detail">{% include "player/search_track_release.html" %}</div>
 
 </div>
-                                            <span class="track-album" x-text="$store.searchGroups.description(track)"></span>
+                                            <span class="track-album">{% include "player/search_track_release.html" %}</span>
                                             <div class="track-actions">
                                                 <span class="track-popularity-slot">
 <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics" @click.stop="$store.lyrics.open(track,false)" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg></button>
 <button class="track-action-btn info-btn popularity-info-btn"
                                                         :class="{ 'has-popularity': $store.library.hasPopularity(track), 'no-popularity': !$store.library.hasPopularity(track) }"
                                                         :style="$store.library.popularityStyle(track)"
-                                                        @click.stop="$store.library.openTrackInfo(track)"
+                                                        @click.stop="track.federation_only ? $store.library.openFederationTrackInfo(track._federationTrack) : $store.library.openTrackInfo(track)"
                                                         :title="$store.library.trackInfoTitle(track)"
                                                         aria-label="{{ t.player_track_info }}">
                                                     <span x-show="$store.library.hasPopularity(track)" x-text="$store.library.popularityLabel(track)"></span>
                                                     <span x-show="!$store.library.hasPopularity(track)" class="info-letter">i</span>
                                                 </button>
 </span>
-                                                <button data-member-only class="like-btn" :class="{ liked: $store.likes.has(track.id) }" @click.stop="$store.likes.toggle(track.id)" title="{{ t.player_like }}">
-                                                    <svg viewBox="0 0 24 24" :fill="$store.likes.has(track.id) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
+                                                <button data-member-only class="like-btn" :class="{ liked: $store.library.searchTrackLiked(track) }" @click.stop="track.federation_only ? $store.library.toggleFederationLike(track._federationTrack) : $store.likes.toggle(track.id)" title="{{ t.player_like }}">
+                                                    <svg viewBox="0 0 24 24" :fill="$store.library.searchTrackLiked(track) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
                                                 </button>
                                                 <button class="track-action-btn queue-insert-btn queue-next-btn" @click.stop="$store.queue.addNextInQueue([track])" title="{{ t.player_play_next }}">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h10M5 12h7M5 18h10"/><path d="M17 9l4 3-4 3" fill="currentColor" stroke="none"/></svg>
@@ -565,10 +577,10 @@
                                                 <button class="track-action-btn queue-insert-btn queue-end-btn" @click.stop="$store.queue.addToEnd([track])" title="{{ t.player_add_to_queue }}">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h14M5 12h14M5 18h7"/><path d="M17 15l4 3-4 3" fill="currentColor" stroke="none"/></svg>
                                                 </button>
-                                                <button data-member-only class="track-action-btn track-share-btn" @click.stop="$store.sharing.copyTrack(track, $event.currentTarget)" title="{{ t.player_share_track }}" aria-label="{{ t.player_share_track }}">
+                                                <button data-member-only class="track-action-btn track-share-btn" :disabled="track.federation_only" @click.stop="$store.sharing.copyTrack(track, $event.currentTarget)" title="{{ t.player_share_track }}" aria-label="{{ t.player_share_track }}">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.6l6.8-3.9M8.6 13.4l6.8 3.9"/></svg>
                                                 </button>
-                                                <button data-member-only class="track-action-btn playlist-add-btn" @click.stop="$store.playlists.showPicker([track.id])" title="{{ t.player_add_to_playlist }}">
+                                                <button data-member-only class="track-action-btn playlist-add-btn" @click.stop="track.federation_only ? $store.playlists.showFederationPicker(track._federationTrack) : $store.playlists.showPicker([track.id])" title="{{ t.player_add_to_playlist }}">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
                                                 </button>
                                             </div>
@@ -578,171 +590,23 @@
 </template>
                                 </div>
                             </template>
-                            <template x-if="($store.library.searchResults.podcasts || []).length">
+                            <template x-if="$store.library.displaySearchResults.podcasts?.length">
                                 <section class="search-section">
                                     <h2 class="search-section-title" x-text="$store.podcasts.text('podcasts')"></h2>
                                     <div class="search-releases-row">
-                                        <template x-for="pod in $store.library.searchResults.podcasts" :key="pod.id">
+                                        <template x-for="pod in $store.library.displaySearchResults.podcasts" :key="pod.id">
                                             {% include "player/podcast_search_card.html" %}
                                         </template>
                                     </div>
                                 </section>
                             </template>
-                            <div class="search-section federation-search-section" x-show="$store.library.searchMode!=='lyrics'"
-                                 :class="{ 'similarity-federation-merged': $store.library.similaritySearchLabel }">
-                                <h2 class="search-section-title" x-show="!$store.library.similaritySearchLabel">
-                                    Federation
-                                    <span class="federation-live-badge"
-                                          x-show="$store.library.federationSearch.loading"
-                                          x-cloak>LIVE</span>
-                                </h2>
-                                <template x-if="$store.library.federationSearch.error">
-                                    <div class="federation-search-status error"
-                                         x-text="$store.library.federationSearch.error"></div>
-                                </template>
-                                <template x-if="!$store.library.similaritySearchLabel && $store.library.federationSearch.loading && $store.library.federationSearch.tracks.length === 0">
-                                    <div class="federation-search-status">Searching peers…</div>
-                                </template>
-                                <div class="search-artists-row"
-                                     x-show="!$store.library.similaritySearchLabel && $store.library.federationSearch.artists.length > 0"
-                                     x-cloak>
-                                    <template x-for="artist in $store.library.federationSearch.artists"
-                                              :key="artist.key.normalized_name">
-                                        <div class="search-artist-card federation-entity-card"
-                                             @click="$store.library.openFederatedArtist(artist)">
-                                            <div class="search-artist-img">
-                                                <template x-if="$store.library.federationArtistImage(artist)">
-                                                    <img class="artwork-image" :src="$store.library.federationArtistImage(artist) || null"
-                                                         alt="" aria-hidden="true" loading="lazy"
-                                                         @load="$event.currentTarget.classList.add('artwork-loaded')"
-                                                         @error="$store.library.federationArtworkFailed($event.currentTarget)">
-                                                </template>
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                                    <circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/>
-                                                </svg>
-                                            </div>
-                                            <div class="search-artist-name" x-text="artist.name"></div>
-                                            <div class="federation-source-count"
-                                                 x-text="`${artist.peers.length} peer${artist.peers.length === 1 ? '' : 's'}`"></div>
-                                        </div>
-                                    </template>
-                                </div>
-                                <div class="search-releases-row"
-                                     x-show="!$store.library.similaritySearchLabel && $store.library.federationSearch.releases.length > 0"
-                                     x-cloak>
-                                    <template x-for="release in $store.library.federationSearch.releases"
-                                              :key="JSON.stringify(release.key)">
-                                        <div class="search-release-card federation-entity-card"
-                                             @click="$store.library.openFederatedRelease($store.library.hydrateFederationSearchRelease(release))">
-                                            <div class="search-release-cover">
-                                                <template x-if="$store.library.federationReleaseCover(release)">
-                                                    <img class="artwork-image" :src="$store.library.federationReleaseCover(release) || null"
-                                                         alt="" aria-hidden="true" loading="lazy"
-                                                         @load="$event.currentTarget.classList.add('artwork-loaded')"
-                                                         @error="$store.library.federationArtworkFailed($event.currentTarget)">
-                                                </template>
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                                                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/>
-                                                </svg>
-                                            </div>
-                                            <div class="card-title" x-text="release.title"></div>
-                                            <div class="card-subtitle"
-                                                 x-text="[release.year, ...(release.artists || [])].filter(Boolean).join(' · ')"></div>
-                                        </div>
-                                    </template>
-                                </div>
-                                <template x-for="(track, idx) in $store.searchGroups.rows($store.library.federationSearch.tracks,'federation',!$store.library.similaritySearchLabel)"
-                                          :key="track.key.content_id">
-                                    <div class="search-result-entry" data-search-source="federation" :id="track._searchRowId" :class="{ 'search-result-variant':track._searchGroupChild, 'search-result-hidden':track._searchGroupHidden }" :aria-hidden="track._searchGroupHidden" :inert="track._searchGroupHidden ? true : null" :style="$store.library.similaritySearchLabel ? `order:${$store.library.similarityTrackOrder(track)}` : ''"><div class="search-result-clip">
-<div class="track-row federation-track-row" :class="{ 'search-track-variant':track._searchGroupChild }"
-
-                                         tabindex="0" @click="if ($event.detail < 2) { $store.library.similaritySearchLabel ? $store.library.playSimilarityResult($store.library.federationQueueTrack(track)) : $store.library.playFederatedTrack(track) }" @dblclick.stop @keydown.enter.self.prevent="$store.library.similaritySearchLabel ? $store.library.playSimilarityResult($store.library.federationQueueTrack(track)) : $store.library.playFederatedTrack(track)">
-                                        <span class="track-num federation-track-status">
-                                            <template x-if="!$store.library.federationDownload(track.key.content_id) && !$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                                                    <circle cx="12" cy="12" r="3"/>
-                                                    <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
-                                                    <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
-                                                </svg>
-                                            </template>
-                                            <template x-if="$store.library.federationFailure(track.key.content_id) && !$store.library.isTrackLocal(track)">
-                                                <span class="federation-error-badge"
-                                                      :title="$store.library.federationFailure(track.key.content_id).message">!</span>
-                                            </template>
-                                            <template x-if="$store.library.federationDownload(track.key.content_id)">
-                                                <span class="federation-download-progress"
-                                                      :class="{ indeterminate: !$store.library.federationDownload(track.key.content_id).total }">
-                                                    <svg viewBox="0 0 20 20" aria-hidden="true">
-                                                        <circle class="progress-track" cx="10" cy="10" r="8"/>
-                                                        <circle class="progress-value" cx="10" cy="10" r="8"
-                                                                :style="`stroke-dashoffset: ${50.27 * (1 - $store.library.federationDownload(track.key.content_id).percent / 100)}`"/>
-                                                    </svg>
-                                                    <span class="progress-percent"
-                                                          x-show="$store.library.federationDownload(track.key.content_id).total"
-                                                          x-text="Math.round($store.library.federationDownload(track.key.content_id).percent)"></span>
-                                                    <span class="federation-download-tooltip"
-                                                          x-text="$store.library.federationDownloadTooltip(track.key.content_id)"></span>
-                                                </span>
-                                            </template>
-                                        </span>
-                                        <div class="track-info">
-                                            <div class="track-title search-track-title">
-    <button class="search-version-toggle" type="button" x-show="!track._searchGroupChild && track._searchGroupCount>1" @click.stop="$store.searchGroups.toggle(track)" @dblclick.stop :aria-expanded="track._searchGroupExpanded" :aria-controls="track._searchGroupControls" :title="$store.searchGroups.label(track)" :aria-label="$store.searchGroups.label(track)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span x-text="track._searchGroupCount"></span>
-    </button>
-    <span class="search-track-name" x-text="track.metadata.title"></span>
-</div>
-                                            <div class="track-artists-inline"
-                                                 x-text="$store.library.federationArtistLine(track)"></div>
-                                        <div class="search-variant-detail" x-show="track._searchGroupChild" x-text="$store.searchGroups.description(track)"></div>
-</div>
-                                        <span class="federation-source-count"
-                                              x-text="`${track.availability.federation.length} peer${track.availability.federation.length === 1 ? '' : 's'}`"></span>
-                                        <span class="track-actions">
-                                            <button class="track-action-btn info-btn"
-                                                    @click.stop="$store.library.openFederationTrackInfo(track)"
-                                                    title="{{ t.player_track_info }}">
-                                                <span class="info-letter">i</span>
-                                            </button>
-                                            <button class="like-btn"
-                                                    :class="{ liked: $store.library.federationIsLiked(track) }"
-                                                    @click.stop="$store.library.toggleFederationLike(track)"
-                                                    title="{{ t.player_like }}">
-                                                <svg viewBox="0 0 24 24"
-                                                     :fill="$store.library.federationIsLiked(track) ? 'currentColor' : 'none'"
-                                                     stroke="currentColor" stroke-width="2">
-                                                    <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/>
-                                                </svg>
-                                            </button>
-                                            <button class="track-action-btn queue-insert-btn queue-next-btn"
-                                                    @click.stop="$store.library.enqueueFederatedTrack(track, true)"
-                                                    title="{{ t.player_play_next }}">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h10M5 12h7M5 18h10"/><path d="M17 9l4 3-4 3" fill="currentColor" stroke="none"/></svg>
-                                            </button>
-                                            <button class="track-action-btn queue-insert-btn queue-end-btn"
-                                                    @click.stop="$store.library.enqueueFederatedTrack(track, false)"
-                                                    title="{{ t.player_add_to_queue }}">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h14M5 12h14M5 18h7"/><path d="M17 15l4 3-4 3" fill="currentColor" stroke="none"/></svg>
-                                            </button>
-                                            <button data-member-only class="track-action-btn playlist-add-btn"
-                                                    @click.stop="$store.playlists.showFederationPicker(track)"
-                                                    title="{{ t.player_add_to_playlist }}">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
-                                                </svg>
-                                            </button>
-                                        </span>
-                                        <span class="track-duration"
-                                              x-text="formatTime(track.metadata.duration_seconds)"></span>
-                                    </div>
-                                </div></div>
-</template>
-                                <div class="similarity-search-inline-progress"
-                                     x-show="$store.library.similaritySearchLabel && $store.library.similaritySearchStats.loading"
-                                     x-cloak>
-                                    <span class="similarity-search-inline-spinner" aria-hidden="true"></span>
-                                    <span>Searching federation for more similar tracks…</span>
-                                </div>
+                            <template x-if="$store.library.federationSearch.error">
+                                <p class="federation-search-status error" role="status" x-text="$store.library.federationSearch.error"></p>
+                            </template>
+                            <div class="similarity-search-inline-progress"
+                                 x-show="$store.library.similaritySearchLabel && $store.library.similaritySearchStats.loading" x-cloak>
+                                <span class="similarity-search-inline-spinner" aria-hidden="true"></span>
+                                <span>Searching federation for more similar tracks…</span>
                             </div>
                         </div>
                     </template>
@@ -913,15 +777,10 @@
                                             <div class="track-title">
                                                 <span x-text="track.title"></span>
                                                 <span style="color:var(--text-subdued)"> · </span>
-                                                <a class="artist-link" @click.stop="$store.library.openRelease(track.release_id)" x-text="track.release_title"></a>
+                                                <a class="artist-link" :href="$store.library.releaseHref($store.library.trackRelease(track))" @click.stop @dblclick.stop x-text="track.release_title"></a>
                                             </div>
                                             <div class="track-artists-inline">
-                                                <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
-                                                    <span>
-                                                        <template x-if="artistIdx > 0"><span>, </span></template>
-                                                        <a class="artist-link" @click.stop="$store.library.openArtist(artist.id)" x-text="artist.label"></a>
-                                                    </span>
-                                                </template>
+                                                {% include "player/track_artist_links.html" %}
                                             </div>
                                         </div>
                                     </div>
@@ -1000,7 +859,7 @@
                             <h2 class="artist-release-group-title">Federation</h2>
                             <div class="card-grid">
                                 <template x-for="release in $store.library.artistFederation.releases"
-                                          :key="release.key">
+                                          :key="release.identity">
                                     <div class="card federation-release-card"
                                          @click="$store.library.openFederatedRelease(release)">
                                         <div class="card-img">
@@ -1017,7 +876,8 @@
                                                 <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                                             </button>
                                         </div>
-                                        <div class="card-title" x-text="release.title"></div>
+                                        <div class="card-title"><a class="artist-link" :href="$store.library.releaseHref(release)"
+                                           @click.stop x-text="release.title"></a></div>
                                         <div class="card-subtitle">
                                             <span x-text="release.year || ''"></span>
                                             <span x-text="release.tracks.length + ' {{ t.player_tracks_count }}'"></span>
@@ -1065,8 +925,10 @@
                                     </span>
                                     <div class="track-info">
                                         <div class="track-title" x-text="track.metadata.title"></div>
-                                        <div class="track-artists-inline"
-                                             x-text="[track.metadata.release?.title, $store.library.federationArtistLine(track)].filter(Boolean).join(' · ')"></div>
+                                        <div class="track-artists-inline">
+                                            {% include "player/track_artist_links.html" %}
+                                        </div>
+                                        <a class="artist-link search-variant-detail" :href="$store.library.releaseHref($store.library.trackRelease(track))" @click.stop @dblclick.stop x-text="track.metadata.release?.title"></a>
                                     </div>
                                     <span></span>
                                     <span class="track-actions">
@@ -1145,15 +1007,10 @@
                                             <div class="track-title">
                                                 <span x-text="track.title"></span>
                                                 <span style="color:var(--text-subdued)"> · </span>
-                                                <a class="artist-link" @click.stop="$store.library.openRelease(track.release_id)" x-text="track.release_title"></a>
+                                                <a class="artist-link" :href="$store.library.releaseHref($store.library.trackRelease(track))" @click.stop @dblclick.stop x-text="track.release_title"></a>
                                             </div>
                                             <div class="track-artists-inline">
-                                                <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
-                                                    <span>
-                                                        <template x-if="artistIdx > 0"><span>, </span></template>
-                                                        <a class="artist-link" @click.stop="$store.library.openArtist(artist.id)" x-text="artist.label"></a>
-                                                    </span>
-                                                </template>
+                                                {% include "player/track_artist_links.html" %}
                                             </div>
                                         </div>
                                     </div>
@@ -1196,6 +1053,10 @@
             </template>
 
             <!-- Release Detail -->
+            <template x-if="$store.library.view === 'release_detail' && !$store.library.currentRelease">
+                <div class="empty-state" role="status"
+                     x-text="$store.library.releaseUnavailable ? '{{ t.player_release_unavailable }}' : '{{ t.player_loading_release }}'"></div>
+            </template>
             <template x-if="$store.library.view === 'release_detail' && $store.library.currentRelease">
                 <div>
                     <div class="breadcrumb">
@@ -1203,7 +1064,7 @@
                            x-text="$store.library.artistFilter === 'uploads' ? '{{ t.player_my_uploads }}' : '{{ t.player_global_library }}'"></a>
                         <span>/</span>
                         <template x-if="$store.library.currentRelease.artists.length > 0">
-                            <a @click="$store.library.currentRelease.artists[0].id ? $store.library.openArtist($store.library.currentRelease.artists[0].id) : $store.library.openFederatedArtist($store.library.currentRelease.artists[0].name)"
+                            <a :href="$store.library.artistHref($store.library.currentRelease.artists[0])"
                                x-text="$store.library.currentRelease.artists[0].name"></a>
                         </template>
                         <span>/</span>
@@ -1212,7 +1073,8 @@
                     <div class="release-header">
                         <div class="release-cover">
                             <template x-if="$store.library.currentRelease.cover_url">
-                                <img :src="$store.library.currentRelease.cover_url" alt="" aria-hidden="true">
+                                <img :src="$store.library.currentRelease.cover_url" alt="" aria-hidden="true"
+                                     @error="$store.library.releaseArtworkFailed($el)">
                             </template>
                             <template x-if="!$store.library.currentRelease.cover_url">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
@@ -1221,6 +1083,8 @@
                         <div class="release-meta">
                             <div class="release-type">
                                 <span x-text="$store.library.currentRelease.release_type"></span>
+                                <span class="federation-source-count" x-show="$store.library.currentRelease.federationPeers?.length"
+                                      x-text="'{{ t.player_peers }} · ' + ($store.library.currentRelease.federationPeers?.length || 0)"></span>
                                 <span class="federation-live-badge"
                                       x-show="$store.library.releaseFederationLoading"
                                       x-cloak>FEDERATION LIVE</span>
@@ -1235,11 +1099,11 @@
                                 </button>
                             </div>
                             <div class="release-artists">
-                                <template x-for="(artist, artistIdx) in $store.library.currentRelease.artists" :key="artist.id">
+                                <template x-for="(artist, artistIdx) in $store.library.currentRelease.artists" :key="artist.id || artist.name">
                                     <span>
                                         <template x-if="artistIdx > 0"><span>, </span></template>
                                         <a class="artist-link"
-                                           @click="artist.id ? $store.library.openArtist(artist.id) : $store.library.openFederatedArtist(artist.name)"
+                                           :href="$store.library.artistHref(artist)"
                                            x-text="artist.name"></a>
                                     </span>
                                 </template>
@@ -1330,14 +1194,7 @@
                             <div class="track-info">
                                 <div class="track-title" x-text="track.title"></div>
                                 <div class="track-artists-inline">
-                                    <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
-                                        <span>
-                                            <template x-if="artistIdx > 0"><span>, </span></template>
-                                            <a class="artist-link"
-                                               @click.stop="artist.id ? $store.library.openArtist(artist.id) : $store.library.openFederatedArtist(artist.label.replace(/^ft\\.\\s*/, ''))"
-                                               x-text="artist.label"></a>
-                                        </span>
-                                    </template>
+                                    {% include "player/track_artist_links.html" %}
                                 </div>
                             </div>
                             <span></span>
@@ -1499,14 +1356,7 @@
                                 <div class="playlist-track-copy">
                                     <div class="track-title" x-text="track.title"></div>
                                     <div class="track-artists-inline">
-                                        <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
-                                            <span>
-                                                <template x-if="artistIdx > 0"><span>, </span></template>
-                                                <a class="artist-link"
-                                                   @click.stop="artist.id ? $store.library.openArtist(artist.id) : $store.library.openFederatedArtist(artist.label.replace(/^ft\\.\\s*/, ''))"
-                                                   x-text="artist.label"></a>
-                                            </span>
-                                        </template>
+                                        {% include "player/track_artist_links.html" %}
                                     </div>
                                 </div>
                             </div>
@@ -1633,11 +1483,11 @@
                         <div class="queue-track-info">
                             <div class="queue-track-title" x-text="item.track.title"></div>
                             <div class="queue-track-artist">
-                                <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
+                                <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.href + '-' + artistIdx">
                                     <span>
                                         <template x-if="artistIdx > 0"><span>, </span></template>
                                         <a class="artist-link"
-                                           @click.stop="artist.id ? $store.library.openArtist(artist.id) : $store.library.openFederatedArtist(artist.label.replace(/^ft\\.\\s*/, ''))"
+                                           :href="artist.href" @click.stop @dblclick.stop
                                            x-text="artist.label"></a>
                                     </span>
                                 </template>
@@ -1705,10 +1555,12 @@
                             </button>
                         </div>
                         <div class="player-track-artist">
-                            <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks($store.player.currentTrack)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
+                            <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks($store.player.currentTrack)" :key="artist.href + '-' + artistIdx">
                                 <span>
                                     <template x-if="artistIdx > 0"><span>, </span></template>
-                                    <a class="artist-link" @click.stop="$store.library.openArtist(artist.id)" x-text="artist.label"></a>
+                                    <a class="artist-link" :href="artist.href"
+                                       @click.stop="if ($store.library.followsHere($event) && $store.mobile.playerExpanded) $store.mobile.closePlayerFullscreen()"
+                                       x-text="artist.label"></a>
                                 </span>
                             </template>
                             <template x-if="$store.player.currentTrack.release_year">
@@ -1716,7 +1568,9 @@
                             </template>
                         </div>
                         <div class="player-track-release" x-show="$store.player.currentTrack.release_title">
-                            <a class="artist-link" @click.stop="$store.player.currentTrack.release_id && $store.library.openRelease($store.player.currentTrack.release_id)" x-text="$store.player.currentTrack.release_title"></a>
+                            <a class="artist-link" :href="$store.library.releaseHref($store.library.trackRelease($store.player.currentTrack))"
+                               @click.stop="if ($store.library.followsHere($event) && $store.mobile.playerExpanded) $store.mobile.closePlayerFullscreen()"
+                               x-text="$store.player.currentTrack.release_title"></a>
                         </div>
                     </div>
                 </div>
@@ -1979,11 +1833,9 @@
                 <div class="mobile-expanded-queue-empty">{{ t.player_queue_empty }}</div>
             </template>
             <template x-for="item in $store.queue.displayItems()" :key="'mobile-expanded-queue-' + item.key">
-                <button class="mobile-expanded-queue-row"
+                <div class="mobile-expanded-queue-row"
                         :class="{ current: item.state === 'current', played: item.state === 'played', 'foreign-jam-track': $store.queue.isForeignJamTrack(item.track) }"
-                        :style="$store.queue.isForeignJamTrack(item.track) ? $store.queue.contributorStyle(item.track) : ''"
-                        type="button"
-                        @click="item.index >= 0 ? $store.queue.playFromIndex(item.index) : $store.player.play(item.track)">
+                        :style="$store.queue.isForeignJamTrack(item.track) ? $store.queue.contributorStyle(item.track) : ''">
                     <div class="mobile-expanded-queue-cover">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                         <template x-if="item.track.cover_url">
@@ -1991,18 +1843,20 @@
                         </template>
                     </div>
                     <div class="mobile-expanded-queue-info">
-                        <div class="mobile-expanded-queue-name" x-text="item.track.title"></div>
+                        <button class="mobile-expanded-queue-name" type="button"
+                                @click="item.index >= 0 ? $store.queue.playFromIndex(item.index) : $store.player.play(item.track)"
+                                x-text="item.track.title"></button>
                         <div class="mobile-expanded-queue-artist">
-                            <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.label + '-' + artist.id + '-' + artistIdx">
+                            <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(item.track)" :key="artist.href + '-' + artistIdx">
                                 <span>
                                     <template x-if="artistIdx > 0"><span>, </span></template>
-                                    <span x-text="artist.label"></span>
+                                    <a class="artist-link" :href="artist.href" @click.stop="if ($store.library.followsHere($event)) $store.mobile.closePlayerFullscreen()" x-text="artist.label"></a>
                                 </span>
                             </template>
                         </div>
                     </div>
                     <span class="mobile-expanded-queue-time" x-text="formatTime(item.track.duration_seconds)"></span>
-                </button>
+                </div>
             </template>
             </div>
         </div>

@@ -49,8 +49,8 @@ pub(super) struct ArtistRef {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-pub(super) struct TrackItem {
-    pub(super) id: i64,
+pub(crate) struct TrackItem {
+    pub(crate) id: i64,
     pub(super) content_id: Option<String>,
     pub(super) title: String,
     pub(super) track_number: Option<i32>,
@@ -334,10 +334,25 @@ pub(super) struct ShareDetail {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct SearchResults {
+    pub(super) scores: SearchScores,
     pub(super) podcasts: Vec<serde_json::Value>,
     pub(super) artists: Vec<ArtistCard>,
-    pub(super) releases: Vec<ReleaseCard>,
+    pub(super) releases: Vec<SearchReleaseCard>,
     pub(super) tracks: Vec<TrackItem>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct SearchReleaseCard {
+    #[serde(flatten)]
+    pub(super) release: ReleaseCard,
+    pub(super) artists: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize, JsonSchema)]
+pub(super) struct SearchScores {
+    pub(super) artists: std::collections::HashMap<i64, u32>,
+    pub(super) releases: std::collections::HashMap<i64, u32>,
+    pub(super) tracks: std::collections::HashMap<i64, u32>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -594,6 +609,11 @@ pub(super) struct FederationArtworkQuery {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FederationArtistQuery {
     pub(super) name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FederationReleaseQuery {
+    pub(super) key: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

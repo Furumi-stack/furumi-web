@@ -1,0 +1,4 @@
+<template x-for="(artist, artistIdx) in $store.library.trackArtistLinks(track)" :key="artist.href + '-' + artistIdx">
+    <span><span x-show="artistIdx > 0">, </span><a class="artist-link" :href="artist.href"
+        @click.stop @dblclick.stop x-text="artist.label"></a></span>
+</template>

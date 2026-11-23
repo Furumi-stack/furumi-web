@@ -7,12 +7,16 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use music_dht::{ItemKind, LibraryItem, normalize_content_id};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::Row as _;
 use tokio::io::AsyncReadExt;
 
 use super::{Federation, now_iso};
+mod local_catalog;
+#[cfg(test)]
+mod search_tests;
+use local_catalog::LocalCatalog;
 
 const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -33,7 +37,7 @@ pub struct ArtistRefDto {
     pub local_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ReleaseKeyDto {
     pub normalized_title: String,
     pub primary_artists: Vec<String>,
@@ -91,6 +95,7 @@ pub struct TrackDto {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchEvent {
+    pub score: u32,
     pub search_id: String,
     pub sequence: u64,
     pub kind: &'static str,
@@ -155,9 +160,9 @@ impl Federation {
                 },
                 similarity_score: Some(track.similarity_score),
             };
-            persist_track_ref(&pool, &dto).await?;
             prepared.push(dto);
         }
+        persist_track_refs(&pool, prepared.iter()).await?;
         Ok(prepared)
     }
 
@@ -176,23 +181,24 @@ impl Federation {
                     .search_network(&name)
                     .await
                     .map_err(|err| anyhow::anyhow!("federated artist search failed: {err}"))?;
-                let owners: std::collections::HashSet<_> = outcome
-                    .network_results
-                    .iter()
-                    .filter(|item| {
-                        (item.kind == ItemKind::Artist && item.normalized_name == normalized)
-                            || item
-                                .artist_names
-                                .iter()
-                                .chain(&item.featured_artist_names)
-                                .any(|artist| music_dht::normalize_name(artist) == normalized)
-                    })
-                    .map(|item| item.owner)
-                    .collect();
-                for owner in owners {
+                // Deep links carry normalized names. Peers may require their
+                // original spelling (for example "AC/DC") in catalog requests.
+                let mut owners = HashMap::new();
+                for item in &outcome.network_results {
+                    if item.kind == ItemKind::Artist && item.normalized_name == normalized {
+                        owners.insert(item.owner, item.name.clone());
+                    } else if let Some(display) = item
+                        .artist_names
+                        .iter()
+                        .chain(&item.featured_artist_names)
+                        .find(|artist| music_dht::normalize_name(artist) == normalized)
+                    {
+                        owners.entry(item.owner).or_insert_with(|| display.clone());
+                    }
+                }
+                for (owner, name) in owners {
                     let service = std::sync::Arc::clone(&service);
                     let sender = sender.clone();
-                    let name = name.clone();
                     tokio::spawn(async move {
                         let result = tokio::time::timeout(
                             std::time::Duration::from_secs(8),
@@ -232,7 +238,6 @@ impl Federation {
             known_contacts = service.known_peers().len(),
             "federated search started"
         );
-        let own = service.endpoint_id();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(20),
             service.search_network(query),
@@ -256,147 +261,7 @@ impl Federation {
             .collect();
 
         let pool = self.pool().await?;
-        let mut by_content: HashMap<String, TrackDto> = HashMap::new();
-        for item in all_items.iter().filter(|item| item.kind == ItemKind::Track) {
-            let Some(content_id) = item.content_id.as_deref().and_then(normalize_content_id) else {
-                // A globally usable track reference must be verifiable.
-                continue;
-            };
-            let local = local_availability(&pool, &content_id).await?;
-            let source = FederationSourceDto {
-                owner: item.owner.to_string(),
-                item_id: hex(item.id.as_bytes()),
-            };
-            let entry = by_content.entry(content_id.clone()).or_insert_with(|| {
-                track_from_item(content_id.clone(), item, local, item.owner == own)
-            });
-            if !entry.availability.federation.iter().any(|candidate| {
-                candidate.owner == source.owner && candidate.item_id == source.item_id
-            }) {
-                entry.availability.federation.push(source);
-            }
-            if entry.availability.local.is_some() {
-                entry.availability.state = "local";
-            }
-        }
-
-        let mut tracks: Vec<_> = by_content.into_values().collect();
-        tracks.sort_by(|left, right| {
-            left.metadata
-                .title
-                .to_lowercase()
-                .cmp(&right.metadata.title.to_lowercase())
-        });
-
-        let mut events = Vec::with_capacity(all_items.len());
-        for (index, track) in tracks.into_iter().enumerate() {
-            persist_track_ref(&pool, &track).await?;
-            let peer = track
-                .availability
-                .federation
-                .first()
-                .map(|source| source.owner.clone());
-            events.push(SearchEvent {
-                search_id: search_id.to_owned(),
-                sequence: index as u64 + 1,
-                kind: "federation.track",
-                peer,
-                entity_key: serde_json::to_value(&track.key)?,
-                entity: serde_json::to_value(track)?,
-            });
-        }
-        let mut artist_peers: HashMap<String, (String, Vec<String>)> = HashMap::new();
-        let mut releases: HashMap<String, Value> = HashMap::new();
-        for item in &all_items {
-            match item.kind {
-                ItemKind::Artist => {
-                    let key = music_dht::normalize_name(&item.name);
-                    let entry = artist_peers
-                        .entry(key)
-                        .or_insert_with(|| (item.name.clone(), Vec::new()));
-                    let owner = item.owner.to_string();
-                    if !entry.1.contains(&owner) {
-                        entry.1.push(owner);
-                    }
-                }
-                ItemKind::Release => {
-                    let artist_keys: Vec<String> = item
-                        .artist_names
-                        .iter()
-                        .map(|name| music_dht::normalize_name(name))
-                        .collect();
-                    let normalized_title = music_dht::normalize_name(&item.name);
-                    let cover_url = all_items
-                        .iter()
-                        .find(|track| {
-                            track.kind == ItemKind::Track
-                                && track.release_title.as_deref().is_some_and(|title| {
-                                    music_dht::normalize_name(title) == normalized_title
-                                })
-                                && track.year == item.year
-                        })
-                        .map(|track| {
-                            format!(
-                                "/api/player/federation/tracks/artwork?owner={}&item_id={}",
-                                track.owner,
-                                hex(track.id.as_bytes())
-                            )
-                        });
-                    let key = format!(
-                        "{}|{}|{}",
-                        normalized_title,
-                        artist_keys.join(","),
-                        item.year.map_or_else(String::new, |year| year.to_string())
-                    );
-                    releases.entry(key.clone()).or_insert_with(|| {
-                        json!({
-                            "key": {
-                                "normalized_title": music_dht::normalize_name(&item.name),
-                                "primary_artists": artist_keys,
-                                "release_type": null,
-                                "year": item.year,
-                            },
-                            "title": item.name,
-                            "artists": item.artist_names,
-                            "year": item.year,
-                            "cover_url": cover_url,
-                            "sources": [{
-                                "owner": item.owner.to_string(),
-                                "item_id": hex(item.id.as_bytes()),
-                            }],
-                        })
-                    });
-                }
-                ItemKind::Track => {}
-            }
-        }
-        for (key, (name, peers)) in artist_peers {
-            let sequence = events.len() as u64 + 1;
-            events.push(SearchEvent {
-                search_id: search_id.to_owned(),
-                sequence,
-                kind: "federation.artist",
-                peer: peers.first().cloned(),
-                entity_key: json!({ "normalized_name": key }),
-                entity: json!({
-                    "key": { "normalized_name": key },
-                    "name": name,
-                    "image_url": null,
-                    "peers": peers,
-                }),
-            });
-        }
-        for (key, release) in releases {
-            let sequence = events.len() as u64 + 1;
-            events.push(SearchEvent {
-                search_id: search_id.to_owned(),
-                sequence,
-                kind: "federation.release",
-                peer: None,
-                entity_key: json!({ "composite": key }),
-                entity: release,
-            });
-        }
+        let events = build_search_events(&pool, search_id, query, &all_items).await?;
         tracing::info!(
             search_id,
             query,
@@ -406,6 +271,211 @@ impl Federation {
         );
         Ok(events)
     }
+}
+
+async fn build_search_events(
+    pool: &sqlx::PgPool,
+    search_id: &str,
+    query: &str,
+    all_items: &[LibraryItem],
+) -> Result<Vec<SearchEvent>> {
+    let catalog = LocalCatalog::for_items(pool, all_items).await?;
+    let relevance = crate::search_relevance::SearchRelevance::new(query);
+    let mut by_content: HashMap<String, TrackDto> = HashMap::new();
+    let mut track_covers = HashMap::new();
+    for item in all_items.iter().filter(|item| item.kind == ItemKind::Track) {
+        let Some(content_id) = item.content_id.as_deref().and_then(normalize_content_id) else {
+            // A globally usable track reference must be verifiable.
+            continue;
+        };
+        let source = FederationSourceDto {
+            owner: item.owner.to_string(),
+            item_id: hex(item.id.as_bytes()),
+        };
+        if let Some(title) = item.release_title.as_deref() {
+            let key = ReleaseKeyDto::new(
+                title,
+                &item.artist_names,
+                item.year,
+                item.release_type.as_deref(),
+            );
+            track_covers.entry((item.owner, key)).or_insert_with(|| {
+                format!(
+                    "/api/player/federation/tracks/artwork?owner={}&item_id={}",
+                    source.owner, source.item_id
+                )
+            });
+        }
+        let entry = by_content.entry(content_id.clone()).or_insert_with(|| {
+            let mut dto = track_from_item(content_id, item);
+            catalog.enrich(&mut dto);
+            dto
+        });
+        if !entry
+            .availability
+            .federation
+            .iter()
+            .any(|candidate| candidate.owner == source.owner && candidate.item_id == source.item_id)
+        {
+            entry.availability.federation.push(source);
+        }
+    }
+
+    let mut tracks: Vec<_> = by_content.into_values().collect();
+    tracks.sort_by_cached_key(|t| (t.metadata.title.to_lowercase(), t.key.content_id.clone()));
+
+    let mut events = Vec::with_capacity(all_items.len());
+    let mut retained = Vec::new();
+    for track in tracks {
+        let m = &track.metadata;
+        let Some(score) = relevance.score(
+            &m.title,
+            m.artists
+                .iter()
+                .chain(&m.featured_artists)
+                .map(|a| a.name.as_str()),
+            m.release.as_ref().map(|r| r.title.as_str()),
+        ) else {
+            continue;
+        };
+        retained.push((score, track));
+    }
+    persist_track_refs(pool, retained.iter().map(|(_, track)| track)).await?;
+    let local_ids: Vec<_> = retained
+        .iter()
+        .filter_map(|(_, track)| track.availability.local.as_ref().map(|l| l.track_id))
+        .collect();
+    let mut local_tracks: HashMap<_, _> = crate::player::load_track_items_by_ids(pool, &local_ids)
+        .await?
+        .into_iter()
+        .map(|track| (track.id, track))
+        .collect();
+    for (score, track) in retained {
+        let peer = track
+            .availability
+            .federation
+            .first()
+            .map(|source| source.owner.clone());
+        let local_track = track
+            .availability
+            .local
+            .as_ref()
+            .and_then(|l| local_tracks.remove(&l.track_id));
+        let mut entity = serde_json::to_value(&track)?;
+        if let Some(local) = local_track {
+            entity["local_track"] = serde_json::to_value(local)?;
+        }
+        events.push(SearchEvent {
+            search_id: search_id.to_owned(),
+            score,
+            sequence: events.len() as u64 + 1,
+            kind: "federation.track",
+            peer,
+            entity_key: serde_json::to_value(&track.key)?,
+            entity,
+        });
+    }
+    let mut artist_peers: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    let mut releases = HashMap::<ReleaseKeyDto, (Value, Vec<FederationSourceDto>, u32)>::new();
+    for item in all_items {
+        match item.kind {
+            ItemKind::Artist => {
+                let key = music_dht::normalize_name(&item.name);
+                let entry = artist_peers
+                    .entry(key)
+                    .or_insert_with(|| (item.name.clone(), Vec::new()));
+                let owner = item.owner.to_string();
+                if !entry.1.contains(&owner) {
+                    entry.1.push(owner);
+                }
+            }
+            ItemKind::Release => {
+                let remote_key = ReleaseKeyDto::new(
+                    &item.name,
+                    &item.artist_names,
+                    item.year,
+                    item.release_type.as_deref(),
+                );
+                let local = catalog.release(&remote_key);
+                let title = local.map_or(item.name.as_str(), |r| &r.title);
+                let artists = local.map_or(&item.artist_names, |r| &r.artists);
+                let Some(score) = relevance.score(title, artists.iter().map(String::as_str), None)
+                else {
+                    continue;
+                };
+                let cover_url =
+                    crate::player::cover_variant_url(local.and_then(|r| r.cover_file_id), "medium")
+                        .or_else(|| track_covers.get(&(item.owner, remote_key.clone())).cloned());
+                let key = local.map_or(remote_key, |release| release.key());
+                let (entity, sources, _) = releases.entry(key.clone()).or_insert_with(|| {
+                    (
+                        json!({
+                            "key": key,
+                            "local_id": local.map(|r|r.id),
+                            "title": title,
+                            "artists": artists,
+                            "year": key.year,
+                            "release_type": key.release_type,
+                            "cover_url": null
+                        }),
+                        Vec::new(),
+                        score,
+                    )
+                });
+                if entity["cover_url"].is_null() {
+                    entity["cover_url"] = json!(cover_url);
+                }
+                let source = FederationSourceDto {
+                    owner: item.owner.to_string(),
+                    item_id: hex(item.id.as_bytes()),
+                };
+                if !sources
+                    .iter()
+                    .any(|s| s.owner == source.owner && s.item_id == source.item_id)
+                {
+                    sources.push(source);
+                }
+            }
+            ItemKind::Track => {}
+        }
+    }
+    for (key, (name, peers)) in artist_peers {
+        let local = catalog.artist(&key);
+        let name = local.map_or(name.as_str(), |a| &a.name);
+        let Some(score) = relevance.score(name, std::iter::empty(), None) else {
+            continue;
+        };
+        let sequence = events.len() as u64 + 1;
+        events.push(SearchEvent {
+                search_id: search_id.to_owned(),
+                sequence,
+                score,
+                kind: "federation.artist",
+                peer: peers.first().cloned(),
+                entity_key: json!({ "normalized_name": key }),
+                entity: json!({
+                    "key": { "normalized_name": key },
+                    "name": name,
+                    "local_id": local.map(|a|a.id),
+                    "image_url": crate::player::cover_variant_url(local.and_then(|a|a.image_file_id),"medium"),
+                    "peers": peers,
+                }),
+            });
+    }
+    for (key, (mut release, sources, score)) in releases {
+        release["sources"] = serde_json::to_value(sources)?;
+        let sequence = events.len() as u64 + 1;
+        events.push(SearchEvent {
+            search_id: search_id.to_owned(),
+            sequence,
+            score,
+            kind: "federation.release",
+            peer: None,
+            entity_key: json!({ "composite": serde_json::to_string(&key)? }),
+            entity: release,
+        });
+    }
+    Ok(events)
 }
 
 async fn fetch_artist_catalog(
@@ -445,35 +515,21 @@ async fn fetch_artist_catalog(
     response.artist.context("peer returned no artist catalog")
 }
 
-fn track_from_item(
-    content_id: String,
-    item: &LibraryItem,
-    local: Option<LocalAvailabilityDto>,
-    own: bool,
-) -> TrackDto {
+fn track_from_item(content_id: String, item: &LibraryItem) -> TrackDto {
     let owner = item.owner.to_string();
     let item_id = hex(item.id.as_bytes());
     let artists = artist_refs(&item.artist_names);
     let featured_artists = artist_refs(&item.featured_artist_names);
     let release = item.release_title.as_ref().map(|title| ReleaseRefDto {
-        key: ReleaseKeyDto {
-            normalized_title: music_dht::normalize_name(title),
-            primary_artists: item
-                .artist_names
-                .iter()
-                .map(|artist| music_dht::normalize_name(artist))
-                .collect(),
-            release_type: None,
-            year: item.year,
-        },
+        key: ReleaseKeyDto::new(
+            title,
+            &item.artist_names,
+            item.year,
+            item.release_type.as_deref(),
+        ),
         local_id: None,
         title: title.clone(),
     });
-    let state = if local.is_some() || own {
-        "local"
-    } else {
-        "federated"
-    };
     TrackDto {
         key: TrackKeyDto { content_id },
         metadata: TrackMetadataDto {
@@ -490,8 +546,8 @@ fn track_from_item(
             )),
         },
         availability: TrackAvailabilityDto {
-            state,
-            local,
+            state: "federated",
+            local: None,
             federation: vec![FederationSourceDto { owner, item_id }],
         },
         similarity_score: None,
@@ -534,64 +590,71 @@ async fn local_availability(
     }))
 }
 
-async fn persist_track_ref(pool: &sqlx::PgPool, track: &TrackDto) -> Result<()> {
-    let metadata = serde_json::to_value(&track.metadata)?;
-    let local_id = track
-        .availability
-        .local
-        .as_ref()
-        .map(|local| local.track_id);
-    let row = sqlx::query(
-        "INSERT INTO furumusic__track_ref
-            (content_id, local_track_id, title, release_title, year,
-             duration_seconds, metadata_json, metadata_authority, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'federation', $8, $8)
-         ON CONFLICT (content_id) DO UPDATE SET
-            local_track_id = COALESCE(furumusic__track_ref.local_track_id, EXCLUDED.local_track_id),
-            title = EXCLUDED.title,
-            release_title = EXCLUDED.release_title,
-            year = EXCLUDED.year,
-            duration_seconds = EXCLUDED.duration_seconds,
-            metadata_json = EXCLUDED.metadata_json,
-            updated_at = EXCLUDED.updated_at
-         RETURNING id",
-    )
-    .bind(&track.key.content_id)
-    .bind(local_id)
-    .bind(&track.metadata.title)
-    .bind(
-        track
-            .metadata
-            .release
-            .as_ref()
-            .map(|release| &release.title),
-    )
-    .bind(track.metadata.year)
-    .bind(track.metadata.duration_seconds)
-    .bind(metadata)
-    .bind(now_iso())
-    .fetch_one(pool)
-    .await
-    .context("persisting content-addressed track reference failed")?;
-    let track_ref_id: i64 = row.get(0);
-    for source in &track.availability.federation {
+async fn persist_track_refs<'a>(
+    pool: &sqlx::PgPool,
+    tracks: impl Iterator<Item = &'a TrackDto>,
+) -> Result<()> {
+    let tracks: Vec<_> = tracks.collect();
+    if tracks.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let (local_ids, content_ids): (Vec<_>, Vec<_>) = tracks
+        .iter()
+        .filter_map(|track| {
+            track
+                .availability
+                .local
+                .as_ref()
+                .map(|local| (local.track_id, track.key.content_id.as_str()))
+        })
+        .unzip();
+    if !local_ids.is_empty() {
+        // Replacing a track's audio keeps its SQL id. Its previous content
+        // reference still owns its likes and sources, but no longer the local id.
         sqlx::query(
-            "INSERT INTO furumusic__federation_track_source
-                (track_ref_id, owner_peer_id, item_id, last_seen_ms, metadata_json)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (owner_peer_id, item_id) DO UPDATE SET
-                track_ref_id = EXCLUDED.track_ref_id,
-                last_seen_ms = EXCLUDED.last_seen_ms,
-                metadata_json = EXCLUDED.metadata_json",
+            "UPDATE furumusic__track_ref ref SET local_track_id=NULL
+                     FROM unnest($1::bigint[],$2::text[]) AS live(track_id,content_id)
+                     WHERE ref.local_track_id=live.track_id AND ref.content_id<>live.content_id",
         )
-        .bind(track_ref_id)
-        .bind(&source.owner)
-        .bind(&source.item_id)
-        .bind(chrono::Utc::now().timestamp_millis())
-        .bind(json!({ "track": track.metadata }))
-        .execute(pool)
+        .bind(local_ids)
+        .bind(content_ids)
+        .execute(&mut *tx)
         .await?;
     }
+    // Sort conflicting keys consistently when multiple people search concurrently.
+    sqlx::query(
+        "WITH payload AS (
+             SELECT track->'key'->>'content_id' AS content_id,
+                    (track->'availability'->'local'->>'track_id')::bigint AS local_id,
+                    track->'metadata' AS meta, track->'availability'->'federation' AS sources
+             FROM jsonb_array_elements($1::jsonb) track
+         ), refs AS (
+             INSERT INTO furumusic__track_ref
+                 (content_id, local_track_id, title, release_title, year, duration_seconds,
+                  metadata_json, metadata_authority, created_at, updated_at)
+             SELECT DISTINCT ON (content_id) content_id, local_id, meta->>'title', meta->'release'->>'title',
+                    (meta->>'year')::int, (meta->>'duration_seconds')::float8, meta,
+                    CASE WHEN local_id IS NULL THEN 'federation' ELSE 'local' END, $2, $2
+             FROM payload ORDER BY content_id
+             ON CONFLICT (content_id) DO UPDATE SET
+                 local_track_id=COALESCE(EXCLUDED.local_track_id,furumusic__track_ref.local_track_id),
+                 title=EXCLUDED.title, release_title=EXCLUDED.release_title, year=EXCLUDED.year,
+                 duration_seconds=EXCLUDED.duration_seconds, metadata_json=EXCLUDED.metadata_json,
+                 metadata_authority=EXCLUDED.metadata_authority, updated_at=EXCLUDED.updated_at
+             RETURNING id,content_id
+         )
+         INSERT INTO furumusic__federation_track_source
+              (track_ref_id,owner_peer_id,item_id,last_seen_ms,metadata_json)
+         SELECT DISTINCT ON (source->>'owner',source->>'item_id') refs.id,source->>'owner',
+                source->>'item_id',$3,jsonb_build_object('track',payload.meta)
+         FROM payload JOIN refs USING (content_id) CROSS JOIN LATERAL jsonb_array_elements(sources) source
+         ORDER BY source->>'owner',source->>'item_id',refs.id
+         ON CONFLICT (owner_peer_id,item_id) DO UPDATE SET
+              track_ref_id=EXCLUDED.track_ref_id,last_seen_ms=EXCLUDED.last_seen_ms,metadata_json=EXCLUDED.metadata_json")
+        .bind(sqlx::types::Json(tracks)).bind(now_iso()).bind(chrono::Utc::now().timestamp_millis())
+        .execute(&mut *tx).await.context("persisting federated track references failed")?;
+    tx.commit().await?;
     Ok(())
 }
 

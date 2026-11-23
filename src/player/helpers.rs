@@ -1,7 +1,7 @@
 use crate::player::dto::UploaderSummary;
 use crate::player::rows::ReleaseUploaderRow;
 
-pub(super) fn cover_variant_url(file_id: Option<i64>, variant: &str) -> Option<String> {
+pub(crate) fn cover_variant_url(file_id: Option<i64>, variant: &str) -> Option<String> {
     file_id.map(|id| format!("/api/player/cover/{id}/{variant}"))
 }
 

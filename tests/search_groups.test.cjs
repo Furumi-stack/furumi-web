@@ -25,9 +25,9 @@ test('audio similarity keeps its original ungrouped ranking',()=>{
 test('playing a grouped search uses the selected source identity and only visible versions',()=>{
  const {groups,stores,context}=setup(),template=fs.readFileSync(`${__dirname}/../templates/player/scripts.html`,'utf8');
  const method=template.slice(template.indexOf('        playSearchTrack(idx)'),template.indexOf('        _setupScroll()',template.indexOf('        playSearchTrack(idx)')));
- vm.runInContext('this.library={'+method+'};',context);const library=context.library;library.searchResults={tracks:[local(1),local(2,'Other'),local(3)]};
+ vm.runInContext('this.library={'+method+'};',context);const library=context.library;library.displaySearchResults={tracks:[local(1),local(2,'Other'),{...local('fed:3'),federation_only:true}]};
  library.playSearchTrack(0);assert.deepEqual(ids(stores.queue.tracks),[1,2]);assert.equal(stores.queue.index,0);
  library.playSearchTrack(1);assert.equal(stores.queue.tracks[stores.queue.index].id,2);
- groups.toggle(groups.rows(library.searchResults.tracks,'local')[0]);library.playSearchTrack(2);
- assert.deepEqual(ids(stores.queue.tracks),[1,3,2]);assert.equal(stores.queue.tracks[stores.queue.index].id,3);
+ groups.toggle(groups.rows(library.displaySearchResults.tracks,'search')[0]);library.playSearchTrack(2);
+ assert.deepEqual(ids(stores.queue.tracks),[1,'fed:3',2]);assert.equal(stores.queue.tracks[stores.queue.index].id,'fed:3');
 });
