@@ -61,8 +61,7 @@
                                 <div class="listening-chart" :style="'--days:' + listens.chart.length" :class="{'listening-chart-year':listens.chart.length > 90}">
                                     <template x-for="(point, index) in listens.chart" :key="point.day">
                                         <button type="button" class="listening-day" :disabled="!point.plays"
-                                                :aria-label="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
-                                                :title="listens.date(point.day) + ' · ' + listens.duration(point.seconds)"
+                                                :aria-label="listens.dayLabel(point)" :title="listens.dayLabel(point)"
                                                 @click="$store.library.openListening('history', {day:point.day})">
                                             <span class="listening-bar" :style="{height: point.height + '%'}" :class="{'has-plays':point.plays}"></span>
                                             <template x-if="listens.chart.length > 90 ? point.day.endsWith('-01') && index < listens.chart.length - 12
@@ -90,7 +89,7 @@
                                             <a class="listening-heatmap-day" :data-day="point.day" :data-level="point.level"
                                                :style="{gridColumn:point.week+2, gridRow:point.weekday+2}"
                                                :href="'#listening/history?day=' + point.day"
-                                               :aria-label="listens.heatDayLabel(point)" :title="listens.heatDayLabel(point)"
+                                               :aria-label="listens.dayLabel(point)" :title="listens.dayLabel(point)"
                                                :tabindex="point.day === listens.heatFocusDay ? 0 : -1" @focus="listens.heatFocusDay = point.day"></a>
                                         </template>
                                     </div>
@@ -150,7 +149,9 @@
                    x-text="listens.text(listens.day ? 'emptyDay' : 'emptyHistory')"></p>
                 <template x-for="group in listens.groups" :key="group.day">
                     <section class="listening-history-group">
-                        <h2 x-text="listens.date(group.day)"></h2>
+                        <h2><span x-text="listens.date(group.day)"></span>
+                            <small x-show="listens.day" x-text="listens.playCount(listens.history.total)"></small>
+                        </h2>
                         <ul>
                             <template x-for="item in group.items" :key="item.id">
                                 <li class="listening-history-row">
@@ -173,17 +174,12 @@
                                         <span :title="listens.text('time')" x-text="listens.duration(Math.floor(item.listened_ms / 1000))"></span>
                                         <small x-text="item.device_name"></small>
                                     </div>
-                                    <details class="listening-item-actions" @click.outside="$el.open=false" @keydown.escape.stop="$el.open=false; $el.querySelector('summary').focus()">
-                                        <summary :aria-label="listens.text('more')" :title="listens.text('more')">⋯</summary>
-                                        <div @click="$el.closest('details').open=false">
-                                            <button @click="listens.trackAction(item, 'info')">{{ t.player_track_info }}</button>
-                                            <button x-show="item.track_id" @click="$store.likes.toggle(item.track_id)" :aria-pressed="$store.likes.has(item.track_id)">{{ t.player_like }}</button>
-                                            <button @click="listens.trackAction(item, 'next')">{{ t.player_play_next }}</button>
-                                            <button @click="listens.trackAction(item, 'queue')">{{ t.player_add_to_queue }}</button>
-                                            <button x-show="item.track_id" @click="$store.playlists.showPicker([item.track_id])">{{ t.player_add_to_playlist }}</button>
-                                            <button x-show="item.track_id" @click="$store.sharing.copyTrack(item.track_id, $event.currentTarget)">{{ t.player_share_track }}</button>
-                                        </div>
-                                    </details>
+                                    <button type="button" class="track-action-btn track-more-btn" aria-haspopup="dialog"
+                                            :aria-expanded="$store.trackActions.anchor === $el" aria-controls="track-action-menu"
+                                            aria-label="{{ t.player_track_actions }}" title="{{ t.player_track_actions }}"
+                                            @click.stop="$store.trackActions.openHistory($el, item)">
+                                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                                    </button>
                                 </li>
                             </template>
                         </ul>

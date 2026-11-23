@@ -1,0 +1,8 @@
+<template x-if="tiles.length">
+    <span class="playlist-art-tiles" :data-tiles="tiles.length" aria-hidden="true">
+        <template x-for="(url, index) in tiles" :key="index">
+            <img :src="url" alt="" decoding="async" loading="lazy"
+                 @error="$el.style.visibility = 'hidden'" @load="$el.style.visibility = ''">
+        </template>
+    </span>
+</template>

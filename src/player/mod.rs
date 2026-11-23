@@ -32,6 +32,8 @@ mod dto;
 mod helpers;
 mod listening;
 mod pins;
+mod playlist_artwork;
+mod playlist_image;
 mod queries;
 mod rows;
 mod sharing;
@@ -4259,6 +4261,7 @@ async fn playlists_handler(
     let mut cards = vec![PlaylistCard {
         id: -1,
         cover_url: None,
+        cover_urls: Vec::new(),
         title: "Likes".to_string(),
         track_count: likes_count.0,
         is_own: true,
@@ -4270,7 +4273,7 @@ async fn playlists_handler(
 
     let rows = sqlx::query_as::<_, PlaylistRow>(&format!(
         r#"SELECT p.id, p.title::text as title,
-                  COALESCE(p.cover_file_id, ({})) AS cover_file_id,
+                  ({}) AS cover_urls,
                   (SELECT COUNT(*) FROM furumusic__playlist_track pt WHERE pt.playlist_id = p.id)
                    + (SELECT COUNT(*) FROM furumusic__fed_state_playlist_item i
                       JOIN furumusic__fed_state_playlist fp ON fp.user_id = i.user_id AND fp.playlist_id = i.playlist_id
@@ -4292,7 +4295,7 @@ async fn playlists_handler(
               OR p.is_public = true
            ORDER BY
               CASE WHEN p.owner_id = $1 THEN 0 WHEN p.is_public THEN 2 ELSE 1 END,
-              p.title"#, include_str!("playlist_cover.sql")))
+              p.title"#, playlist_artwork::cover_sql()))
     .bind(user.id)
     .fetch_all(pool)
     .await
@@ -4301,7 +4304,8 @@ async fn playlists_handler(
     for r in rows {
         cards.push(PlaylistCard {
             id: r.id,
-            cover_url: cover_variant_url(r.cover_file_id, "small"),
+            cover_url: r.cover_urls.first().cloned(),
+            cover_urls: r.cover_urls,
             title: r.title,
             track_count: r.track_count,
             is_own: r.is_own,
@@ -4392,11 +4396,17 @@ async fn playlist_detail_handler(
 
     let track_items = build_playlist_track_items(tracks, pool).await?;
 
+    let is_own = info.owner_id == user.id;
+    let mut conn = pool.acquire().await.map_err(playlist_artwork::db_error)?;
+    let artwork = playlist_artwork::load(&mut conn, info.id, is_own)
+        .await
+        .map_err(playlist_artwork::db_error)?;
     Json(PlaylistDetail {
         id: info.id,
+        artwork,
         title: info.title,
         description: info.description,
-        is_own: info.owner_id == user.id,
+        is_own,
         owner_name: Some(info.owner_name),
         is_public: info.is_public,
         is_saved: info.is_saved,
@@ -4885,6 +4895,11 @@ async fn likes_playlist_handler(
 
     Json(PlaylistDetail {
         id: -1,
+        artwork: playlist_artwork::Artwork::automatic(
+            track_items
+                .iter()
+                .filter_map(|row| row.track.cover_url.clone()),
+        ),
         title: "Likes".to_string(),
         description: None,
         is_own: true,
@@ -6577,13 +6592,6 @@ async fn history_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
 
-    let listened_seconds = entry.duration_listened.unwrap_or_default().max(0);
-    let started_at = entry
-        .started_at
-        .unwrap_or_else(|| chrono::Utc::now().timestamp() - i64::from(listened_seconds));
-    let listen_id = entry
-        .listen_id
-        .unwrap_or_else(|| format!("legacy-web:{}:{}:{started_at}", user.id, entry.track_id));
     let ended_reason = match entry.ended_reason.as_deref() {
         Some("finished") => music_dht::device_sync::ListenEndReason::Finished,
         Some("skipped") => music_dht::device_sync::ListenEndReason::Skipped,
@@ -6591,18 +6599,21 @@ async fn history_handler(
         Some("stopped") => music_dht::device_sync::ListenEndReason::Stopped,
         _ => music_dht::device_sync::ListenEndReason::Unknown,
     };
-    crate::federation::devices::record_track_listen(
+    let listened_seconds = crate::federation::devices::record_track_listen(
         pool,
         user.id,
         entry.track_id,
-        listen_id,
-        started_at.saturating_mul(1_000),
-        i64::from(listened_seconds).saturating_mul(1_000),
+        entry.listen_id,
+        entry.started_at,
+        entry.duration_listened.unwrap_or_default(),
         ended_reason,
     )
     .await
     .map_err(|e| cot::Error::internal(e.to_string()))?;
-    crate::metrics::record_play_history(entry.duration_listened, entry.completed);
+    crate::metrics::record_play_history(
+        entry.duration_listened.map(|_| listened_seconds),
+        entry.completed,
+    );
     if listened_seconds > 0 {
         crate::federation::handle().refresh_track_lyrics(entry.track_id, None);
     }
@@ -7529,6 +7540,7 @@ async fn create_playlist_handler(
     Json(PlaylistCard {
         id: row.0,
         cover_url: None,
+        cover_urls: Vec::new(),
         title,
         track_count: 0,
         is_own: true,
@@ -7538,63 +7550,6 @@ async fn create_playlist_handler(
         kind: "user".to_string(),
     })
     .into_response()
-}
-
-// ---------------------------------------------------------------------------
-// PUT /api/player/playlists/{id}  — rename / update playlist
-// ---------------------------------------------------------------------------
-
-async fn update_playlist_handler(
-    auth_ctx: auth::AuthContext,
-    session: Session,
-    db: Database,
-    pool: &sqlx::PgPool,
-    path: Path<PathId>,
-    Json(body): Json<UpdatePlaylistRequest>,
-) -> cot::Result<cot::response::Response> {
-    let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
-        return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
-    };
-    let playlist_id = path.0.id;
-    // Verify ownership
-    let owner: Option<(i64,)> =
-        sqlx::query_as("SELECT owner_id FROM furumusic__playlist WHERE id = $1")
-            .bind(playlist_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-    let Some(owner) = owner else {
-        return Ok(json_error(StatusCode::NOT_FOUND, "playlist not found"));
-    };
-    if owner.0 != user.id {
-        return Ok(json_error(StatusCode::FORBIDDEN, "not your playlist"));
-    }
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    if let Some(title) = &body.title {
-        let t = title.trim();
-        if !t.is_empty() {
-            sqlx::query("UPDATE furumusic__playlist SET title = $1, updated_at = $2 WHERE id = $3")
-                .bind(t)
-                .bind(&now)
-                .bind(playlist_id)
-                .execute(pool)
-                .await
-                .map_err(|e| cot::Error::internal(e.to_string()))?;
-            record_fed_playlist_renamed(pool, user.id, playlist_id, t).await;
-        }
-    }
-    if let Some(desc) = &body.description {
-        sqlx::query(
-            "UPDATE furumusic__playlist SET description = $1, updated_at = $2 WHERE id = $3",
-        )
-        .bind(desc)
-        .bind(&now)
-        .bind(playlist_id)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-    }
-    Json(serde_json::json!({"ok": true})).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -7826,7 +7781,25 @@ async fn reorder_playlist_tracks_handler(
     .map_err(|e| cot::Error::internal(e.to_string()))?;
     record_fed_playlist_tracks_added(pool, user.id, playlist_id, &reordered_track_ids).await;
 
-    Json(serde_json::json!({"ok": true})).into_response()
+    playlist_tracks_updated(pool, playlist_id).await
+}
+
+async fn playlist_tracks_updated(
+    pool: &sqlx::PgPool,
+    playlist_id: i64,
+) -> cot::Result<cot::response::Response> {
+    let artwork = async {
+        let mut conn = pool.acquire().await?;
+        playlist_artwork::load(&mut conn, playlist_id, true).await
+    }
+    .await;
+    match artwork {
+        Ok(artwork) => Json(serde_json::json!({"ok": true, "artwork": artwork})).into_response(),
+        Err(error) => {
+            tracing::warn!(playlist_id, %error, "Could not refresh artwork after updating playlist tracks");
+            Json(serde_json::json!({"ok": true})).into_response()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -7924,7 +7897,7 @@ async fn remove_track_from_playlist_handler(
 
     record_fed_playlist_tracks_removed(pool, user.id, playlist_id, &removed_content_ids).await;
 
-    Json(serde_json::json!({"ok": true})).into_response()
+    playlist_tracks_updated(pool, playlist_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -8249,6 +8222,7 @@ impl App for PlayerApp {
 
         Router::with_urls([
             pins::route(pool.clone(), pool_config.clone()),
+            playlist_artwork::route(pool.clone(), pool_config.clone()),
             // -- Current user profile --
             Route::with_handler_and_name(
                 "/me",
@@ -9789,7 +9763,7 @@ impl App for PlayerApp {
                           session: Session,
                           db: Database,
                           path: Path<PathId>,
-                          json: Json<UpdatePlaylistRequest>| {
+                          request: cot::request::Request| {
                         let pool = Arc::clone(&pool);
                         let pool_config = Arc::clone(&pool_config);
                         async move {
@@ -9802,7 +9776,7 @@ impl App for PlayerApp {
                                         .expect("player pool")
                                 })
                                 .await;
-                            update_playlist_handler(auth_ctx, session, db, pg_pool, path, json)
+                            playlist_artwork::update(auth_ctx, session, db, pg_pool, path, request)
                                 .await
                         }
                     }

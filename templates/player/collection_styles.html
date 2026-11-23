@@ -3,9 +3,13 @@
 .collection-heading {justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 16px}
 .collection-heading .section-title {margin:0}
 .collection-tabs {gap:6px;flex-wrap:wrap;margin:0 0 22px}
-.collection-tabs a {color:var(--text-subdued);border-radius:16px;padding:6px 12px;background:var(--bg-elevated);text-decoration:none;font-size:13px}
+.collection-tabs a {display:inline-flex;align-items:center;min-height:32px;color:var(--text-secondary);border-radius:18px;padding:6px 12px;background:var(--bg-elevated);text-decoration:none;font-size:13px}
 .collection-tabs a:hover,.collection-tabs a:focus-visible {color:var(--text-primary)}
 .collection-tabs a[aria-current] {background:var(--text-primary);color:var(--bg-primary)}
+@media (max-width:420px) {
+    .collection-tabs {gap:4px}
+    .collection-tabs a {min-height:36px;padding-inline:9px}
+}
 .collection-list {max-width:840px}
 .collection-row {gap:8px;border-bottom:1px solid var(--border-color);padding:4px 6px}
 .collection-row:hover,.collection-row:focus-within {background:var(--bg-elevated);border-radius:6px}
@@ -18,6 +22,10 @@
 .collection-art.artist {border-radius:50%}
 .collection-art.likes {color:var(--accent);background:#183426}
 .collection-art img {position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.playlist-art-tiles {display:grid;position:absolute;inset:0;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:minmax(0,1fr);gap:1px;overflow:hidden}
+.playlist-art-tiles[data-tiles="1"] {grid-template-columns:minmax(0,1fr)}
+.playlist-art-tiles[data-tiles="3"] img:first-of-type {grid-row:span 2}
+.playlist-art-tiles img {display:block;position:static;min-width:0;min-height:0;width:100%;height:100%;object-fit:cover}
 .collection-pin {padding:8px;min-width:34px;justify-content:center}
 .collection-pin[aria-pressed=true] {color:var(--accent)}
 .collection-more {border:0;border-radius:50%;width:34px;height:34px;background:transparent;color:var(--text-subdued);font-size:20px;cursor:pointer}

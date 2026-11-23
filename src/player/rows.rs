@@ -74,7 +74,7 @@ pub(super) struct PlaybackStateRow {
 #[derive(sqlx::FromRow)]
 pub(super) struct PlaylistRow {
     pub(super) id: i64,
-    pub(super) cover_file_id: Option<i64>,
+    pub(super) cover_urls: Vec<String>,
     pub(super) title: String,
     pub(super) track_count: i64,
     pub(super) is_own: bool,

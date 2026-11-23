@@ -1,11 +1,9 @@
-<template x-if="['collection','published'].includes($store.library.view)">
-    <section x-data="{menuId: null, get playlists() { return $store.playlists.list.filter(pl => $store.library.view === 'published'
-            ? pl.is_public : (pl.is_own || pl.is_saved || pl.kind === 'likes')) },
-            get artists() { return $store.library.view === 'collection' && $store.library.collectionTab === 'artists' } }"
+<template x-if="['followed','playlists'].includes($store.library.view)">
+    <section x-data="{menuId: null, get playlists() { return $store.playlists.catalogList() }}"
              @click.window="if (menuId !== null && !$event.target.closest('.collection-options')) menuId = null">
-        {% include "player/collection_header.html" %}
-        <template x-if="artists">
+        <template x-if="$store.library.view === 'followed'">
             <div>
+                <h1 class="section-title">{{ t.player_followed_page }}</h1>
                 <div class="collection-list">
                     <template x-for="artist in $store.follows.artists" :key="artist.id">
                         <div class="collection-row">
@@ -20,16 +18,17 @@
                 <p class="empty-state" x-show="!$store.follows.artists.length">{{ t.player_no_followed_artists }}</p>
             </div>
         </template>
-        <template x-if="!artists">
+        <template x-if="$store.library.view === 'playlists'">
             <div>
+                {% include "player/collection_header.html" %}
                 <div class="collection-list">
                     <template x-for="pl in playlists" :key="pl.id">
                         <div class="collection-row" x-data="{ get target() { return $store.pins.target('playlist', pl) } }"
                              @keydown.escape="if (menuId === pl.id) {menuId = null; $refs.more.focus()}">
                             <a class="collection-link" :href="'#playlist/' + pl.id">
-                                <span class="collection-art" :class="{likes: pl.kind === 'likes'}">
+                                <span class="collection-art" :class="{likes: pl.kind === 'likes'}" x-data="{get tiles() {return $store.playlistHeader.tilesFor(pl)}}">
                                     <span aria-hidden="true" x-text="pl.kind === 'likes' ? '♥' : '♫'"></span>
-                                    <template x-if="pl.cover_url"><img :src="pl.cover_url" alt="" loading="lazy"></template>
+                                    {% include "player/playlist_tiles.html" %}
                                 </span>
                                 <span><strong x-text="$store.playlists.displayTitle(pl)"></strong><small x-text="[pl.is_own ? '' : pl.owner_name, formatArtistCount(pl.track_count, 'tracks')].filter(Boolean).join(' · ')"></small></span>
                             </a>

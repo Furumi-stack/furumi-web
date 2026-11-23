@@ -1,0 +1,72 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    Alpine.store('trackActions', {
+        anchor: null, track: null, historyItem: null,
+        get localId() {
+            const id = Number(this.track?.id);
+            return Number.isSafeInteger(id) && id > 0 ? id : null;
+        },
+        open(anchor, track, historyItem = null) {
+            if (anchor === this.anchor) return this.close(true);
+            const library = Alpine.store('library');
+            const wire = track?.key?.content_id ? track : track?._federationTrack;
+            if (wire && (track === wire || track.federation_pending || track.federation_only)) {
+                const known = library.withTrackAvailability(wire);
+                track = known.local_track || library.federationQueueTrack(known);
+            }
+            if (!track) return;
+            this.track = track;
+            this.historyItem = historyItem;
+            this.anchor = anchor;
+            const menu = document.getElementById('track-action-menu');
+            menu.style.visibility = 'hidden';
+            Alpine.nextTick(() => {
+                if (this.anchor !== anchor) return;
+                if (!anchor.isConnected) return this.close();
+                const rect = anchor.getBoundingClientRect();
+                const gap = 4, edge = 8;
+                const width = document.documentElement.clientWidth;
+                const height = document.documentElement.clientHeight;
+                const top = rect.bottom + gap + menu.offsetHeight <= height - edge
+                    ? rect.bottom + gap : rect.top - gap - menu.offsetHeight;
+                menu.style.left = Math.max(edge, Math.min(rect.right - menu.offsetWidth, width - edge - menu.offsetWidth)) + 'px';
+                menu.style.top = Math.max(edge, Math.min(top, height - edge - menu.offsetHeight)) + 'px';
+                menu.style.visibility = '';
+                menu.querySelector('button:not([hidden])')?.focus({preventScroll:true});
+            });
+        },
+        openHistory(anchor, item) {
+            const track = item.track_id ? {id:item.track_id, title:item.title}
+                : Alpine.store('listening').remoteTrack(item);
+            this.open(anchor, track, item);
+        },
+        close(restoreFocus = false) {
+            const anchor = this.anchor;
+            this.anchor = this.track = this.historyItem = null;
+            if (restoreFocus && anchor?.isConnected) anchor.focus({preventScroll:true});
+        },
+        run(action) {
+            const {track, anchor, historyItem, localId} = this;
+            if (!track) return;
+            this.close(true);
+            const library = Alpine.store('library');
+            if (historyItem && ['info', 'queue', 'next'].includes(action)) {
+                return Alpine.store('listening').trackAction(historyItem, action);
+            }
+            switch (action) {
+                case 'info':
+                    return !localId && track._federationTrack
+                        ? library.openFederationTrackInfo(track._federationTrack) : library.openTrackInfo(track);
+                case 'queue': return Alpine.store('queue').addToEnd([track]);
+                case 'playlist':
+                    return localId ? Alpine.store('playlists').showPicker([localId])
+                        : Alpine.store('playlists').showFederationPicker(track._federationTrack);
+                case 'share': return Alpine.store('sharing').copyTrack(track, anchor);
+                case 'download': return library.downloadTrack(track);
+                case 'similar': return library.searchSimilar(track);
+                case 'like': return Alpine.store('likes').toggle(localId);
+            }
+        },
+    });
+});
+</script>

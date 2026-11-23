@@ -1,0 +1,102 @@
+<header class="playlist-detail-heading"
+        x-data="{get playlist() { return $store.library.currentPlaylist },
+                 get header() { return $store.playlistHeader },
+                 get tiles() { return $store.playlistHeader.urls },
+                 get editing() { return $store.playlists.isEditingCurrent() },
+                 get target() { return $store.pins.target('playlist', this.playlist) }}"
+        :class="{'cover-editor-open': editing && header.pickerOpen}"
+        @keydown.escape="if (editing && !header.busy) {
+            $event.stopPropagation();
+            if (header.pickerOpen) { header.pickerOpen = false; $refs.coverToggle.focus() }
+            else { header.cancel(); $nextTick(() => $refs.edit.focus()) }
+        }">
+    <div class="playlist-heading-cover" :class="{likes: playlist.kind === 'likes'}">
+        <svg class="playlist-cover-placeholder" x-show="playlist.kind !== 'likes'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 5h14M4 10h9M4 15h6m8 1V8l4-1"/><ellipse cx="15" cy="17.5" rx="3" ry="2.5"/>
+        </svg>
+        <svg class="playlist-cover-placeholder" x-show="playlist.kind === 'likes'" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="m12 21-8.6-8.6A5.5 5.5 0 0 1 12 5.6a5.5 5.5 0 0 1 8.6 6.8Z"/>
+        </svg>
+        {% include "player/playlist_tiles.html" %}
+        {% if !guest %}
+        <button type="button" class="playlist-cover-toggle" x-ref="coverToggle" x-show="editing" x-cloak
+                aria-label="{{ t.player_edit_playlist_cover }}" title="{{ t.player_edit_playlist_cover }}"
+                :disabled="header.busy" aria-controls="playlist-cover-editor" :aria-expanded="header.pickerOpen"
+                @click="header.pickerOpen = !header.pickerOpen; if (header.pickerOpen) $nextTick(() => $refs.coverEditor.querySelector('[aria-pressed=true]')?.focus({preventScroll:true}))">
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11z"/>
+            </svg></span>
+        </button>
+        {% endif %}
+    </div>
+    <div class="playlist-heading-details">
+        <h1 class="section-title playlist-heading-title" x-show="!editing"
+            :title="$store.playlists.displayTitle(playlist)" x-text="$store.playlists.displayTitle(playlist)"></h1>
+        {% if !guest %}
+        <input class="playlist-title-input" type="text" maxlength="255" x-show="editing" x-cloak
+               x-model="header.title" :disabled="header.busy" aria-label="{{ t.player_playlist_name }}"
+               @keydown.enter="if (!$event.isComposing) { $event.preventDefault(); if (header.canSave && !header.busy) header.save() }">
+        {% endif %}
+        <div class="playlist-detail-meta" x-show="playlist.owner_name || playlist.is_public">
+            <span x-show="playlist.owner_name" x-text="'{{ t.player_by }} ' + playlist.owner_name"></span>
+            <span x-show="playlist.owner_name && playlist.is_public" aria-hidden="true">&middot;</span>
+            <span class="playlist-public-badge" x-show="playlist.is_public">{{ t.player_published }}</span>
+        </div>
+        <p class="playlist-heading-description" x-show="playlist.description" x-text="playlist.description"></p>
+        {% if !guest %}
+        <div class="playlist-heading-edit-actions" x-show="$store.playlists.canEditCurrent()" x-cloak>
+            <button type="button" class="release-action-btn secondary playlist-edit-toggle" x-ref="edit"
+                    :disabled="editing && (header.busy || !header.canSave)"
+                    @click="$store.playlists.toggleEditCurrent()">
+                <svg x-show="!editing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4z"/>
+                </svg>
+                <svg x-show="editing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg>
+                <span x-text="editing ? '{{ t.player_done }}' : '{{ t.player_edit }}'"></span>
+            </button>
+            <button type="button" class="playlist-edit-cancel" x-show="editing" :disabled="header.busy"
+                    @click="header.cancel(); $nextTick(() => $refs.edit.focus())">{{ t.player_cancel }}</button>
+        </div>
+        <p role="alert" class="playlist-edit-error" x-show="editing && header.error" x-text="header.error"></p>
+        {% endif %}
+    </div>
+    {% if !guest %}
+    <div class="playlist-heading-pin" x-show="target">{% include "player/pin_button.html" %}</div>
+    <fieldset class="playlist-cover-editor" id="playlist-cover-editor" x-ref="coverEditor"
+              x-show="editing && header.pickerOpen" x-cloak :disabled="header.busy" aria-label="{{ t.player_playlist_cover }}">
+        <div class="playlist-cover-modes" role="group" aria-label="{{ t.player_playlist_cover }}">
+            <button type="button" class="playlist-cover-mode" data-mode="auto" :aria-pressed="header.mode === 'auto'" @click="header.setMode('auto')">{{ t.player_playlist_cover_auto }}</button>
+            <button type="button" class="playlist-cover-mode" data-mode="releases" :aria-pressed="header.mode === 'releases'" @click="header.setMode('releases')">{{ t.player_playlist_cover_releases }}</button>
+            <button type="button" class="playlist-cover-mode" data-mode="upload" :aria-pressed="header.mode === 'upload'" @click="header.setMode('upload')">{{ t.player_playlist_cover_upload }}</button>
+        </div>
+        <template x-if="editing && header.pickerOpen && header.mode === 'releases'">
+            <div>
+                <div class="playlist-cover-hint" x-show="header.options.length">
+                    <span>{{ t.player_playlist_cover_select }}</span>
+                    <span class="playlist-cover-count" aria-live="polite" x-text="header.selected.length + '/4'"></span>
+                </div>
+                <p class="playlist-cover-hint" x-show="!header.options.length">{{ t.player_playlist_cover_empty }}</p>
+                <div class="playlist-cover-options">
+                    <template x-for="option in header.options" :key="option.cover_id">
+                        <button type="button" class="playlist-cover-choice" :title="option.title" :aria-label="option.title"
+                                :aria-pressed="header.selected.includes(option.cover_id)"
+                                :disabled="header.selected.length >= 4 && !header.selected.includes(option.cover_id)"
+                                @click="header.toggleRelease(option.cover_id)">
+                            <img :src="option.cover_url" alt="" loading="lazy" decoding="async">
+                            <span aria-hidden="true" x-show="header.selected.includes(option.cover_id)" x-text="header.selected.indexOf(option.cover_id) + 1"></span>
+                        </button>
+                    </template>
+                </div>
+            </div>
+        </template>
+        <div class="playlist-cover-upload" x-show="header.mode === 'upload'">
+            <label class="playlist-cover-file">
+                <input type="file" accept="image/jpeg,image/png,image/webp" @change="if ($el.files.length) header.setFile($el.files[0]); $el.value = ''">
+                {{ t.player_choose_cover_file }}
+            </label>
+            <small>JPEG, PNG, WebP · 4 MiB</small>
+            <button type="button" class="playlist-cover-clear" x-show="header.file" @click="header.setFile(null)">{{ t.player_clear }}</button>
+        </div>
+    </fieldset>
+    {% endif %}
+</header>

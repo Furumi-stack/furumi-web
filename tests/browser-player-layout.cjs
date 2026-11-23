@@ -4,16 +4,54 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 const html=fs.readFileSync('target/podcast-player-fixture.html','utf8'),alpine=fs.readFileSync('target/podcast-alpine.min.js','utf8');
 const tracks=[1,2,3].map(id=>({id,playlist_track_id:id,title:id===1?'Вся правда о Юрии Куклачёве — очень длинное название трека':'Time Only Knows',artists:[{id:1,name:'Длинное имя исполнителя'}],featured_artists:[],release_id:1,release_title:'Example album',duration_seconds:303,lastfm_rating:87,has_lyrics:id===1,stream_url:'/audio.mp3'}));
 const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
+async function checkRowMenu(page, row, track) {
+ const more=row.locator('.track-more-btn'),menu=page.locator('.track-action-menu:visible');
+ const activate=button=>page.viewportSize().width<=420 ? button.tap() : button.click();
+ await more.focus();
+ await page.keyboard.press('Enter');
+ await menu.waitFor();
+ const actions=menu.locator('[data-action]:visible');
+ assert.deepEqual((await actions.evaluateAll(items=>items.map(item=>item.dataset.action))).sort(),
+  ['download','info','playlist','queue','share','similar']);
+ assert.equal(await actions.locator('svg').count(),6,'each action has an icon');
+ const box=await menu.boundingBox(),viewport=page.viewportSize();
+ assert.ok(box.x>=0 && box.y>=0 && box.x+box.width<=viewport.width+1 && box.y+box.height<=viewport.height+1,'the whole menu is reachable');
+ await page.keyboard.press('Escape');
+ await menu.waitFor({state:'hidden'});
+ const choose=async action=>{
+  await activate(more);
+  await activate(menu.locator('[data-action="'+action+'"]'));
+  await menu.waitFor({state:'hidden'});
+ };
+ await choose('info');
+ const modal=page.locator('.info-modal');
+ await modal.getByText(track.title,{exact:true}).waitFor();
+ assert.equal(await modal.getByRole('button',{name:/download|find similar/i}).count(),0);
+ await modal.locator('.info-modal-head button').click();
+ await choose('playlist');
+ assert.deepEqual(await page.evaluate(()=>Alpine.store('playlists').picker.trackIds),[track.id]);
+ await page.locator('.modal-footer').getByRole('button',{name:'Cancel'}).click();
+ await choose('queue');
+ assert.equal(await page.evaluate(()=>Alpine.store('queue').tracks.at(-1)?.id),track.id);
+ const shared=page.waitForRequest(req=>new URL(req.url()).pathname==='/api/player/shares'&&req.method()==='POST');
+ await choose('share');
+ assert.deepEqual((await shared).postDataJSON().track_ids,[track.id]);
+ const downloaded=page.waitForEvent('download');
+ await choose('download');
+ assert.equal(new URL((await downloaded).url()).pathname,'/api/player/download/'+track.id);
+}
 (async()=>{
  const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
  try {
   for(const viewport of [{width:1440,height:1000},{width:900,height:1000},{width:820,height:1000},{width:575,height:900},{width:390,height:844},{width:320,height:740}]){
-   const page=await browser.newPage({viewport,reducedMotion:'reduce'}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+   const page=await browser.newPage({viewport,reducedMotion:'reduce',hasTouch:viewport.width<=420,isMobile:viewport.width<=420}),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.route('**/*',route=>{
     const url=new URL(route.request().url());
     if(url.hostname==='layout.test'&&url.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
     if(url.hostname==='cdn.jsdelivr.net'&&url.pathname.includes('alpine'))return route.fulfill({contentType:'application/javascript',body:alpine});
     if(url.pathname==='/api/player/artists')return route.fulfill({json:{items:[],total:0,has_more:false}});
+    if(url.pathname==='/api/player/shares')return route.fulfill({json:{url:'/share/test'}});
+    if(url.pathname.startsWith('/api/player/download/'))return route.fulfill({body:'test audio',contentType:'audio/mpeg',headers:{'Content-Disposition':'attachment; filename="test.mp3"'}});
     if(/^\/api\/player\/similarity\/[12]$/.test(url.pathname)){
      const seedId=Number(url.pathname.split('/').at(-1));
      return route.fulfill({json:url.searchParams.has('local_only')
@@ -29,6 +67,33 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
    },tracks);
    await page.waitForSelector('.playlist-track-row');
    const row=page.locator('.playlist-track-row').first(),pop=row.locator('.popularity-info-btn'),heart=row.locator('.like-btn');
+   await page.evaluate(()=>{const rows=Alpine.store('library').currentPlaylist.tracks; rows[1].lastfm_rating=null; rows[2].lastfm_rating=103;});
+   await page.locator('.playlist-track-row').nth(1).locator('.track-popularity-value').waitFor({state:'hidden',timeout:3000});
+   const scoreCenters=await page.locator('.playlist-track-row .track-popularity-value:visible').evaluateAll(els=>els.map(el=>{
+    const r=el.getBoundingClientRect();return r.x+r.width/2;
+   }));
+   assert.equal(scoreCenters.length,2);
+   near(...scoreCenters,'two- and three-digit scores align');
+   for(const selector of ['.like-btn','.queue-next-btn','.track-more-btn']){
+    const positions=await page.locator('.playlist-track-row '+selector).evaluateAll(els=>els.map(el=>el.getBoundingClientRect().x));
+    assert.equal(positions.length,3);
+    for(const x of positions.slice(1))near(x,positions[0],'aligned '+selector+' across empty and populated scores');
+   }
+   if(viewport.width===1440||viewport.width===320){
+    await checkRowMenu(page,row,tracks[0]);
+    const queueButton=page.getByRole('button',{name:'Queue',exact:true});
+    await queueButton.click();
+    const queued=page.locator('.queue-panel .queue-track[data-queue-index="0"]');
+    await queued.locator('.track-more-btn').click();
+    const queueMenu=page.locator('.track-action-menu:visible');
+    await queueMenu.locator('[data-action="info"]').click();
+    await page.locator('.info-modal').getByText(tracks[0].title,{exact:true}).waitFor();
+    await page.locator('.info-modal-head button').click();
+    await queued.locator('.queue-track-remove').click();
+    await page.locator('.queue-panel .queue-track[data-queue-index="0"]').waitFor({state:'detached'});
+    if(viewport.width===320)await page.locator('.queue-backdrop').click({position:{x:4,y:4}});
+    else await queueButton.click();
+   }
    if(viewport.width===1440){
     const title=row.locator('.track-title');
     await page.evaluate(()=>{
@@ -76,6 +141,7 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
    await page.screenshot({path:`target/player-layout-likes-${viewport.width}.png`});
    await page.evaluate(()=>{const playlist=Alpine.store('library').currentPlaylist;playlist.id=12;playlist.kind='user';playlist.is_own=true;playlist.title='Playlist';Alpine.store('playlists').editingPlaylistId=12;});
    await page.waitForSelector('.playlist-track-row.editing');
+   if(viewport.width===1440||viewport.width===320)await checkRowMenu(page,page.locator('.playlist-track-row').nth(1),tracks[1]);
    const editingActions=await row.locator('.track-actions').boundingBox(),editingInfo=await row.locator('.playlist-track-info').boundingBox();
    near(editingActions.y+editingActions.height/2,editingInfo.y+editingInfo.height/2,'editing actions stay in title row');
    if(viewport.width<=900){
@@ -86,7 +152,14 @@ const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
    }
    for(const seed of tracks.slice(0,2)){
     await page.evaluate(track=>{Alpine.store('player').currentTrack=track;},seed);
-    await similar.click();
+    if(seed.id===1){
+     if(viewport.width<=900)await page.evaluate(()=>{Alpine.store('mobile').playerExpanded=false;});
+     await row.locator('.track-more-btn').click();
+     await page.locator('.track-action-menu:visible [data-action="similar"]').click();
+    }else{
+     if(viewport.width<=900)await page.evaluate(()=>{Alpine.store('mobile').playerExpanded=true;});
+     await similar.click();
+    }
     await page.waitForURL('**/#similar/'+seed.id);
     await page.locator('.search-standard-entry').getByText(tracks[2].title,{exact:true}).first().waitFor();
     assert.equal(await page.evaluate(()=>Alpine.store('mobile').playerExpanded),false);

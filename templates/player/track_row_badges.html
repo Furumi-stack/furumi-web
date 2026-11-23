@@ -1,0 +1,12 @@
+<span class="track-popularity-slot">
+    <button class="track-action-btn lyrics-presence" type="button" x-show="track.has_lyrics"
+            @click.stop="$store.lyrics.open(track,false)" @dblclick.stop
+            :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/>
+        </svg>
+    </button>
+    <span class="track-popularity-value popularity-info-btn has-popularity" x-show="$store.library.hasPopularity(track)"
+          :style="$store.library.popularityStyle(track)" :title="T.lastfmRating + ': ' + Math.round(track.lastfm_rating)"
+          x-text="$store.library.popularityLabel(track)"></span>
+</span>

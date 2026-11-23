@@ -553,27 +553,57 @@ pub async fn record_track_like(
     Ok(())
 }
 
+// Older web clients could include idle time in a single-track report. Their
+// HTTP fallback ID survives device sync. Modern events measure actual playback,
+// which can exceed the track length when a listener replays a passage.
+fn web_listened_ms(id: Option<&str>, reported_ms: i64, track_duration_ms: Option<i64>) -> i64 {
+    let Some(duration) = track_duration_ms.filter(|&ms| ms > 0 && ms < reported_ms) else {
+        return reported_ms;
+    };
+    if let Some(id) = id {
+        let Some(suffix) = id.strip_prefix("legacy-web:") else {
+            return reported_ms;
+        };
+        let mut fields = suffix.split(':');
+        let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        if fields.clone().count() != 3 || !fields.all(numeric) {
+            return reported_ms;
+        }
+    }
+    duration
+}
+
 pub async fn record_track_listen(
     pool: &sqlx::PgPool,
     user_id: i64,
     track_id: i64,
-    listen_id: String,
-    started_at_ms: i64,
-    listened_ms: i64,
+    listen_id: Option<String>,
+    started_at_seconds: Option<i64>,
+    listened_seconds: i32,
     ended_reason: ListenEndReason,
-) -> Result<()> {
+) -> Result<i32> {
     let content_id = track_content_id(pool, track_id)
         .await?
         .context("track content id is not ready")?;
     let track = synced_fed_track_for_track(pool, track_id, &content_id)
         .await?
         .context("track metadata is not available")?;
+    let track_duration_ms = track.duration_seconds.map(|s| s.saturating_mul(1_000));
+    let listened_ms = web_listened_ms(
+        listen_id.as_deref(),
+        i64::from(listened_seconds.max(0)) * 1_000,
+        track_duration_ms,
+    );
+    let started_at =
+        started_at_seconds.unwrap_or_else(|| chrono::Utc::now().timestamp() - listened_ms / 1_000);
+    let listen_id =
+        listen_id.unwrap_or_else(|| format!("legacy-web:{user_id}:{track_id}:{started_at}"));
     let event = ListenEvent {
         listen_id,
         content_id,
-        started_at_ms,
+        started_at_ms: started_at.saturating_mul(1_000),
         listened_ms,
-        track_duration_ms: track.duration_seconds.map(|seconds| seconds * 1_000),
+        track_duration_ms,
         ended_reason,
         track: ListenTrackMetadata {
             title: track.title,
@@ -585,7 +615,7 @@ pub async fn record_track_listen(
     if event.should_record() {
         record_local_op(pool, user_id, SyncOpPayload::ListenRecorded { event }).await?;
     }
-    Ok(())
+    Ok((listened_ms / 1_000) as i32)
 }
 
 /// Records a like for a content-addressed track that need not be local yet.
@@ -2098,6 +2128,11 @@ async fn apply_listen_event(
     .fetch_optional(pool)
     .await?
     .flatten();
+    let listened_ms = web_listened_ms(
+        Some(&event.listen_id),
+        event.listened_ms,
+        event.track_duration_ms,
+    );
     let inserted = sqlx::query(
         "INSERT INTO furumusic__listen_event
             (user_id, listen_id, content_id, local_track_id, origin_device_id,
@@ -2112,7 +2147,7 @@ async fn apply_listen_event(
     .bind(local_track_id)
     .bind(origin_device_id)
     .bind(event.started_at_ms)
-    .bind(event.listened_ms)
+    .bind(listened_ms)
     .bind(event.track_duration_ms)
     .bind(serde_json::to_string(&event.ended_reason)?)
     .bind(event.qualifies_as_play())
@@ -2142,10 +2177,7 @@ async fn apply_listen_event(
     if duration_seconds <= 30 {
         return Ok(true);
     }
-    let listened_seconds = event
-        .listened_ms
-        .div_euclid(1_000)
-        .clamp(0, i64::from(i32::MAX)) as i32;
+    let listened_seconds = listened_ms.div_euclid(1_000).clamp(0, i64::from(i32::MAX)) as i32;
     let started_at = event.started_at_ms.div_euclid(1_000);
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     sqlx::query(
@@ -5010,3 +5042,27 @@ fn base64url_decode(value: &str) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod interop_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::web_listened_ms;
+
+    #[test]
+    fn only_legacy_http_listens_are_bounded_by_known_track_length() {
+        let reported = 40_461_000;
+        let duration = Some(267_000);
+        for id in [None, Some("legacy-web:3:17:1795213775")] {
+            assert_eq!(web_listened_ms(id, reported, duration), 267_000);
+            assert_eq!(web_listened_ms(id, 60_000, duration), 60_000);
+            assert_eq!(web_listened_ms(id, reported, None), reported);
+        }
+        for id in [
+            "modern-session",
+            "legacy-web:17",
+            "legacy-web:3::17",
+            "legacy-web:3:2:1:0",
+        ] {
+            assert_eq!(web_listened_ms(Some(id), reported, duration), reported);
+        }
+    }
+}

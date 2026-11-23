@@ -373,6 +373,103 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires disposable PostgreSQL via FURU_STATISTICS_TEST_DATABASE_URL"]
+    async fn legacy_web_repair_corrects_only_overlong_fallback_listens() -> anyhow::Result<()> {
+        let pool = catalog_fixture().await?;
+        sqlx::raw_sql(
+            "INSERT INTO furumusic__listen_event
+                (user_id, listen_id, content_id, started_at_ms, qualified, listened_ms, track_duration_ms)
+             SELECT 3, id, 'content-one', 1000, true, listened, duration FROM (VALUES
+               ('legacy-web:3:42:1', 40461000, 267000),
+               ('legacy-web:3:43:1', 20000, 267000),
+               ('legacy-web:3:44:1', 267000, 267000),
+               ('legacy-web:3:45:1', 800000, NULL),
+               ('legacy-web:3:46:1', 800000, 0),
+               ('legacy-web:12', 800000, 267000),
+               ('legacy-web:2:42:1', 800000, 267000),
+               ('legacy-web:3:track:1', 800000, 267000),
+               ('e28cbb99-d9cc-40c5-ad1c-490be56688b6', 800000, 267000)
+             ) v(id, listened, duration)",
+        )
+        .execute(&pool)
+        .await?;
+        let repair = include_str!("repair_legacy_web_listen_durations.sql");
+        assert_eq!(sqlx::query(repair).execute(&pool).await?.rows_affected(), 2);
+        assert_eq!(sqlx::query(repair).execute(&pool).await?.rows_affected(), 0);
+
+        let day = (0, 86400000);
+        let log = history(&pool, 3, day, 1).await?;
+        assert_eq!(log["total"], 9);
+        let legacy = log["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "legacy-web:3:42:1")
+            .unwrap();
+        assert_eq!(legacy["started_at_ms"], 1000);
+        assert_eq!(legacy["listened_ms"], 267000);
+        let summary = overview(&pool, 3, day, "UTC", &Ranking::Tracks).await?;
+        assert_eq!(
+            summary["daily"],
+            json!([{
+                "day": "1970-01-01", "plays": 9, "listened_seconds": 3 * 267 + 20 + 5 * 800,
+            }])
+        );
+        sqlx::query("ROLLBACK").execute(&pool).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL via FURU_STATISTICS_TEST_DATABASE_URL"]
+    async fn busy_calendar_day_history_matches_the_overview() -> anyhow::Result<()> {
+        let pool = catalog_fixture().await?;
+        let filter = Query {
+            from: Some("2026-11-21".into()),
+            to: Some("2026-11-21".into()),
+            ..Default::default()
+        };
+        let tz = "Asia/Nicosia";
+        let (start, end) = bounds(&pool, &filter, tz).await?;
+        sqlx::query(
+            "INSERT INTO furumusic__listen_event
+                 (user_id, listen_id, content_id, started_at_ms, listened_ms, qualified)
+             SELECT 3, n::text, 'content-one',
+                    CASE n WHEN 0 THEN $1::bigint - 1 WHEN 114 THEN $2::bigint
+                           ELSE $1::bigint + (n-1) * 360000 END, 360000, true
+               FROM generate_series(0, 114) n",
+        )
+        .bind(start)
+        .bind(end)
+        .execute(&pool)
+        .await?;
+        let summary = overview(&pool, 3, (start, end), tz, &Ranking::Tracks).await?;
+        assert_eq!(
+            summary["daily"],
+            json!([{
+                "day": "2026-11-21", "plays": 113, "listened_seconds": 113 * 360,
+            }])
+        );
+        let mut ids = Vec::new();
+        for (page, count) in [(1, 25), (2, 25), (3, 25), (4, 25), (5, 13)] {
+            let data = history(&pool, 3, (start, end), page).await?;
+            assert_eq!(data["total"], summary["plays"]);
+            let items = data["items"].as_array().unwrap();
+            assert_eq!(items.len(), count);
+            ids.extend(
+                items
+                    .iter()
+                    .map(|item| item["id"].as_str().unwrap().to_owned()),
+            );
+        }
+        assert_eq!(
+            ids,
+            (1..=113).rev().map(|n| n.to_string()).collect::<Vec<_>>()
+        );
+        sqlx::query("ROLLBACK").execute(&pool).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL via FURU_STATISTICS_TEST_DATABASE_URL"]
     async fn personal_listening_filters_events_and_resolves_playable_editions() -> anyhow::Result<()>
     {
         let pool = catalog_fixture().await?;

@@ -108,6 +108,7 @@ pub(super) struct UploaderSummary {
 pub(super) struct PlaylistCard {
     pub(super) id: i64,
     pub(super) cover_url: Option<String>,
+    pub(super) cover_urls: Vec<String>,
     pub(super) title: String,
     pub(super) track_count: i64,
     pub(super) is_own: bool,
@@ -286,6 +287,8 @@ pub(super) struct PlayerDevicePollResponse {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct PlaylistDetail {
     pub(super) id: i64,
+    #[serde(flatten)]
+    pub(super) artwork: super::playlist_artwork::Artwork,
     pub(super) title: String,
     pub(super) description: Option<String>,
     pub(super) is_own: bool,

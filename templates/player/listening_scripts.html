@@ -18,7 +18,7 @@ document.addEventListener('alpine:init', () => {
         emptyRank: ['No entries in this ranking yet.', 'Этот рейтинг пока пуст.'],
         loading: ['Loading…', 'Загрузка…'], failed: ['Could not load your listening data.', 'Не удалось загрузить прослушивания.'],
         unavailable: ['This track is unavailable.', 'Трек недоступен.'], retry: ['Retry', 'Повторить'],
-        play: ['Play', 'Слушать'], more: ['Track actions', 'Действия с треком'],
+        play: ['Play', 'Слушать'],
         counts: ['Play count', 'Число прослушиваний'], hour: ['h', 'ч'], minute: ['min', 'мин'], second: ['s', 'с'],
     };
     const locale = document.documentElement.lang || 'en';
@@ -116,7 +116,7 @@ document.addEventListener('alpine:init', () => {
                 if (point.plays > 0) {
                     level = point.plays === counts.at(-1) ? 4 : 1 + cutoffs.filter(c => point.plays > c).length;
                 }
-                result.days.push({day:point.day, plays:point.plays, week, weekday:slot % 7, level});
+                result.days.push({...point, week, weekday:slot % 7, level});
                 if (index === 0 || point.day.endsWith('-01')) {
                     // Drop a sliver of the first month if the labels would overlap.
                     if (result.months.length && week - result.months.at(-1).week < 3) result.months.pop();
@@ -125,9 +125,11 @@ document.addEventListener('alpine:init', () => {
             }
             return result;
         },
-        heatDayLabel(point) {
-            const unit = playWords[plurals.select(point.plays)] || playWords.other;
-            return this.date(point.day) + ' · ' + this.number(point.plays) + ' ' + unit;
+        playCount(count) {
+            return this.number(count) + ' ' + (playWords[plurals.select(count)] || playWords.other);
+        },
+        dayLabel(point) {
+            return this.date(point.day) + ' · ' + this.playCount(point.plays) + ' · ' + this.duration(point.seconds);
         },
         moveHeatFocus(event) {
             const delta = {ArrowUp:-1, ArrowDown:1, ArrowLeft:-7, ArrowRight:7};

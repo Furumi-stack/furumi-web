@@ -35,6 +35,9 @@ pub(super) struct CreatePlaylistRequest {
 pub(super) struct UpdatePlaylistRequest {
     pub(super) title: Option<String>,
     pub(super) description: Option<String>,
+    pub(super) cover_mode: Option<String>,
+    pub(super) cover_ids: Option<Vec<i64>>,
+    pub(super) cover_image: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

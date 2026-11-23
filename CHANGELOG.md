@@ -15,6 +15,19 @@
 - Listening by day can display a calendar heatmap shaded by daily play count.
   Select a day to open its history, or select the last 365 days for a full year.
   The player remembers the chart style in the browser.
+- Fixed inflated listening time from older web clients. Existing affected plays
+  are corrected on upgrade. Both daily charts now show play count and listening
+  time together, and the selected day's history shows its total play count.
+- Moved My listening into the account menu on desktop and mobile.
+- Catalog now brings All music, Playlists and My uploads together. Personal
+  playlists appear first, followed by available public playlists. Followed
+  artists are accessible from the account menu.
+- Playlist headers show release artwork as a collage and keep the pin on the
+  right. Owners can rename inline, choose up to four images from the playlist,
+  upload a cover, or restore the automatic collage.
+- Track rows keep lyrics, popularity and playback controls aligned. The new
+  actions menu includes sharing, playlists, queueing, track details, similarity
+  search and downloading where available.
 
 ## v0.15.2 — 2026-11-24
 

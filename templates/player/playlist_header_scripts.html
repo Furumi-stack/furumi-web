@@ -1,0 +1,141 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    let generation = 0;
+    const savedMode = pl => pl?.cover_mode || 'auto';
+    function automatic(pl) {
+        if (pl?.auto_cover_urls?.length) return pl.auto_cover_urls;
+        const covers = new Set();
+        for (const row of pl?.cover_options?.length ? pl.cover_options : pl?.tracks || []) {
+            if (row.cover_url) covers.add(row.cover_url);
+            if (covers.size === 4) break;
+        }
+        return [...covers];
+    }
+    Alpine.store('playlistHeader', {
+        title:'', mode:'auto', selected:[], file:null, preview:'', pickerOpen:false, error:'', busy:false,
+        get playlist() { return Alpine.store('library')?.currentPlaylist; },
+        get options() { return this.playlist?.cover_options || []; },
+        tilesFor(pl) {
+            if (pl?.cover_urls?.length) return pl.cover_urls;
+            return pl?.cover_url ? [pl.cover_url] : [];
+        },
+        get urls() {
+            const pl = this.playlist;
+            if (!Alpine.store('playlists')?.isEditingCurrent()) {
+                const stored = this.tilesFor(pl);
+                return stored.length ? stored : automatic(pl);
+            }
+            if (this.mode === 'upload') {
+                if (this.preview) return [this.preview];
+                return savedMode(pl) === 'upload' ? this.tilesFor(pl) : [];
+            }
+            if (this.mode === 'releases') {
+                return this.selected.map(id => this.options.find(o => o.cover_id === id)?.cover_url).filter(Boolean);
+            }
+            return automatic(pl);
+        },
+        get canSave() {
+            if (this.busy || Alpine.store('playlists')?.changingTracks ||
+                    !this.title.trim() || Array.from(this.title.trim()).length > 255) return false;
+            if (this.mode === 'upload') return !!this.file || savedMode(this.playlist) === 'upload';
+            return this.mode !== 'releases' || (this.selected.length > 0 && this.selected.length <= 4);
+        },
+        reset() {
+            ++generation;
+            if (this.preview) URL.revokeObjectURL(this.preview);
+            this.file = null;
+            this.preview = this.error = '';
+            this.busy = this.pickerOpen = false;
+        },
+        begin(pl) {
+            this.reset();
+            this.title = pl.title;
+            this.mode = savedMode(pl);
+            this.selected = [...(pl.cover_ids || [])];
+        },
+        applyArtwork(pl, artwork) {
+            const editing = Alpine.store('playlists').isEditingCurrent();
+            const savedSelection = this.mode === savedMode(pl) &&
+                this.selected.join() === (pl.cover_ids || []).join();
+            Object.assign(pl, artwork);
+            if (!editing) return;
+            const available = new Set((artwork.cover_options || []).map(option => option.cover_id));
+            this.selected = this.selected.filter(id => available.has(id));
+            if (this.mode === 'releases' && savedSelection && !this.selected.length) this.mode = savedMode(pl);
+        },
+        cancel() {
+            if (!this.busy) Alpine.store('playlists').stopEdit();
+        },
+        setMode(mode) {
+            if (this.busy) return;
+            this.mode = mode;
+            this.error = '';
+        },
+        toggleRelease(id) {
+            if (this.busy) return;
+            if (this.selected.includes(id)) this.selected = this.selected.filter(value => value !== id);
+            else if (this.selected.length < 4) this.selected = [...this.selected, id];
+            this.error = '';
+        },
+        setFile(file) {
+            if (this.busy) return;
+            if (file && (file.size === 0 || file.size > 4 * 1024 * 1024 ||
+                    (file.type && !['image/jpeg','image/png','image/webp'].includes(file.type)))) {
+                this.error = '{{ t.player_playlist_cover_invalid }}';
+                return;
+            }
+            if (this.preview) URL.revokeObjectURL(this.preview);
+            this.file = file;
+            this.preview = file ? URL.createObjectURL(file) : '';
+            this.error = '';
+        },
+        async save() {
+            const playlists = Alpine.store('playlists');
+            if (!playlists.isEditingCurrent() || !this.canSave) return;
+            const pl = this.playlist;
+            const change = {};
+            const title = this.title.trim();
+            if (title !== pl.title) change.title = title;
+            if (this.mode !== savedMode(pl) || (this.mode === 'upload' && this.file) ||
+                    (this.mode === 'releases' && this.selected.join() !== (pl.cover_ids || []).join())) {
+                change.cover_mode = this.mode;
+                if (this.mode === 'releases') change.cover_ids = [...this.selected];
+            }
+            if (!Object.keys(change).length) return playlists.stopEdit();
+            const version = generation;
+            this.busy = true;
+            this.error = '';
+            try {
+                if (change.cover_mode === 'upload' && this.file) {
+                    const file = this.file;
+                    change.cover_image = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(file);
+                    });
+                }
+                if (version !== generation) return;
+                const res = await fetch('/api/player/playlists/' + pl.id, {
+                    method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(change),
+                });
+                if (!res.ok) {
+                    if (version === generation) this.error = res.status === 413 || (res.status === 400 && change.cover_image)
+                        ? '{{ t.player_playlist_cover_invalid }}' : '{{ t.player_playlist_header_failed }}';
+                    return;
+                }
+                const saved = await res.json();
+                if (version === generation && this.playlist?.id === pl.id) {
+                    Object.assign(pl, saved);
+                    playlists.stopEdit();
+                }
+                await Promise.all([playlists.reload(), Alpine.store('pins').reload()]);
+            } catch {
+                if (version === generation) this.error = '{{ t.player_playlist_header_failed }}';
+            } finally {
+                if (version === generation) this.busy = false;
+            }
+        },
+    });
+});
+</script>

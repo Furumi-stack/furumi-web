@@ -1,0 +1,8 @@
+<button type="button" class="track-action-btn track-more-btn"
+        @click.stop="$store.trackActions.open($event.currentTarget, track)" @dblclick.stop @keydown.space.stop
+        :aria-expanded="$store.trackActions.anchor === $el" aria-haspopup="dialog" aria-controls="track-action-menu"
+        aria-label="{{ t.player_track_actions }}" title="{{ t.player_track_actions }}">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
+    </svg>
+</button>

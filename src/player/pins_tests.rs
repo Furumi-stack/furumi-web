@@ -131,17 +131,20 @@ async fn exercise_pins(pool: &PgPool) -> anyhow::Result<()> {
         CREATE TABLE furumusic__artist (id bigint PRIMARY KEY, name text, is_hidden bool, image_file_id bigint);
         CREATE TABLE furumusic__release (id bigint PRIMARY KEY, title text, is_hidden bool, cover_file_id bigint);
         CREATE TABLE furumusic__playlist (id bigint PRIMARY KEY, title text, owner_id bigint, is_public bool, cover_file_id bigint);
-        CREATE TABLE furumusic__track (id bigint PRIMARY KEY, release_id bigint, is_hidden bool, cover_file_id bigint);
+        CREATE TABLE furumusic__track (id bigint PRIMARY KEY, release_id bigint, is_hidden bool, cover_file_id bigint, title text DEFAULT 'Song');
         CREATE TABLE furumusic__playlist_track (id bigint, playlist_id bigint, track_id bigint, position int);
         CREATE TABLE furumusic__saved_playlist (user_id bigint, playlist_id bigint);
         INSERT INTO furumusic__user VALUES (1),(2),(3);
         INSERT INTO furumusic__artist VALUES (10,'Artist',false,70), (11,'Hidden artist',true,NULL);
         INSERT INTO furumusic__release VALUES (12,'Album',false,80), (13,'Hidden album',true,81);
-        INSERT INTO furumusic__track VALUES (20,12,true,90), (21,13,false,NULL), (22,12,false,NULL), (23,12,false,91);
+        INSERT INTO furumusic__track (id,release_id,is_hidden,cover_file_id) VALUES (20,12,true,90), (21,13,false,NULL), (22,12,false,NULL), (23,12,false,91);
         INSERT INTO furumusic__playlist VALUES (30,'My list',1,false,99), (31,'Someone else',2,false,NULL), (32,'Public list',2,true,NULL);
         INSERT INTO furumusic__playlist_track VALUES (1,32,20,1), (2,32,21,2), (3,32,22,3), (4,32,23,4);
     ").execute(pool).await?;
     sqlx::raw_sql(include_str!("sidebar_pins.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("playlist_artwork_schema.sql"))
         .execute(pool)
         .await?;
     sqlx::query("INSERT INTO furumusic__sidebar_pin (user_id,href,peer_title,created_at) VALUES
@@ -171,6 +174,19 @@ async fn exercise_pins(pool: &PgPool) -> anyhow::Result<()> {
         .find(|p| p["id"] == 32)
         .unwrap();
     assert_eq!(public["cover_url"], "/api/player/cover/80/small");
+    sqlx::query("UPDATE furumusic__playlist SET cover_ids=ARRAY[91,80]::bigint[] WHERE id=32")
+        .execute(pool)
+        .await?;
+    let picked = list(pool, 1)
+        .await?
+        .into_iter()
+        .find(|p| p["id"] == 32)
+        .unwrap();
+    assert_eq!(
+        picked["cover_urls"],
+        serde_json::json!(["/api/player/cover/91/small", "/api/player/cover/80/small"])
+    );
+    assert_eq!(picked["cover_url"], picked["cover_urls"][0]);
     sqlx::query("UPDATE furumusic__playlist SET is_public = false WHERE id=32")
         .execute(pool)
         .await?;

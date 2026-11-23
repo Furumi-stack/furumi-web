@@ -2974,7 +2974,56 @@ pub mod db_migrations {
             &[Operation::custom(add_sidebar_pin_order).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn repair_legacy_web_listen_durations(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        ctx.db
+            .raw(include_str!(
+                "../player/repair_legacy_web_listen_durations.sql"
+            ))
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0060RepairLegacyWebListenDurations;
+    impl migrations::Migration for M0060RepairLegacyWebListenDurations {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0060_repair_legacy_web_listen_durations";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0059_add_sidebar_pin_order",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(repair_legacy_web_listen_durations).build()];
+    }
+
+    #[cot::db::migrations::migration_op]
+    async fn add_playlist_artwork(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        ctx.db
+            .raw(include_str!("../player/playlist_artwork_schema.sql"))
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0061AddPlaylistArtwork;
+    impl migrations::Migration for M0061AddPlaylistArtwork {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0061_add_playlist_artwork";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0060_repair_legacy_web_listen_durations",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(add_playlist_artwork).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0061AddPlaylistArtwork,
+        &M0060RepairLegacyWebListenDurations,
         &M0059AddSidebarPinOrder,
         &M0058CreateSidebarPins,
         &M0057CreateLyricsSearch,

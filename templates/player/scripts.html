@@ -59,10 +59,8 @@ const T = {
     lastfmDisconnectConfirm: "{{ t.player_lastfm_disconnect_confirm }}",
     lastfmConnectFailed: "{{ t.player_lastfm_connect_failed }}",
     lastfmDisconnectFailed: "{{ t.player_lastfm_disconnect_failed }}",
-    download: "{{ t.track_download }}",
     shareUnavailable: "{{ t.share_unavailable }}",
     searchSimilarTo: "{{ t.player_search_similar_to }}",
-    findSimilar: "{{ t.player_find_similar }}",
     similarityFailed: "{{ t.player_similarity_failed }}",
     share: "{{ t.player_share }}",
     shareTrack: "{{ t.player_share_track }}",
@@ -2549,7 +2547,6 @@ document.addEventListener('alpine:init', () => {
     // -----------------------------------------------------------------------
     Alpine.store('library', {
         view: 'artists',
-        collectionTab: 'playlists',
         artistFilter: 'all',
         artists: [],
         artistsPage: 0,
@@ -2676,9 +2673,13 @@ document.addEventListener('alpine:init', () => {
             const params = match[3] || '';
 
             if (view === 'collection') {
-                this.goCollection(new URLSearchParams(params).get('tab') || 'playlists', options);
+                const target = new URLSearchParams(params).get('tab') === 'artists' ? '#followed' : '#artists?tab=playlists';
+                history.replaceState(history.state, '', target);
+                return this._navigateFromHash({...options, fromHash:true});
+            } else if (view === 'followed') {
+                this.openCollectionView('followed', '#followed', options);
             } else if (view === 'artists' && new URLSearchParams(params).get('tab') === 'playlists') {
-                this.openCollectionView('published', '#artists?tab=playlists', options);
+                this.openCollectionView('playlists', '#artists?tab=playlists', options);
             } else if (view === 'artists' && !id) {
                 if (this.view !== 'artists' || this.artistsPage === 0) this.goArtists(options);
                 else if (options.restoreScroll) this._restoreScrollPosition(hash);
@@ -2763,6 +2764,7 @@ document.addEventListener('alpine:init', () => {
 
         _beginNavigation(hash, options = {}) {
             this._navigationVersion++;
+            if (this.view === 'playlist_detail') Alpine.store('playlists')?.stopEdit?.();
             this.cancelPendingSearch();
             if (this._cancelFederationSearch && !hash.startsWith('#search?')) this.stopFederationSearch();
             if (!hash.startsWith('#artistfed')) this.stopArtistFederation();
@@ -2813,12 +2815,6 @@ document.addEventListener('alpine:init', () => {
             this.view = view;
             this._previousView = view;
             this._afterNavigation(options);
-        },
-
-        goCollection(tab = 'playlists', options = {}) {
-            if (GUEST) return;
-            this.collectionTab = tab === 'artists' ? 'artists' : 'playlists';
-            this.openCollectionView('collection', this.collectionTab === 'artists' ? '#collection?tab=artists' : '#collection', options);
         },
 
         openListening(tab = 'overview', options = {}) {
@@ -3202,7 +3198,7 @@ document.addEventListener('alpine:init', () => {
 
         popularityLabel(track) {
             const value = this.trackPopularityValue(track);
-            if (value == null) return 'i';
+            if (value == null) return '';
             if (value >= 10000) return Math.round(value / 1000) + 'k';
             if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
             return Math.round(value).toString();
@@ -3222,12 +3218,6 @@ document.addEventListener('alpine:init', () => {
             return `--popularity-bg:${bg};--popularity-hover-bg:${hoverBg};--popularity-border:${border};--popularity-fg:${fg}`;
         },
 
-        trackInfoTitle(track) {
-            const value = this.trackPopularityValue(track);
-            if (value == null) return this.trackInfo(track);
-            return `${T.lastfmRating}: ${Math.round(value)}\n${this.trackInfo(track)}`;
-        },
-
         downloadTrack(track) {
             if (!track?.id) return;
             const link = document.createElement('a');
@@ -3244,9 +3234,7 @@ document.addEventListener('alpine:init', () => {
             const peers = new Set((track._federationTrack?.availability?.federation || []).map(source => source.owner));
             if (peers.size) rows.push({ label: T.peers, value: peers.size });
             rows.push({label:Alpine.store('lyrics').text('lyrics'), value:track.has_lyrics ? Alpine.store('lyrics').text('available') : Alpine.store('lyrics').text('unavailable'), run:()=>{Alpine.store('info').close();Alpine.store('lyrics').open(track,false);}});
-            const actions = [{label:T.download, run:() => this.downloadTrack(track)}];
-            if (this.similarityTrackId(track)) actions.push({label:T.findSimilar, run:() => this.searchSimilar(track)});
-            Alpine.store('info').openRows(T.trackInfoTitle, rows, actions);
+            Alpine.store('info').openRows(T.trackInfoTitle, rows);
         },
 
         uploadersInfo(uploaders) {
@@ -3292,36 +3280,6 @@ document.addEventListener('alpine:init', () => {
             const artistLinks = this.trackArtistLinks(release.artists ? release : (release._federationRelease || release));
             if (artistLinks.length) rows.splice(1, 0, { label: T.artists, links: artistLinks });
             return rows;
-        },
-
-        trackInfo(track) {
-            if (!track) return '';
-            const artists = this.trackArtistLinks(track).map(artist => artist.label).join(', ') || T.unknown;
-            const audio = [
-                track.audio_format || null,
-                track.audio_bitrate ? `${track.audio_bitrate} kbps` : null,
-                track.audio_sample_rate ? `${track.audio_sample_rate} Hz` : null,
-                track.audio_bit_depth ? `${track.audio_bit_depth}-bit` : null,
-            ].filter(Boolean).join(' · ') || T.unknownAudio;
-            const lines = [
-                track.title || T.unknownTrack,
-                `${T.artists}: ${artists}`,
-                `${T.releaseYear}: ${track.release_year || T.unknown}`,
-                `${T.duration}: ${formatTime(track.duration_seconds)}`,
-                `${T.audio}: ${audio}`,
-                `${T.size}: ${this.bytes(track.file_size_bytes)}`,
-                `${T.uploader}: ${track.uploader_name || 'UFO'}`,
-            ];
-            if (track.lastfm_rating != null || track.lastfm_listeners != null || track.lastfm_playcount != null) {
-                const rating = Number(track.lastfm_rating || 0);
-                lines.push(`${T.lastfmRating}: ${Number.isFinite(rating) ? Math.round(rating) : T.unknown}`);
-                lines.push(`${T.lastfmListeners}: ${new Intl.NumberFormat().format(track.lastfm_listeners || 0)}`);
-                lines.push(`${T.lastfmPlaycount}: ${new Intl.NumberFormat().format(track.lastfm_playcount || 0)}`);
-                if (track.lastfm_updated_at) lines.push(`${T.lastfmUpdated}: ${track.lastfm_updated_at}`);
-            } else {
-                lines.push(`${T.lastfmRating}: ${T.lastfmNotLoaded}`);
-            }
-            return lines.join('\n');
         },
 
         trackInfoRows(track) {
@@ -3516,16 +3474,26 @@ document.addEventListener('alpine:init', () => {
         async openPlaylist(id, options = {}) {
             if (GUEST) return;
             this._beginNavigation('#playlist/' + id, options);
-            Alpine.store('playlists')?.stopEdit?.();
+            const version = this._navigationVersion;
             this.view = 'playlist_detail';
             this.currentPlaylist = null;
             try {
+                const pending = Alpine.store('playlists')?.trackChange;
+                if (pending?.id === Number(id)) {
+                    await pending.done;
+                    if (version !== this._navigationVersion) return;
+                }
                 const res = await fetch(`/api/player/playlists/${id}`);
                 if (!res.ok) throw new Error('failed');
                 const playlist = await res.json();
+                if (version !== this._navigationVersion) return;
+                if (Number(id) === -1) playlist.tracks = this.sortLikeTracks(playlist.tracks || []);
+                this.currentPlaylist = playlist;
+                this._afterNavigation(options);
                 const federationResponse = await fetch(`/api/player/playlists/${id}/federation-tracks`);
                 if (federationResponse.ok) {
                     const references = await federationResponse.json();
+                    if (version !== this._navigationVersion) return;
                     const federated = (references || [])
                         .map(reference => {
                             const track = this.federationTrackFromWire(reference.federation);
@@ -3536,12 +3504,14 @@ document.addEventListener('alpine:init', () => {
                             };
                         })
                         .filter(Boolean);
-                    playlist.tracks = [...(playlist.tracks || []), ...federated];
-                    if (Number(id) === -1) playlist.tracks = this.sortLikeTracks(playlist.tracks);
+                    if (federated.length) {
+                        const tracks = [...this.currentPlaylist.tracks, ...federated];
+                        this.currentPlaylist.tracks = Number(id) === -1 ? this.sortLikeTracks(tracks) : tracks;
+                    }
                 }
-                this.currentPlaylist = playlist;
-            } catch {}
-            this._afterNavigation(options);
+            } catch {
+                if (version === this._navigationVersion && !this.currentPlaylist) this._afterNavigation(options);
+            }
         },
 
         showSharedPlaylist(share, options = {}) {
@@ -3768,7 +3738,8 @@ document.addEventListener('alpine:init', () => {
             this.similaritySearchStats = { loading: false, tracks: 0, artists: 0, peers: 0, elapsed_ms: 0 };
             if (this.view === 'search') {
                 this.view = this._previousView || 'artists';
-                this._setHash(this.view === 'my_uploads' ? '#uploads' : '#artists');
+                const catalogRoutes = {my_uploads:'#uploads', playlists:'#artists?tab=playlists', followed:'#followed'};
+                this._setHash(catalogRoutes[this.view] || '#artists');
                 if (this.view === 'artists' || this.view === 'my_uploads') {
                     this.$nextTick(() => { this._setupScroll(); });
                 }
@@ -6583,6 +6554,8 @@ document.addEventListener('alpine:init', () => {
         modal: null,   // { mode: 'create'|'rename', title: '', id?: number }
         picker: null,  // { trackIds: [1,2,3] }
         editingPlaylistId: null,
+        trackChange: null,
+        get changingTracks() { return !!this.trackChange; },
         _dragIdx: null,
         _dragOverIdx: null,
         _pointerDragMove: null,
@@ -6608,12 +6581,9 @@ document.addEventListener('alpine:init', () => {
             ));
         },
 
-        publishedList() {
-            return this.list.filter(pl => (
-                pl.kind === 'user' &&
-                !pl.is_own &&
-                pl.is_public
-            ));
+        catalogList() {
+            const mine = pl => pl.is_own || pl.kind === 'likes';
+            return [...this.list.filter(mine), ...this.list.filter(pl => !mine(pl) && (pl.is_public || pl.is_saved))];
         },
 
         displayTitle(pl) {
@@ -6636,14 +6606,15 @@ document.addEventListener('alpine:init', () => {
 
         toggleEditCurrent() {
             if (this.isEditingCurrent()) {
-                this.stopEdit();
-                return;
+                return Alpine.store('playlistHeader').save();
             }
             if (!this.canEditCurrent()) return;
+            Alpine.store('playlistHeader').begin(this.currentPlaylist());
             this.editingPlaylistId = Number(this.currentPlaylist().id);
         },
 
         stopEdit() {
+            Alpine.store('playlistHeader').reset();
             this._endPointerReorder(false);
             this.endDrag();
             this.editingPlaylistId = null;
@@ -6660,14 +6631,21 @@ document.addEventListener('alpine:init', () => {
             return (tracks || []).map(track => Number(track?.playlist_track_id || 0)).filter(Boolean);
         },
 
+        _startTrackChange(id) {
+            let finish;
+            this.trackChange = {id, done:new Promise(resolve => { finish = resolve; })};
+            return () => { this.trackChange = null; finish(); };
+        },
+
         async removeCurrentTrack(track, idx) {
-            if (!this.isEditingCurrent() || !track) return;
+            if (!this.isEditingCurrent() || this.changingTracks || Alpine.store('playlistHeader').busy || !track) return;
             const playlist = this.currentPlaylist();
             const playlistId = Number(playlist.id);
             const playlistTrackId = Number(track.playlist_track_id || 0);
             const previous = (playlist.tracks || []).slice();
             if (!playlistTrackId) return;
 
+            const finish = this._startTrackChange(playlistId);
             playlist.tracks = previous.filter(item => Number(item.playlist_track_id || 0) !== playlistTrackId);
             this._updateListTrackCount(playlistId, playlist.tracks.length);
 
@@ -6678,14 +6656,24 @@ document.addEventListener('alpine:init', () => {
                     body: JSON.stringify({ playlist_track_id: playlistTrackId }),
                 });
                 if (!res.ok) throw new Error('remove failed');
-                await this.reload();
+                await this._refreshAfterTrackChange(playlist, res);
             } catch (err) {
-                if (Number(this.currentPlaylist()?.id) === playlistId) {
+                if (this.currentPlaylist() === playlist) {
                     this.currentPlaylist().tracks = previous;
                     this._updateListTrackCount(playlistId, previous.length);
                 }
                 console.warn(err);
+            } finally {
+                finish();
             }
+        },
+
+        async _refreshAfterTrackChange(playlist, response) {
+            const result = await response.json().catch(() => ({}));
+            if (this.currentPlaylist() === playlist && result.artwork) {
+                Alpine.store('playlistHeader').applyArtwork(playlist, result.artwork);
+            }
+            await Promise.all([this.reload(), Alpine.store('pins').reload()]);
         },
 
         startDrag(event, idx) {
@@ -6726,7 +6714,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async moveCurrentTrack(fromIdx, toIdx) {
-            if (!this.isEditingCurrent()) return;
+            if (!this.isEditingCurrent() || this.changingTracks || Alpine.store('playlistHeader').busy) return;
             const playlist = this.currentPlaylist();
             const playlistId = Number(playlist.id);
             const previous = (playlist.tracks || []).slice();
@@ -6742,6 +6730,7 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
 
+            const finish = this._startTrackChange(playlistId);
             try {
                 const res = await fetch(`/api/player/playlists/${playlistId}/tracks`, {
                     method: 'PUT',
@@ -6749,12 +6738,14 @@ document.addEventListener('alpine:init', () => {
                     body: JSON.stringify({ playlist_track_ids: playlistTrackIds }),
                 });
                 if (!res.ok) throw new Error('reorder failed');
-                await this.reload();
+                await this._refreshAfterTrackChange(playlist, res);
             } catch (err) {
-                if (Number(this.currentPlaylist()?.id) === playlistId) {
+                if (this.currentPlaylist() === playlist) {
                     this.currentPlaylist().tracks = previous;
                 }
                 console.warn(err);
+            } finally {
+                finish();
             }
         },
 

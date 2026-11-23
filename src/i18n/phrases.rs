@@ -281,7 +281,8 @@ translations! {
     player_library:          "Library"                         , "Библиотека";
     player_artists:          "Artists"                         , "Артисты";
     player_global_library:   "Catalog"                         , "Каталог";
-    player_my_music:         "My music"                        , "Моя музыка";
+    player_all_music:        "All music"                       , "Вся музыка";
+    player_followed_page:    "Followed"                        , "Подписки";
     player_my_listening:     "My listening"                    , "Мои прослушивания";
     player_quick_access:     "Quick access"                    , "Быстрый доступ";
     player_my_playlists:     "My playlists"                    , "Мои плейлисты";
@@ -301,7 +302,6 @@ translations! {
     player_follow_artist:    "Follow artist"                   , "Подписаться на артиста";
     player_no_followed_artists: "No followed artists"           , "Нет подписок на артистов";
     player_playlists:        "Playlists"                       , "Плейлисты";
-    player_published_playlists: "Published Playlists"           , "Опубликованные плейлисты";
     player_public:           "Public"                          , "Публичный";
     player_published:        "Published"                       , "Опубликован";
     player_by:               "by"                              , "от";
@@ -338,6 +338,16 @@ translations! {
     player_collection_empty: "No playlists yet."                , "Плейлистов пока нет.";
     player_rename_playlist:  "Rename Playlist"                 , "Переименовать плейлист";
     player_playlist_name:    "Playlist name"                   , "Название плейлиста";
+    player_playlist_cover:   "Playlist cover"                  , "Обложка плейлиста";
+    player_edit_playlist_cover: "Edit playlist cover"          , "Изменить обложку плейлиста";
+    player_playlist_cover_auto: "Automatic"                    , "Авто";
+    player_playlist_cover_releases: "Artwork"                  , "Обложки";
+    player_playlist_cover_upload: "Upload image"               , "Загрузить";
+    player_playlist_cover_select: "Choose 1 to 4 covers"       , "Выберите от 1 до 4 обложек";
+    player_playlist_cover_empty: "No artwork in this playlist." , "В этом плейлисте нет обложек.";
+    player_choose_cover_file: "Choose image"                   , "Выбрать файл";
+    player_playlist_cover_invalid: "Choose a JPEG, PNG or WebP image up to 4 MiB" , "Выберите изображение JPEG, PNG или WebP до 4 МиБ";
+    player_playlist_header_failed: "Could not save the playlist. Try again." , "Не удалось сохранить плейлист. Попробуйте ещё раз.";
     player_add_to_playlist:  "Add to Playlist"                 , "Добавить в плейлист";
     player_cancel:           "Cancel"                          , "Отмена";
     player_create:           "Create"                          , "Создать";
@@ -356,6 +366,7 @@ translations! {
     player_no_details:       "No details available."           , "Нет подробностей.";
     player_release_info:     "Release info"                    , "Информация о релизе";
     player_track_info:       "Track info"                      , "Информация о треке";
+    player_track_actions:    "Track actions"                   , "Действия с треком";
     player_type:             "Type"                            , "Тип";
     player_year:             "Year"                            , "Год";
     player_uploaders:        "Uploaders"                       , "Загрузили";

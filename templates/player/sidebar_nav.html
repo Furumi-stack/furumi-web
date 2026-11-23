@@ -1,27 +1,19 @@
 <nav class="music-nav" aria-label="{{ t.player_library }}">
     <div class="music-nav-pages">
-        <a href="#artists" :aria-current="['artists','published'].includes($store.library.view) ? 'page' : null">
+        <a href="#artists" :aria-current="['artists','playlists','my_uploads'].includes($store.library.view) ? 'page' : null">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
             {{ t.player_global_library }}
-        </a>
-        <a href="#collection" :aria-current="['collection','my_uploads'].includes($store.library.view) ? 'page' : null">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16M9 4v16M14 5l5 14"/><path d="m13 5 3-1 5 15-3 1z"/></svg>
-            {{ t.player_my_music }}
         </a>
         <a href="#podcasts" class="podcast-nav" :aria-current="['podcasts','podcast_detail'].includes($store.library.view) ? 'page' : null">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
             <span x-text="$store.podcasts.text('podcasts')"></span>
-        </a>
-        <a href="#listening" :aria-current="$store.library.view === 'listening' ? 'page' : null">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V12M9 20V6M14 20V3M19 20V9"/></svg>
-            {{ t.player_my_listening }}
         </a>
     </div>
     <section class="music-shortcuts"
              x-data="{ get shortcuts() {
                  if (this.$store.pins.items.length || this.$store.pins.undoNotices.length) return this.$store.pins.items;
                  return this.$store.playlists.regularList().filter(p => p.kind === 'user' && p.is_own).slice(0, 3)
-                     .map(p => ({ href: '#playlist/' + p.id, title: p.title, cover_url: p.cover_url, kind: 'playlist' }));
+                     .map(p => ({ href: '#playlist/' + p.id, title: p.title, cover_url: p.cover_url, cover_urls: p.cover_urls, kind: 'playlist' }));
              } }">
         <h2>{{ t.player_quick_access }}</h2>
         <a class="music-shortcut" href="#playlist/-1"
@@ -38,13 +30,14 @@
                 <li class="shortcut-pin-row" :data-pin-href="$store.pins.items.length ? item.href : null"
                     :class="{ 'is-dragging': $store.pins.dragHref === item.href, 'is-drop-before': $store.pins.dropBeforeHref === item.href }">
                     <a class="music-shortcut" :href="item.href" :title="item.title" :aria-current="$store.library._activeHash === item.href ? 'page' : null">
-                        <span class="music-shortcut-art" :class="{ 'shortcut-artist': item.kind === 'artist' }">
+                        <span class="music-shortcut-art" :class="{ 'shortcut-artist': item.kind === 'artist' }"
+                              x-data="{get tiles() {return $store.playlistHeader.tilesFor(item)}}">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <path x-show="item.kind === 'playlist'" d="M3 6h13M3 11h9M3 16h5m8-3v7l5-3.5z"/>
                                 <g x-show="item.kind === 'artist'"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></g>
                                 <g x-show="item.kind === 'release'"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/></g>
                             </svg>
-                            <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy" @error="$el.hidden = true" @load="$el.hidden = false"></template>
+                            {% include "player/playlist_tiles.html" %}
                         </span>
                         <span class="music-shortcut-title" x-text="item.title"></span>
                     </a>

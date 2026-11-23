@@ -20,6 +20,53 @@ const daily = [
     {day:'2024-04-02',plays:1,listened_seconds:80},
 ];
 
+const longDay = '2026-11-21';
+const longHistory = Array.from({length:111}, (_, i) => ({
+    ...seeder, id:'long-'+i, title:'Song '+(i % 10), content_id:'recording-'+(i % 10),
+    started_at_ms:Date.parse(longDay+'T19:00:00Z') - i * 360000,
+}));
+
+async function checkLongDay(page, smallScreen) {
+    await page.goto('http://listens.test/#listening/history?day='+longDay);
+    await page.reload();
+    const pager = page.locator('.listening-pager:visible');
+    const next = pager.locator('button').last();
+    for (let start = 0; start < longHistory.length; start += 25) {
+        const expected = longHistory.slice(start, start+25).map(item => new Date(item.started_at_ms).toISOString());
+        await page.waitForFunction(time =>
+            document.querySelector('.listening-history-row time')?.dateTime === time, expected[0]);
+        const times = await page.locator('.listening-history-row time').evaluateAll(elements => elements.map(el => el.dateTime));
+        assert.deepEqual(times, expected);
+        assert.match(await page.locator('.listening-history-group h2').innerText(), /111 (plays|прослушиваний)/);
+        if (start === 0) {
+            // Locator.click() can programmatically scroll clipped content into view.
+            // Check real wheel/touch scrolling before clicking the first page control.
+            const box = await page.locator('#center-scroll').boundingBox();
+            const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height * .8);
+            if (smallScreen) {
+                const session = await page.context().newCDPSession(page);
+                for (let swipe = 0; swipe < 5; swipe++) {
+                    await session.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[{x,y}]});
+                    for (let step = 1; step <= 5; step++) {
+                        await session.send('Input.dispatchTouchEvent', {type:'touchMove', touchPoints:[{x, y:y-box.height*.12*step}]});
+                    }
+                    await session.send('Input.dispatchTouchEvent', {type:'touchEnd', touchPoints:[]});
+                }
+                await session.detach();
+            } else {
+                await page.mouse.move(x, y);
+                await page.mouse.wheel(0, 2000);
+            }
+            await page.waitForFunction(() => {
+                const el = document.querySelector('.listening-pager button:last-child'), r = el.getBoundingClientRect();
+                return el.contains(document.elementFromPoint(r.x+r.width/2, r.y+r.height/2));
+            }, null, {timeout:3000});
+        }
+        if (start + expected.length < longHistory.length) await next.click();
+        else assert.ok(await next.isDisabled());
+    }
+}
+
 async function checkCalendar(page, queries, width, showEmpty) {
     const content = page.locator('.my-listening');
     const mode = name => content.locator('.listening-chart-switch [data-mode="' + name + '"]');
@@ -28,6 +75,11 @@ async function checkCalendar(page, queries, width, showEmpty) {
         document.querySelectorAll('.listening-heatmap-day').length === count, count);
     const waitFocused = day => page.waitForFunction(day => document.activeElement?.dataset.day === day, day);
     assert.equal(await mode('bars').getAttribute('aria-pressed'), 'true');
+    const bar = content.locator('.listening-day').nth(5); // April 1 in this seven-day interval.
+    const label = await bar.getAttribute('title');
+    assert.match(label, /16 (plays|прослушиваний)/);
+    assert.match(label, /15 (min|мин)/);
+    assert.equal(await bar.getAttribute('aria-label'), label);
     const requests = queries.length;
     if (width < 600) await mode('heatmap').tap();
     else await mode('heatmap').click();
@@ -37,7 +89,8 @@ async function checkCalendar(page, queries, width, showEmpty) {
     assert.equal(queries.length, requests, 'switching charts uses the loaded daily totals');
     assert.equal(await cell('2024-04-01').getAttribute('data-level'), '4');
     assert.equal(await cell('2024-03-28').getAttribute('data-level'), '0');
-    assert.match(await cell('2024-04-01').getAttribute('aria-label'), /\b16\b/);
+    assert.equal(await cell('2024-04-01').getAttribute('aria-label'), label);
+    assert.equal(await cell('2024-04-01').getAttribute('title'), label);
     const saturday = await cell('2024-03-30').boundingBox();
     const sunday = await cell('2024-03-31').boundingBox();
     const monday = await cell('2024-04-01').boundingBox();
@@ -144,6 +197,11 @@ async function run(browser, width, locale) {
             }
             const selected = query.from !== 'all';
             const date = selected ? query.from : '2026-03-28';
+            if (date === longDay) {
+                assert.equal(query.to, longDay);
+                const start = (+query.page - 1) * 25;
+                return send({page:+query.page,limit:25,total:longHistory.length,items:longHistory.slice(start,start+25)});
+            }
             if (selected && !daily.some(row => row.day === date)) return send({page:1,limit:25,total:0,items:[]});
             return send({page:+query.page, limit:25, total:selected ? 1 : 26, items:[{...seeder,
                 id:'event-'+query.page, title:'Hours '+query.page, started_at_ms: Date.parse(date+'T18:05:00Z')}]});
@@ -198,9 +256,15 @@ async function run(browser, width, locale) {
     await page.waitForURL('**/#listening/history');
     await content.locator('.listening-pager:visible button').last().click();
     await content.getByRole('button',{name:'Hours 2',exact:true}).waitFor();
-    await content.locator('details summary').click();
-    const action = content.locator('details[open] button').first();
-    assert.ok(await action.isVisible());
+    const more = content.locator('.track-more-btn');
+    await more.click();
+    const menu = page.locator('.track-action-menu:visible');
+    await menu.locator('[data-action="info"]').waitFor();
+    await page.waitForFunction(() => document.querySelector('.track-action-menu').contains(document.activeElement));
+    const menuBox = await menu.boundingBox();
+    assert.ok(menuBox.x >= 0 && menuBox.x + menuBox.width <= width + 1, 'history actions fit beside the row');
+    await page.keyboard.press('Escape');
+    await menu.waitFor({state:'hidden'});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     fail = true;
     await content.locator('.listening-tabs a').first().click();
@@ -209,6 +273,7 @@ async function run(browser, width, locale) {
     await content.locator('[role=alert] button').click();
     await content.locator('.listening-totals').waitFor();
     await checkCalendar(page, queries, width, () => {empty = true;});
+    await checkLongDay(page, width < 600);
     assert.deepEqual(errors, []);
     await page.close();
 }

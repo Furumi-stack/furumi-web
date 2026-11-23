@@ -82,8 +82,10 @@ async fn list(pool: &PgPool, user: i64) -> Result<Vec<serde_json::Value>, sqlx::
                  'href', pin.href, 'kind', CASE WHEN pin.href LIKE '#artist%' THEN 'artist'
                                                 WHEN pin.href LIKE '#release%' THEN 'release' ELSE 'playlist' END,
                  'id', COALESCE(a.id, r.id, p.id), 'title', COALESCE(a.name, r.title, p.title, pin.peer_title),
-                 'cover_url', COALESCE('/api/player/cover/' || COALESCE(a.image_file_id, r.cover_file_id, p.cover_file_id, ({})) || '/small', pin.peer_cover))
-              {PIN_TARGETS} WHERE pin.user_id = $1 AND {VISIBLE} ORDER BY {PIN_ORDER}"#, include_str!("playlist_cover.sql")))
+                 'cover_url', COALESCE('/api/player/cover/' || COALESCE(a.image_file_id, r.cover_file_id) || '/small', art.urls[1], pin.peer_cover),
+                 'cover_urls', COALESCE(art.urls, ARRAY[]::text[]))
+              {PIN_TARGETS} LEFT JOIN LATERAL ({}) art ON p.id IS NOT NULL
+              WHERE pin.user_id = $1 AND {VISIBLE} ORDER BY {PIN_ORDER}"#, super::playlist_artwork::cover_sql()))
         .bind(user).fetch_all(pool).await
 }
 

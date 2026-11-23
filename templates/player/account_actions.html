@@ -1,4 +1,14 @@
 <div class="account-action-list">
+    <a href="#listening" :aria-current="$store.library.view === 'listening' ? 'page' : null"
+       @click="$store.user.menuOpen = false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V12M9 20V6M14 20V3M19 20V9"/></svg>
+        {{ t.player_my_listening }}
+    </a>
+    <a href="#followed" :aria-current="$store.library.view === 'followed' ? 'page' : null"
+       @click="$store.user.menuOpen = false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0m.5-9 2.5 2.5L23 9"/></svg>
+        {{ t.player_followed_page }}
+    </a>
     <button type="button" @click="$store.user.openSettings()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9m4 0h3M4 12h2m4 0h10M4 18h8m4 0h4"/><circle cx="15" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>
         {{ t.nav_settings }}
