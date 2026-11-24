@@ -19,7 +19,7 @@ async function checkHeader(browser, width) {
     page.on('pageerror', err => errors.push(err.message));
     const tracks = covers.map(({cover_url}, i) => ({
         id:i+2, playlist_track_id:i+7, title:'Track '+i, release_id:30+i%4, release_title:'Album '+(i%4), cover_url,
-        artists:[{id:1,name:'One Artist'}], featured_artists:[], duration_seconds:210,
+        artists:[{id:1,name:'One Artist'}], featured_artists:i % 2 === 0 ? [{id:2,name:'Гость'}] : [], duration_seconds:210,
     }));
     const owned = {id:7,title:'My mix',kind:'user',is_own:true,owner_name:'Listener',track_count:tracks.length,
         tracks, cover_mode:'auto',cover_ids:[],cover_urls:automatic,auto_cover_urls:automatic,cover_url:automatic[0],cover_options:covers};
@@ -216,10 +216,14 @@ async function checkHeader(browser, width) {
     await page.keyboard.press('Escape');
     await editor.waitFor({state:'hidden'});
     const rows = page.locator('.playlist-track-row');
+    const trackFilter = page.locator('#playlist-track-search');
+    await trackFilter.fill('ГОСТЬ');
+    await page.waitForFunction(() => document.querySelectorAll('.playlist-track-row').length === 3);
+    assert.deepEqual(await rows.evaluateAll(elements => elements.map(row => Number(row.dataset.playlistIndex))), [0,2,4]);
     let finishDelete;
     delayedDelete = new Promise(resolve => {finishDelete = resolve;});
     const deleting = page.waitForRequest(req => req.method() === 'DELETE');
-    await activate(rows.nth(4).locator('.playlist-track-remove'));
+    await activate(rows.nth(2).locator('.playlist-track-remove'));
     await deleting;
     assert.equal(await edit.isDisabled(),true,'header save waits for the pending track update');
     await page.evaluate(() => Alpine.store('playlists').moveCurrentTrack(0,1));
@@ -233,8 +237,10 @@ async function checkHeader(browser, width) {
     assert.equal(await input.inputValue(),draftTitle);
     await chooseMode('auto');
     await activate(heading.locator('.playlist-cover-toggle'));
+    assert.equal(await trackFilter.inputValue(), 'ГОСТЬ', 'refreshing the same playlist preserves its filter');
+    await page.waitForFunction(() => document.querySelectorAll('.playlist-track-row').length === 2);
     if (mobile) {
-        const handle = rows.nth(2).locator('.playlist-drag-handle');
+        const handle = rows.nth(1).locator('.playlist-drag-handle');
         await handle.scrollIntoViewIfNeeded();
         const from = await handle.boundingBox(), to = await rows.first().boundingBox();
         const x = Math.round(from.x+from.width/2);
@@ -244,7 +250,7 @@ async function checkHeader(browser, width) {
         await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
         await session.detach();
     } else {
-        await rows.nth(2).dragTo(rows.first());
+        await rows.nth(1).dragTo(rows.first());
     }
     const reordered = [2,0,1,3].map(i => covers[i].cover_url);
     await verifyArt(reordered);

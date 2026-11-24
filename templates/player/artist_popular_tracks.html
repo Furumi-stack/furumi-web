@@ -1,0 +1,31 @@
+<section class="artist-release-group artist-top-tracks" x-data="artistPopularTracks" :class="{'artist-top-folding':folding}"
+         x-effect="setTracks($store.library.currentArtist?.top_tracks)">
+    <h2 class="artist-release-group-title">{{ t.player_top_tracks }}</h2>
+    <div class="track-list-header">
+        <span>#</span>
+        <span>{{ t.player_title }}</span>
+        <span></span>
+        <span></span>
+        <span style="text-align:right">{{ t.player_duration }}</span>
+    </div>
+    <div id="artist-popular-tracks">
+        <template x-for="track in previewRows" :key="track.id">
+            {% include "player/artist_popular_track_row.html" %}
+        </template>
+        <div class="artist-popular-overflow" :class="{'is-open':expanded}" :aria-hidden="!expanded" :inert="expanded ? null : true"
+             @transitionend.self="if (folding && $event.propertyName === 'grid-template-rows' && !$el.offsetHeight) finishFold()">
+            <div class="artist-popular-overflow-clip">
+                <template x-for="track in overflowRows" :key="track.id">
+                    {% include "player/artist_popular_track_row.html" %}
+                </template>
+            </div>
+        </div>
+    </div>
+    <button class="artist-top-tracks-toggle" type="button" x-show="groups.length > 5" x-cloak
+            @click="toggleList()" :aria-expanded="expanded" aria-controls="artist-popular-tracks">
+        <span x-text="expanded ? '{{ t.player_collapse }}' : '{{ t.player_expand_all }}'"></span>
+        <svg viewBox="0 0 36 8" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="m1 1 17 5 17-5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+</section>

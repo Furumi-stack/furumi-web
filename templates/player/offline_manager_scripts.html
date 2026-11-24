@@ -1,0 +1,161 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    const pageSize = 25;
+    const locale = document.documentElement.lang || navigator.language;
+    const ru = locale.startsWith('ru');
+    const collator = new Intl.Collator(locale, {numeric:true, sensitivity:'base'});
+    const dateFormat = new Intl.DateTimeFormat(locale, {dateStyle:'medium', timeStyle:'short'});
+    const number = new Intl.NumberFormat(locale, {maximumFractionDigits:2});
+    const normalize = text => String(text || '').normalize('NFKC').toLowerCase();
+    const validNumber = value => Number.isFinite(value) && value > 0;
+    const missing = value => value == null || value === '';
+
+    function codec(track) {
+        if (track.audio_format) return track.audio_format.toUpperCase();
+        const mime = (track.audio_mime || '').split(';')[0];
+        return mime.startsWith('audio/') ? mime.slice(6).replace(/^x-/, '').toUpperCase() : '';
+    }
+    function bitrate(track) {
+        if (validNumber(track.audio_bitrate)) return track.audio_bitrate;
+        if (!validNumber(track.duration_seconds) || !validNumber(track.bytes)) return null;
+        return Math.round(track.bytes * 8 / track.duration_seconds / 1000) || null;
+    }
+    function sortValue(track, key) {
+        switch (key) {
+            case 'title': return track.title;
+            case 'artist': return track.artist;
+            case 'format': return codec(track);
+            case 'quality': return bitrate(track);
+            case 'plays': return track.play_count || 0;
+            case 'size': return track.bytes;
+            case 'last_played': return track.last_played_at;
+            default: return track.downloaded_at;
+        }
+    }
+    function localMidnight(input) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(input)) return null;
+        const date = new Date(input + 'T00:00:00');
+        const [year, month, day] = input.split('-').map(Number);
+        return date.getFullYear() === year && date.getMonth() + 1 === month && date.getDate() === day
+            ? date.getTime() : null;
+    }
+
+    Alpine.data('offlineCacheManager', () => {
+        // Reuse the filtered order across the count, pagination and row bindings.
+        // The offline store publishes a new array after each catalog refresh.
+        let cachedOrder, snapshot, version = 0, refreshPlays;
+        function matching(manager) {
+            const source = Alpine.raw(manager.$store.offline.items);
+            const {search, sort, ascending} = manager;
+            if (cachedOrder && cachedOrder.source === source && cachedOrder.search === search &&
+                cachedOrder.sort === sort && cachedOrder.ascending === ascending) return cachedOrder.rows;
+            const terms = normalize(search).trim().split(/\s+/).filter(Boolean);
+            const rows = terms.length ? source.filter(track => {
+                const text = normalize([track.title, track.artist, track.release_title, codec(track)].join(' '));
+                return terms.every(term => text.includes(term));
+            }) : source.slice();
+            rows.sort((a, b) => {
+                const left = sortValue(a, sort), right = sortValue(b, sort);
+                if (missing(left) !== missing(right)) return missing(left) ? 1 : -1;
+                let cmp = typeof left === 'number' && typeof right === 'number'
+                    ? left - right : collator.compare(left ?? '', right ?? '');
+                if (!cmp && sort === 'quality') cmp = (a.audio_sample_rate || 0) - (b.audio_sample_rate || 0) ||
+                    (a.audio_bit_depth || 0) - (b.audio_bit_depth || 0);
+                return (ascending ? cmp : -cmp) || collator.compare(a.title, b.title) || a.id - b.id;
+            });
+            cachedOrder = {source, search, sort, ascending, rows};
+            return rows;
+        }
+        return {
+            search:'', sort:'downloaded', ascending:false, requestedPage:1,
+            bulkField:'downloaded', cutoff:'', preview:null, busy:false, notice:'', error:'',
+            init() {
+                const offline = this.$store.offline;
+                refreshPlays = () => offline.refresh();
+                refreshPlays();
+                window.addEventListener('furumusic:offline-plays', refreshPlays);
+                this.$watch('search', () => { this.requestedPage = 1; });
+                this.$watch('sort', key => {
+                    this.requestedPage = 1;
+                    this.ascending = ['title','artist','format'].includes(key);
+                });
+                this.$watch('ascending', () => { this.requestedPage = 1; });
+                for (const key of ['bulkField','cutoff']) this.$watch(key, () => this.cancelPreview());
+            },
+            destroy() {
+                ++version;
+                snapshot = cachedOrder = null;
+                window.removeEventListener('furumusic:offline-plays', refreshPlays);
+            },
+            get matchedCount() { return matching(this).length; },
+            get pageCount() { return Math.max(1, Math.ceil(this.matchedCount / pageSize)); },
+            get page() { return Math.min(this.requestedPage, this.pageCount); },
+            get pageItems() {
+                const start = (this.page - 1) * pageSize;
+                return matching(this).slice(start, start + pageSize);
+            },
+            goPage(page) { this.requestedPage = Math.max(1, Math.min(page, this.pageCount)); },
+            formattedDate(time) { return validNumber(time) ? dateFormat.format(time) : '—'; },
+            qualityLabel(track) {
+                const rate = bitrate(track);
+                return [
+                    codec(track), rate && ((track.audio_bitrate ? '' : '≈') + number.format(rate) + (ru ? ' кбит/с' : ' kbps')),
+                    track.audio_sample_rate && (number.format(track.audio_sample_rate / 1000) + (ru ? ' кГц' : ' kHz')),
+                    track.audio_bit_depth && (track.audio_bit_depth + (ru ? ' бит' : '-bit')),
+                ].filter(Boolean).join(' · ') || '—';
+            },
+            cancelPreview() {
+                ++version;
+                this.preview = snapshot = null;
+                this.error = ''; this.notice = '';
+            },
+            previewRemoval() { return this.prepare(this.bulkField); },
+            clearAll() { return this.prepare('all'); },
+            async prepare(criterion) {
+                if (this.busy) return;
+                this.cancelPreview();
+                const date = this.cutoff, before = localMidnight(date);
+                if (criterion !== 'all' && before === null) {
+                    this.error = ru ? 'Укажите дату.' : 'Choose a date.';
+                    return;
+                }
+                const criteria = criterion === 'all' ? {} :
+                    criterion === 'downloaded' ? {downloadedBefore:before} : {lastPlayedBefore:before};
+                const current = version;
+                this.busy = true;
+                try {
+                    const {ids, count, bytes} = await this.$store.offline.previewCleanup(criteria);
+                    if (current !== version) return;
+                    snapshot = {ids, criteria};
+                    this.preview = {criterion, date:criterion === 'all' ? '' : date, count, bytes};
+                } catch {
+                    if (current === version) this.error = ru ? 'Не удалось прочитать кеш.' : 'Could not read the cache.';
+                } finally { this.busy = false; }
+            },
+            confirmRemoval() {
+                if (!this.preview?.count || !snapshot || this.busy) return;
+                if (this.preview.criterion !== 'all' &&
+                    (this.preview.date !== this.cutoff || this.preview.criterion !== this.bulkField)) return this.cancelPreview();
+                return this.deleteSaved(snapshot.ids, snapshot.criteria);
+            },
+            remove(id) { return this.deleteSaved([id], {}); },
+            async deleteSaved(ids, criteria) {
+                if (this.busy) return;
+                this.busy = true; this.error = ''; this.notice = '';
+                const current = version;
+                try {
+                    const {count, bytes} = await this.$store.offline.removeSaved(ids, criteria);
+                    if (current !== version) return;
+                    this.preview = snapshot = null;
+                    this.requestedPage = this.page;
+                    const size = this.$store.offline.formatBytes(bytes);
+                    this.notice = ru ? `Треков удалено: ${count} · Освобождено ${size}` :
+                        `Removed ${count} ${count === 1 ? 'track' : 'tracks'} · Freed ${size}`;
+                } catch {
+                    if (current === version) this.error = ru ? 'Не удалось удалить музыку с устройства.' : 'Could not remove music from this device.';
+                } finally { this.busy = false; }
+            },
+        };
+    });
+});
+</script>

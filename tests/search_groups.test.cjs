@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),{test}=require('node:test'),fs=require('node:fs'),vm=require('node:vm');
 const script=fs.readFileSync(`${__dirname}/../templates/player/search_group_scripts.html`,'utf8').replace(/<\/?script>/g,'');
-function setup(){const stores={queue:{playRelease(tracks,index){this.tracks=tracks;this.index=index;}}};const context=vm.createContext({clearTimeout,setTimeout,window:{matchMedia:()=>({matches:false})},document:{documentElement:{lang:'en'},addEventListener(_,fn){fn();}},Alpine:{store(name,value){if(value)stores[name]=value;return stores[name];}}});vm.runInContext(script,context);return {groups:stores.searchGroups,stores,context};}
+function setup(){const components={},stores={queue:{playRelease(tracks,index){this.tracks=tracks;this.index=index;}}};const context=vm.createContext({clearTimeout,setTimeout,window:{matchMedia:()=>({matches:false})},document:{documentElement:{lang:'en'},addEventListener(_,fn){fn();}},Alpine:{data(name,factory){components[name]=factory;},store(name,value){if(value)stores[name]=value;return stores[name];}}});vm.runInContext(script,context);return {groups:stores.searchGroups,stores,context,components};}
 const local=(id,title='Still Loving You',artist='Scorpions')=>({id,title,artists:[{id:1,name:artist}],release_title:'Album '+id});
 const ids=rows=>Array.from(rows,row=>row.id);
 test('groups nonadjacent titles by performer, preserving original indices and versions',()=>{
@@ -30,4 +30,37 @@ test('playing a grouped search uses the selected source identity and only visibl
  library.playSearchTrack(1);assert.equal(stores.queue.tracks[stores.queue.index].id,2);
  groups.toggle(groups.rows(library.displaySearchResults.tracks,'search')[0]);library.playSearchTrack(2);
  assert.deepEqual(ids(stores.queue.tracks),[1,'fed:3',2]);assert.equal(stores.queue.tracks[stores.queue.index].id,'fed:3');
+});
+
+test('popular tracks preview five titles, group Cyrillic case variants across credits, and play the chosen recording', () => {
+    const {components, stores, context} = setup();
+    const popular = components.artistPopularTracks();
+    const tracks = [
+        local(1,'Ругань из-за стены'), local(2,'Другая'), local(3,'РУГАНЬ ИЗ-ЗА СТЕНЫ','Гость'),
+        local(4,'Третья'), local(5,'Четвёртая'), local(6,'Пятая'), local(7,'Шестая'),
+    ];
+    stores.library = {currentArtist:{top_tracks:tracks}};
+    popular.setTracks(tracks);
+    assert.deepEqual(ids(popular.previewRows), [1,2,4,5,6]);
+    assert.equal(popular.previewRows[0]._searchGroupCount, 2);
+    popular.versionGroups.toggle(popular.previewRows[0]);
+    assert.deepEqual(ids(popular.previewRows), [1,3,2,4,5,6]);
+    popular.play(popular.previewRows[1]);
+    assert.deepEqual(ids(stores.queue.tracks), [1,3,2,4,5,6,7]);
+    assert.equal(stores.queue.tracks[stores.queue.index], tracks[2]);
+    popular.toggleList();
+    assert.deepEqual(ids(popular.overflowRows), [7]);
+    assert.equal(popular.overflowRows[0]._searchGroupNumber, 6);
+    popular.toggleList();
+    assert.equal(popular.previewRows[1]._searchGroupHidden, true);
+    assert.deepEqual(ids(popular.overflowRows), [7], 'tail stays mounted while folding');
+    popular.toggleList();
+    assert.equal(popular.previewRows[1]._searchGroupHidden, false, 'reversing the fold restores open variants');
+    context.window.matchMedia = () => ({matches:true});
+    popular.toggleList();
+    assert.equal(popular.folding, false);
+    assert.deepEqual(ids(popular.overflowRows), []);
+    assert.deepEqual(ids(popular.previewRows), [1,2,4,5,6]);
+    popular.play(popular.previewRows[0]);
+    assert.deepEqual(ids(stores.queue.tracks), [1,2,4,5,6,7]);
 });

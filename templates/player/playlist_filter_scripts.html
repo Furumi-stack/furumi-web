@@ -1,0 +1,89 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    const normalize = value => String(value || '').normalize('NFKC').toLowerCase().trim().replace(/\s+/g, ' ');
+
+    // Read the old layout before changing any rows. Only the visible section and its immediate
+    // neighbours need transitions, even when a filter removes thousands of tracks at once.
+    function animationWindow(list, count) {
+        const capacity = Math.ceil(window.innerHeight / 32) + 4;
+        if (count <= capacity || !list) return {first:0, size:capacity};
+        const nodes = list.getElementsByClassName('playlist-filter-row');
+        let lo = 0, hi = nodes.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (nodes[mid].getBoundingClientRect().bottom < 0) lo = mid + 1;
+            else hi = mid;
+        }
+        return {first:Math.max(0, lo - 2), size:capacity};
+    }
+
+    Alpine.data('playlistTrackFilter', () => {
+        let identity, entries = [], displayed = [], words = [], timer;
+        return {
+            query:'', visibleRows:[], matchCount:0,
+            setPlaylist(playlist) {
+                const id = playlist && JSON.stringify([playlist.kind, playlist.id]);
+                const changed = id !== identity;
+                identity = id;
+                if (changed) {
+                    this.query = '';
+                    words = [];
+                    displayed = [];
+                }
+                const occurrences = new Map();
+                entries = (playlist?.tracks || []).map((track, idx) => {
+                    const base = playlist.kind !== 'likes' && track.playlist_track_id != null
+                        ? 'entry:' + track.playlist_track_id : 'recording:' + (track.content_id || track.id);
+                    const n = occurrences.get(base) || 0;
+                    occurrences.set(base, n + 1);
+                    const credits = [...(track.artists || []), ...(track.featured_artists || [])];
+                    const text = normalize([track.title, ...credits.map(a => a.name || a.label || a)].join(' '));
+                    return {track, idx, key:base + '/' + n, text, entering:false, leaving:false};
+                });
+                this.updateRows(!changed && words.length > 0);
+            },
+            setQuery(value) {
+                this.query = value;
+                const text = normalize(value);
+                if (text === words.join(' ')) return;
+                words = text ? text.split(' ') : [];
+                this.updateRows(true);
+            },
+            updateRows(animate) {
+                clearTimeout(timer);
+                const matchedEntries = words.length ? entries.filter(entry => words.every(word => entry.text.includes(word))) : entries;
+                this.matchCount = matchedEntries.length;
+                if (!animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                    displayed = matchedEntries;
+                    this.visibleRows = displayed;
+                    return;
+                }
+                const matches = new Set(matchedEntries.map(entry => entry.key));
+                const bounds = animationWindow(this.$refs?.trackList, displayed.length);
+                const old = new Map(displayed.map((row, index) => [row.key, index]));
+                const newStart = Math.min(bounds.first, Math.max(0, matches.size - bounds.size));
+                let rank = 0, transitioning = false;
+                const next = [];
+                for (const entry of entries) {
+                    const previous = old.get(entry.key), matched = matches.has(entry.key);
+                    const leaving = !matched && previous !== undefined && previous >= bounds.first && previous < bounds.first + bounds.size;
+                    if (!matched && !leaving) continue;
+                    const entering = matched && previous === undefined && rank >= newStart && rank < newStart + bounds.size;
+                    if (matched) rank++;
+                    if (leaving || entering) transitioning = true;
+                    next.push({track:entry.track, idx:entry.idx, key:entry.key, leaving:!!leaving, entering});
+                }
+                displayed = next;
+                this.visibleRows = next;
+                if (transitioning) {
+                    timer = setTimeout(() => {
+                        displayed = next.filter(row => !row.leaving).map(row => row.entering ? {...row, entering:false} : row);
+                        this.visibleRows = displayed;
+                    }, 165);
+                }
+            },
+            destroy() { clearTimeout(timer); },
+        };
+    });
+});
+</script>

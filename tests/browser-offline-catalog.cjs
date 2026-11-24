@@ -94,13 +94,42 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             await repo.remove(federated.id);
             let notFound;
             try { await repo.save({id:999},{fetch:online}); } catch(e) {notFound = e.name;}
+            const mediaRequests = requests.filter(path => path.includes('/stream/')).length;
+            const managed = new OfflineCatalog(103), otherTab = new OfflineCatalog(103);
+            for (const t of tracks) await managed.save(t,{fetch:online});
+            const day = Date.UTC(2020,5,1);
+            const records = await managed.all('tracks');
+            await managed.write(['tracks','plays'], get => {
+                for (const row of records) {
+                    row.downloaded_at = row.id === 23 ? day : day - 1;
+                    get('tracks').put(row);
+                }
+                get('plays').put({id:22,last_played_at:day,play_count:1},22);
+            });
+            const byDownload = await managed.previewCleanup({downloadedBefore:day});
+            const byListen = await managed.previewCleanup({lastPlayedBefore:day});
+            await otherTab.touch(21);
+            const protectedTrack = await managed.removeMany(byListen.ids,{lastPlayedBefore:day});
+            const everything = await managed.previewCleanup();
+            const another = {...tracks[2],id:24,stream_url:api+'stream/24',release_id:99,content_id:'b3:'+'3'.repeat(64)};
+            await otherTab.save(another,{fetch:online});
+            await managed.write(['pending'], get => get('pending').put({id:21,queued:day}));
+            const removed = await Promise.all([managed.removeMany(everything.ids),otherTab.removeMany(everything.ids)]);
+            const remainder = await managed.previewCleanup();
+            const metadata = await Promise.all([managed.read('meta','release/37'),managed.read('lyrics',21),managed.read('plays',21),managed.read('pending',21)]);
+            const usage = await managed.stats();
+            const fileNames = [];
+            for await (const name of (await managed.directory()).keys()) fileNames.push(name);
+            const final = await managed.removeMany(remainder.ids);
+            const cleanup = {byDownload,byListen,protectedTrack,everything,removed,remainder,usage,files:fileNames.length,final,
+                removedMetadata:metadata.every(value => value === undefined),empty:await managed.stats()};
             return {queueBefore:queueBefore.length,queueAfter:queueAfter.length,afterSave,beforeRemove,accountSeparated,catalog,
                 guests:featured.featured_tracks.map(t=>t.id),albumTracks:release.tracks.map(t=>t.id),unlikedCopy:unlikedCopy.length,
                 playlist:playlist.map(t => t.id),results:search.tracks.length,lyrics,cover:cover.status,
                 range:[range.status,range.headers.get('Content-Range'),rangeBytes],suffix:suffixBytes,
                 invalidRange:invalidRange.status,head:[head.status,head.headers.get('Content-Length'),(await head.arrayBuffer()).byteLength],
                 error,truncated,files:files.length,afterRemove,remainingBytes,cleared:await repo.stats(),
-                mediaRequests:requests.filter(path => path.includes('/stream/')).length,remoteDetails,notFound};
+                mediaRequests,remoteDetails,notFound,cleanup};
         });
         assert.equal(results.queueBefore,1);
         assert.equal(results.queueAfter,0);
@@ -127,9 +156,22 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         assert.deepEqual(results.afterRemove,{tracks:1,bytes:8});
         assert.deepEqual(results.cleared,{tracks:0,bytes:0});
         assert.equal(results.mediaRequests,1);
+        assert.equal(results.afterSave[0].audio_mime,'audio/mpeg');
         assert.deepEqual(results.remoteDetails,{rejected:false,identity:true,available:true,plays:1,found:1,artistCount:1,featureCount:1,
             navigable:true,lyrics:'Remote words',bytes:6});
         assert.equal(results.notFound,'NotFoundError');
+        const c = results.cleanup;
+        assert.deepEqual(c.byDownload,{ids:[21,22],count:2,bytes:6}); // shared audio, artwork still on track 23
+        assert.deepEqual(c.byListen,{ids:[21],count:1,bytes:0}); // never played uses its download time
+        assert.deepEqual(c.protectedTrack,{ids:[],count:0,bytes:0}); // another tab played it after the preview
+        assert.deepEqual(c.everything,{ids:[21,22,23],count:3,bytes:13});
+        assert.deepEqual(c.removed.sort((a,b)=>b.count-a.count),[{ids:[21,22,23],count:3,bytes:12},{ids:[],count:0,bytes:0}]);
+        assert.deepEqual(c.remainder,{ids:[24],count:1,bytes:7});
+        assert.deepEqual(c.final,c.remainder);
+        assert.equal(c.files,1);
+        assert.deepEqual(c.usage,{tracks:1,bytes:7});
+        assert.ok(c.removedMetadata);
+        assert.deepEqual(c.empty,{tracks:0,bytes:0});
         console.log('Offline catalog, federated media, OPFS ranges, indexing, quotas, persistent queue, shared files and account isolation passed.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode=1; });

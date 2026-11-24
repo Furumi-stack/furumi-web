@@ -578,6 +578,9 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
             this.cleanLastfmQuery();
+            document.addEventListener('click', event => {
+                if (this.menuOpen && !event.target.closest?.('[data-account-menu]')) this.menuOpen = false;
+            }, true);
             this.load();
             this.loadLastfm();
         },
@@ -1040,37 +1043,6 @@ document.addEventListener('alpine:init', () => {
             this.seek(Math.max(0, Math.min(max, current + delta)));
         },
 
-        seekFromClick(event) {
-            const bar = event.currentTarget;
-            this._setProgressFromClientX(event.clientX, bar);
-        },
-
-        _setProgressFromClientX(clientX, bar) {
-            const rect = bar.getBoundingClientRect();
-            const pct = rect.width > 0 ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) : 0;
-            if (this.duration > 0) {
-                this.seek(pct * this.duration);
-            }
-        },
-
-        startProgressDrag(event) {
-            const bar = event.currentTarget;
-            this._setProgressFromClientX(event.clientX, bar);
-            bar.setPointerCapture?.(event.pointerId);
-
-            const move = (e) => {
-                this._setProgressFromClientX(e.clientX, bar);
-            };
-            const stop = () => {
-                window.removeEventListener('pointermove', move);
-                window.removeEventListener('pointerup', stop);
-                window.removeEventListener('pointercancel', stop);
-            };
-            window.addEventListener('pointermove', move);
-            window.addEventListener('pointerup', stop);
-            window.addEventListener('pointercancel', stop);
-        },
-
         next() {
             if (this._shouldSendRemote()) {
                 this._sendRemote('next', {
@@ -1152,34 +1124,6 @@ document.addEventListener('alpine:init', () => {
             const pct = Math.max(0, Math.min(1, Number(position || 0)));
             if (pct <= 0.002) return 0;
             return Math.pow(pct, this._volumeCurve);
-        },
-
-        _setVolumeFromClientX(clientX, bar) {
-            const rect = bar.getBoundingClientRect();
-            const pct = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-            this.setVolume(this._volumeFromSliderPosition(pct));
-        },
-
-        setVolumeFromClick(event) {
-            this._setVolumeFromClientX(event.clientX, event.currentTarget);
-        },
-
-        startVolumeDrag(event) {
-            const bar = event.currentTarget;
-            this._setVolumeFromClientX(event.clientX, bar);
-            bar.setPointerCapture?.(event.pointerId);
-
-            const move = (e) => {
-                this._setVolumeFromClientX(e.clientX, bar);
-            };
-            const stop = () => {
-                window.removeEventListener('pointermove', move);
-                window.removeEventListener('pointerup', stop);
-                window.removeEventListener('pointercancel', stop);
-            };
-            window.addEventListener('pointermove', move);
-            window.addEventListener('pointerup', stop);
-            window.addEventListener('pointercancel', stop);
         },
 
         toggleMute() {
@@ -4648,10 +4592,8 @@ document.addEventListener('alpine:init', () => {
 
         playSearchTrack(idx) {
             const tracks = this.displaySearchResults.tracks;
-            const visible = Alpine.store('searchGroups').rows(tracks, 'search')
-                .filter(row => !row._searchGroupHidden);
-            const position = visible.findIndex(row => row._searchSourceIndex === idx);
-            if (position >= 0) Alpine.store('queue').playRelease(visible.map(row => tracks[row._searchSourceIndex]), position);
+            const groups = Alpine.store('searchGroups');
+            groups.playRows(groups.rows(tracks, 'search'), tracks, idx);
         },
 
         _setupScroll() {

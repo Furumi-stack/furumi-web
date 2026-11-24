@@ -1,0 +1,162 @@
+<section class="offline-cache-manager" x-data="offlineCacheManager" aria-labelledby="offline-cache-title">
+    <div class="offline-cache-layout" x-data="{
+        reviewButton:null,
+        async review(button, prepare) {
+            this.reviewButton = button;
+            await prepare();
+        },
+        restoreReviewFocus() {
+            this.$nextTick(() => {
+                const target = this.reviewButton?.isConnected && !this.reviewButton.disabled ? this.reviewButton : this.$refs.cleanupToggle;
+                target?.focus();
+            });
+        },
+        cancelReview() {
+            if (this.busy) return;
+            this.$refs.confirmDialog?.close();
+            this.cancelPreview();
+            this.restoreReviewFocus();
+        },
+        dismiss() {
+            if (this.busy) return;
+            if (this.preview) this.cancelReview();
+            else this.backToSettings();
+        },
+        async removeRow(track) {
+            const index = this.pageItems.findIndex(item => item.id === track.id);
+            await this.remove(track.id);
+            this.$nextTick(() => {
+                const buttons = this.$refs.results?.querySelectorAll('.offline-cache-delete') || [];
+                (buttons[Math.min(index, buttons.length - 1)] || this.$refs.searchBox)?.focus();
+            });
+        },
+        changePage(next) {
+            this.goPage(next);
+            this.$nextTick(() => { if (this.$refs.body) this.$refs.body.scrollTop = 0; });
+        }
+    }" @cache-manager-back.window="dismiss()">
+        <header class="offline-cache-head">
+            <div>
+                <button type="button" class="offline-cache-back" id="offline-cache-back" @click="backToSettings()">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11.5 5-5 5 5 5"/></svg>
+                    {{ t.player_offline_back_settings }}
+                </button>
+                <h3 id="offline-cache-title" tabindex="-1">{{ t.player_offline_saved }}</h3>
+                <p x-text="formatArtistCount($store.offline.items.length, 'tracks') + ' · ' + $store.offline.formatBytes($store.offline.bytes)"></p>
+            </div>
+            <button type="button" class="mobile-list-action" @click="$store.user.closeSettings()" aria-label="{{ t.player_close }}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 5 14 14M19 5 5 19"/></svg>
+            </button>
+        </header>
+        <div class="offline-cache-body" x-ref="body">
+            <div class="offline-cache-tools">
+                <label class="offline-cache-search">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg>
+                    <input type="search" id="offline-cache-search" x-ref="searchBox" x-model="search" :disabled="busy"
+                           placeholder="{{ t.player_offline_cache_search }}" aria-label="{{ t.player_offline_cache_search }}">
+                </label>
+                <div class="offline-cache-sort">
+                    <label for="offline-cache-sort">{{ t.player_offline_sort }}</label>
+                    <select id="offline-cache-sort" x-model="sort" :disabled="busy">
+                        <option value="downloaded">{{ t.player_offline_download_date }}</option>
+                        <option value="last_played">{{ t.player_offline_last_played }}</option>
+                        <option value="plays">{{ t.player_offline_play_count }}</option>
+                        <option value="size">{{ t.player_size }}</option>
+                        <option value="title">{{ t.player_title }}</option>
+                        <option value="artist">{{ t.player_artist }}</option>
+                        <option value="format">{{ t.media_files_format }}</option>
+                        <option value="quality">{{ t.player_offline_bitrate }}</option>
+                    </select>
+                    <button id="offline-cache-direction" class="offline-cache-icon" type="button" :disabled="busy"
+                            @click="ascending = !ascending" :aria-pressed="ascending"
+                            aria-label="{{ t.player_offline_ascending }}"
+                            :title="ascending ? '{{ t.player_offline_ascending }}' : '{{ t.player_offline_descending }}'">
+                        <svg viewBox="0 0 20 20" aria-hidden="true" :class="{ascending}">
+                            <path d="M6 3v13m-3-3 3 3 3-3M11 4h6m-6 4h4m-4 4h2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <details class="offline-cache-cleanup">
+                <summary x-ref="cleanupToggle">{{ t.player_offline_manage_storage }}</summary>
+                <div class="offline-cleanup-content">
+                    <p>{{ t.player_offline_cleanup_scope }}</p>
+                    <div class="offline-cleanup-controls">
+                        <select id="offline-clean-by" x-model="bulkField" :disabled="busy" aria-label="{{ t.player_offline_remove_by }}">
+                            <option value="downloaded">{{ t.player_offline_downloaded_before }}</option>
+                            <option value="last_played">{{ t.player_offline_played_before }}</option>
+                        </select>
+                        <input type="date" id="offline-clean-date" x-model="cutoff" :disabled="busy" aria-label="{{ t.player_offline_cutoff }}">
+                        <button class="offline-cache-button" type="button" :disabled="!cutoff || busy || !$store.offline.items.length"
+                                @click="review($el, () => previewRemoval())">{{ t.player_offline_preview_removal }}</button>
+                        <button class="offline-cache-clear" type="button" :disabled="busy || !$store.offline.items.length"
+                                @click="review($el, () => clearAll())">{{ t.player_offline_clear }}</button>
+                    </div>
+                    <p x-show="bulkField === 'last_played'">{{ t.player_offline_never_cleanup }}</p>
+                    <template x-if="preview">
+                        <dialog class="offline-cache-confirm" role="alertdialog" aria-labelledby="offline-confirm-title"
+                                aria-describedby="offline-confirm-criterion offline-confirm-summary" x-ref="confirmDialog"
+                                x-init="$nextTick(() => { if ($el.isConnected && !$el.open) { $el.showModal(); $refs.cancelRemoval.focus() } })"
+                                @cancel.stop.prevent="cancelReview()" @click.self="cancelReview()">
+                            <div class="offline-confirm-card">
+                                <h4 id="offline-confirm-title">{{ t.player_offline_remove_confirm }}</h4>
+                                <p id="offline-confirm-criterion" x-text="preview.criterion === 'all' ? '{{ t.player_offline_saved_all }}' :
+                                    (preview.criterion === 'downloaded' ? '{{ t.player_offline_downloaded_before }}' : '{{ t.player_offline_played_before }}') + ' ' + preview.date"></p>
+                                <p id="offline-confirm-summary" role="status"><span class="offline-cache-confirm-count" x-text="formatArtistCount(preview.count, 'tracks')"></span>
+                                    · {{ t.player_offline_will_free }} <span class="offline-cache-confirm-bytes" x-text="$store.offline.formatBytes(preview.bytes)"></span></p>
+                                <p class="offline-cache-error" role="alert" x-show="error" x-text="error"></p>
+                                <div class="offline-cache-confirm-actions">
+                                    <button class="offline-cache-button" type="button" x-ref="cancelRemoval" :disabled="busy"
+                                            @click="cancelReview()">{{ t.player_cancel }}</button>
+                                    <button class="offline-cache-button offline-cache-destructive" type="button" :disabled="busy || !preview.count"
+                                            @click="await confirmRemoval(); if (!preview) restoreReviewFocus()">{{ t.player_remove }}</button>
+                                </div>
+                            </div>
+                        </dialog>
+                    </template>
+                </div>
+            </details>
+            <p class="offline-cache-error" role="alert" x-show="error" x-text="error"></p>
+            <p class="offline-cache-notice" role="status" x-show="notice" x-text="notice"></p>
+            <div class="offline-cache-columns" aria-hidden="true" x-show="matchedCount">
+                <span>{{ t.player_title }}</span><span>{{ t.player_audio }}</span><span>{{ t.player_downloaded }}</span>
+                <span>{{ t.player_offline_last_played }}</span><span>{{ t.player_offline_play_count }}</span>
+            </div>
+            <ul class="offline-cache-list" x-ref="results" aria-label="{{ t.player_offline_saved }}">
+                <template x-for="track in pageItems" :key="track.id">
+                    <li>
+                        <div class="offline-cache-track"><strong x-text="track.title"></strong><small x-text="track.artist"></small></div>
+                        <div class="offline-cache-audio"><span x-text="$store.offline.formatBytes(track.bytes)"></span><small x-text="qualityLabel(track)"></small></div>
+                        <div class="offline-cache-downloaded">
+                            <small>{{ t.player_downloaded }}</small><span x-text="formattedDate(track.downloaded_at)"></span>
+                        </div>
+                        <div class="offline-cache-played">
+                            <small>{{ t.player_offline_last_played }}</small><span x-text="track.last_played_at ? formattedDate(track.last_played_at) : '—'"></span>
+                        </div>
+                        <div class="offline-cache-plays"><small>{{ t.player_offline_play_count }}</small><span x-text="track.play_count || 0"></span></div>
+                        <button type="button" class="offline-cache-delete offline-cache-icon" :disabled="busy"
+                                :aria-label="'{{ t.player_offline_remove }} · ' + track.title" title="{{ t.player_offline_remove }}"
+                                @click="removeRow(track)">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>
+                        </button>
+                    </li>
+                </template>
+            </ul>
+            <p class="offline-cache-empty" x-show="!matchedCount" x-text="search.trim() ? '{{ t.player_no_results }}' : '{{ t.player_offline_empty }}'"></p>
+        </div>
+        <nav class="offline-cache-pages" aria-label="{{ t.player_offline_pages }}">
+            <span x-text="formatArtistCount(matchedCount, 'tracks')"></span>
+            <div>
+                <button class="offline-cache-icon" type="button" :disabled="busy || page <= 1" @click="changePage(page - 1)"
+                        aria-label="{{ t.player_offline_previous_page }}" title="{{ t.player_offline_previous_page }}">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 4-6 6 6 6"/></svg>
+                </button>
+                <span aria-live="polite" x-text="page + ' / ' + pageCount"></span>
+                <button class="offline-cache-icon" type="button" :disabled="busy || page >= pageCount" @click="changePage(page + 1)"
+                        aria-label="{{ t.player_offline_next_page }}" title="{{ t.player_offline_next_page }}">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8 4 6 6-6 6"/></svg>
+                </button>
+            </div>
+        </nav>
+    </div>
+</section>

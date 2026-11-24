@@ -8,6 +8,13 @@ async fn artist_credits_include_visible_features_and_count_each_track_once() -> 
         .max_connections(1)
         .connect(&std::env::var("FURU_ARTIST_TEST_DATABASE_URL")?)
         .await?;
+    let schema = format!("artist_{}", uuid::Uuid::new_v4().simple());
+    sqlx::raw_sql(&format!(
+        "BEGIN; CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}, public;
+         CREATE COLLATION furumusic_unicode (provider=icu, locale='und', deterministic=true);"
+    ))
+    .execute(&pool)
+    .await?;
     sqlx::raw_sql(
         r#"
         CREATE TEMP TABLE furumusic__artist (
@@ -82,5 +89,21 @@ async fn artist_credits_include_visible_features_and_count_each_track_once() -> 
     let cards = helpers::artist_cards(&pool, rows.into(), "medium").await?;
     assert_eq!((cards[0].release_count, cards[0].track_count), (0, 1));
     assert_eq!((cards[1].release_count, cards[1].track_count), (1, 3));
+
+    // Rank titles by their best recording, retaining every version even below the 50-title cutoff.
+    sqlx::raw_sql(
+        r#"UPDATE furumusic__track SET title = 'За дверью' WHERE id = 20;
+           INSERT INTO furumusic__track (id,title,release_id,lastfm_rating,lastfm_playcount) VALUES
+               (100,'ЗА ДВЕРЬЮ',10,90,100), (101,' за   Дверью ',10,90,120);
+           INSERT INTO furumusic__track (id,title,release_id,lastfm_rating)
+               SELECT id, 'Song ' || id, 10, 10 FROM generate_series(1000,1049) id;"#,
+    )
+    .execute(&pool)
+    .await?;
+    let popular = load_artist_detail(&pool, 2).await?.unwrap().top_tracks;
+    let ids: Vec<_> = popular.iter().map(|track| track.id).collect();
+    let expected: Vec<_> = [101, 100, 20].into_iter().chain(1000..1049).collect();
+    assert_eq!(ids, expected);
+    sqlx::query("ROLLBACK").execute(&pool).await?;
     Ok(())
 }

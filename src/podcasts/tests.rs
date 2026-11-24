@@ -18,7 +18,7 @@ fn episode_routes_accept_encoded_colons_and_reject_invalid_ids() {
 
 #[test]
 fn renders_podcast_navigation_and_views() {
-    let html = crate::player::PlayerPageTemplate {
+    let player = crate::player::PlayerPageTemplate {
         t: crate::i18n::Translations::for_lang(crate::i18n::Lang::En),
         guest: false,
         account_id: 1,
@@ -26,9 +26,8 @@ fn renders_podcast_navigation_and_views() {
         downloads_enabled: true,
         torrent_downloads_enabled: true,
         youtube_downloads_enabled: true,
-    }
-    .render()
-    .unwrap();
+    };
+    let html = player.render().unwrap();
     assert_eq!(
         html.matches("href=\"#podcasts\" class=\"podcast-nav\"").count(),
         2
@@ -41,6 +40,13 @@ fn renders_podcast_navigation_and_views() {
     );
     if std::env::var_os("FURU_PODCAST_RENDER_FIXTURE").is_some() {
         std::fs::write("target/podcast-player-fixture.html", html).unwrap();
+        let shared = crate::player::PlayerPageTemplate {
+            guest: true,
+            account_id: 0,
+            share_token: "playlist-filter-test".into(),
+            ..player
+        };
+        std::fs::write("target/shared-player-fixture.html", shared.render().unwrap()).unwrap();
     }
 }
 

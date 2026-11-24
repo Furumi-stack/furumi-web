@@ -971,10 +971,30 @@
 
     <!-- User Settings Modal -->
     <template x-if="$store.user.settingsOpen">
-        <dialog class="modal-overlay user-settings-overlay" aria-labelledby="user-settings-title"
+        <dialog class="modal-overlay user-settings-overlay"
+                x-data="{
+                    managingCache:false, settingsScroll:0,
+                    openCache() {
+                        this.settingsScroll = document.getElementById('user-settings-box').scrollTop;
+                        this.managingCache = true;
+                        this.$nextTick(() => document.getElementById('offline-cache-title')?.focus());
+                    },
+                    backToSettings() {
+                        const box = document.getElementById('user-settings-box'), scroll = this.settingsScroll;
+                        this.managingCache = false;
+                        this.$nextTick(() => {
+                            if (!box?.isConnected) return;
+                            box.scrollTop = scroll;
+                            box.querySelector('#open-offline-cache')?.focus({preventScroll:true});
+                        });
+                    }
+                }"
+                :aria-labelledby="managingCache ? 'offline-cache-title' : 'user-settings-title'"
                 x-init="$nextTick(() => { if ($el.isConnected) { $el.showModal(); document.getElementById($store.user.settingsFocus)?.focus() } })"
-                @cancel.prevent="$store.user.closeSettings()" @click.self="$store.user.closeSettings()" @keydown.space.stop>
-            <div class="modal-box user-settings-modal">
+                @cancel.prevent="managingCache ? $dispatch('cache-manager-back') : $store.user.closeSettings()"
+                @click.self="$store.user.closeSettings()" @keydown.space.stop>
+            <div class="modal-box user-settings-modal" id="user-settings-box" :class="{ 'cache-view':managingCache }">
+                <div x-show="!managingCache">
                 <div class="user-settings-head">
                     <div>
                         <h3 id="user-settings-title" tabindex="-1">{{ t.nav_settings }}</h3>
@@ -1108,6 +1128,14 @@
                         </div>
                     </div>
                 </section>
+                <a class="settings-app-version" data-online-only href="https://github.com/house-of-vanity/furumusic"
+                   target="_blank" rel="noopener noreferrer">Furumusic v{{ t.app_version() }}</a>
+                </div>
+                {% if !guest && share_token.is_empty() %}
+                <template x-if="managingCache">
+                    {% include "player/offline_cache_manager.html" %}
+                </template>
+                {% endif %}
             </div>
         </dialog>
     </template>

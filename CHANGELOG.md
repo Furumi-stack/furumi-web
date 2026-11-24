@@ -10,6 +10,23 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.1 — 2026-11-24
+
+- Artist pages show five distinct popular titles at first. Matching titles are
+  grouped regardless of capitalization, with each recording available from its
+  branch button. A slim control below the list quickly expands or collapses
+  the top 50 and respects reduced-motion settings.
+- The bottom player uses a shorter, responsive grid for playback, seeking and
+  track actions on desktop and mobile.
+- Saved music in account settings opens a searchable, sortable, paginated cache
+  manager. It shows download and last-played dates, play counts, audio details
+  and sizes. Cleanup by date previews the number of recordings and the space
+  that removing them would free, including shared audio and artwork.
+- The account menu shows cache usage against the configured limit and stays
+  open when interacting with its controls. Unpin notifications can be dismissed early.
+- Playlists and Liked songs have an in-list search by track title or artist.
+  Matching rows animate into place and retain their original playback and edit positions.
+
 ## v0.16.0 — 2026-11-24
 
 - Added opt-in offline listening to the web player. Starting a music track saves

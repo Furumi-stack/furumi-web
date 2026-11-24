@@ -1,16 +1,20 @@
 html:not(.offline-active) [data-offline-only], html.offline-active [data-online-only],
 .offline-active :is(.device-popover,.user-settings-devices) > :not([data-offline-only]) {display:none !important}
 .offline-account {padding:8px 8px 9px; border-bottom:1px solid var(--border-color); margin-bottom:3px}
+.offline-account-meter {display:block; width:100%; height:3px; margin:7px 0 3px; appearance:none; border:0; border-radius:4px; overflow:hidden; color:var(--accent); background:var(--bg-active)}
+.offline-account-meter::-webkit-progress-bar {background:var(--bg-active)}
+.offline-account-meter::-webkit-progress-value {background:var(--accent); border-radius:4px}
+.offline-account-meter::-moz-progress-bar {background:var(--accent); border-radius:4px}
 .offline-account-summary,.offline-limit-label,.offline-saved-summary {display:flex; justify-content:space-between; align-items:center; gap:8px}
-.offline-account-summary > div,.offline-saved-summary > div,.offline-saved-list li > div {min-width:0}
+.offline-account-summary > div,.offline-saved-summary > div {min-width:0}
 .offline-account strong,.offline-saved-summary strong {display:block; font-size:13px; font-weight:600; line-height:1.3}
-.offline-account small,.offline-saved small,.offline-track-size {display:block; color:var(--text-subdued); font-size:12px; font-variant-numeric:tabular-nums}
-.offline-manage,.offline-switch-row,.offline-saved-list button {border:0; border-radius:6px; color:var(--text-secondary); background:transparent; font:inherit; cursor:pointer}
+.offline-account small,.offline-saved small {display:block; color:var(--text-subdued); font-size:12px; font-variant-numeric:tabular-nums}
+.offline-manage,.offline-switch-row {border:0; border-radius:6px; color:var(--text-secondary); background:transparent; font:inherit; cursor:pointer}
 .offline-manage {flex:none; padding:6px; font-size:12px; text-decoration:underline; text-underline-offset:3px}
-.offline-manage:is(:hover,:focus-visible),.offline-saved-list button:is(:hover,:focus-visible) {background:var(--bg-active); color:var(--text-primary)}
+.offline-manage:is(:hover,:focus-visible) {background:var(--bg-active); color:var(--text-primary)}
 .offline-switch-row {display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:30px; padding:0; text-align:left}
 .offline-account .offline-switch-row {width:100%; margin-top:3px; font-size:12px}
-.offline-switch-row:focus-visible,.offline-manage:focus-visible,.offline-saved-list button:focus-visible,.offline-scale input:focus-visible {outline:2px solid var(--accent); outline-offset:2px}
+.offline-switch-row:focus-visible,.offline-manage:focus-visible,.offline-scale input:focus-visible {outline:2px solid var(--accent); outline-offset:2px}
 .offline-switch-row:disabled,.offline-saved button:disabled {opacity:.5; cursor:default}
 .offline-switch {position:relative; display:block; flex:none; width:32px; height:18px; border-radius:99px; background:var(--bg-active); border:1px solid var(--text-subdued)}
 .offline-switch::before {content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--text-secondary); transition:transform .12s}
@@ -33,17 +37,12 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 .offline-scale-marks span:last-of-type {transform:translateX(-100%)}
 .offline-scale input {display:block; width:100%; height:20px; margin:0; accent-color:var(--accent)}
 .offline-saved {margin-top:16px}
-.offline-saved-list {list-style:none; margin:8px 0 0; padding:0; max-height:min(28dvh,220px); overflow:auto; overscroll-behavior:contain; scrollbar-width:thin}
-.offline-saved-list li {display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; min-height:40px; border-top:1px solid var(--border-color)}
-.offline-saved-list strong,.offline-saved-list small {display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.offline-saved-list strong {font-size:13px; font-weight:500}
-.offline-saved-list button {display:grid; place-items:center; width:36px; height:36px}
-.offline-saved-list svg,.offline-topbar-state svg {width:17px; height:17px; flex:none}
+.offline-topbar-state svg {width:17px; height:17px; flex:none}
 .offline-settings .offline-error {color:var(--error, #edadaa)}
 .offline-topbar-state {display:inline-flex; align-items:center; gap:5px; flex:none; color:var(--text-secondary); font-size:12px; font-weight:600}
 .offline-devices-note {padding:9px; color:var(--text-secondary); font-size:13px}
 @media(max-width:600px) {
-    .offline-account .offline-switch-row,.offline-manage,.offline-saved-list button {min-height:40px}
+    .offline-account .offline-switch-row,.offline-manage {min-height:40px}
     .offline-topbar-state span {position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%)}
 }
 @media(max-width:360px) {

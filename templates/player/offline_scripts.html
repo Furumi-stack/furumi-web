@@ -83,6 +83,7 @@ document.addEventListener('alpine:init', () => {
                         else this.refresh();
                     }
                     if (data === 'queue') this.drain();
+                    if (data === 'plays') window.dispatchEvent(new Event('furumusic:offline-plays'));
                 };
             }
             window.addEventListener('storage', event => {
@@ -274,6 +275,8 @@ document.addEventListener('alpine:init', () => {
             if (!this.enabled || !eligible(track)) return;
             try {
                 await catalog().touch(track);
+                channel?.postMessage('plays');
+                window.dispatchEvent(new Event('furumusic:offline-plays'));
                 if (!this.active) await this.saveTrack(track);
             } catch { this.error = label('storage'); }
         },
@@ -335,26 +338,23 @@ document.addEventListener('alpine:init', () => {
             this.persist();
             this.drain();
         },
-        async removeTrack(id) {
+        previewCleanup(criteria) {
+            return catalog().previewCleanup(criteria);
+        },
+        async removeSaved(ids, criteria) {
             transfer?.abort();
             try {
-                await catalog().remove(id);
-                blocked = false; this.error = ''; await this.refresh(); channel?.postMessage('cache');
+                const removed = await catalog().removeMany(ids, criteria);
+                blocked = false;
+                this.error = '';
+                return removed;
+            } finally {
+                // The database can commit before the browser finishes unlinking the audio file.
+                await this.refresh();
+                channel?.postMessage('cache');
                 if (this.active) window.dispatchEvent(new CustomEvent('furumusic:offline-catalog'));
                 this.drain();
-            } catch { this.error = label('storage'); }
-        },
-        async clearCache() {
-            transfer?.abort();
-            try {
-                await catalog().clear();
-                const profile = Alpine.store('user')?.profile;
-                if (this.enabled && profile) await catalog().observe('/api/player/me', profile);
-                localStorage.removeItem(stateKey);
-                this.error = ''; blocked = false; await this.refresh(); channel?.postMessage('cache');
-                if (this.enabled && !this.active) await this.captureLibrary();
-                if (this.active) window.dispatchEvent(new CustomEvent('furumusic:offline-catalog'));
-            } catch { this.error = label('storage'); }
+            }
         },
         saveState(state) {
             if (this.enabled) { try { localStorage.setItem(stateKey, JSON.stringify(state)); } catch {} }

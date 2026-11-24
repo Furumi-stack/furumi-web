@@ -30,6 +30,7 @@ if ('serviceWorker' in navigator) {
 {% include "player/modals.html" %}
 {% include "player/lyrics_modal.html" %}
 {% include "player/offline_scripts.html" %}
+{% include "player/offline_manager_scripts.html" %}
 {% include "player/podcast_scripts.html" %}
 {% include "player/lyrics_scripts.html" %}
 {% include "player/lyrics_search_scripts.html" %}
@@ -38,6 +39,7 @@ if ('serviceWorker' in navigator) {
 {% include "player/listening_scripts.html" %}
 {% include "player/track_actions_scripts.html" %}
 {% include "player/playlist_header_scripts.html" %}
+{% include "player/playlist_filter_scripts.html" %}
 {% include "player/scripts.html" %}
 <script>{{ self.alpine()|safe }}</script>
 {% endblock body %}

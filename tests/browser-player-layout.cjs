@@ -4,6 +4,102 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 const html=fs.readFileSync('target/podcast-player-fixture.html','utf8'),alpine=fs.readFileSync('target/podcast-alpine.min.js','utf8');
 const tracks=[1,2,3].map(id=>({id,playlist_track_id:id,title:id===1?'Вся правда о Юрии Куклачёве — очень длинное название трека':'Time Only Knows',artists:[{id:1,name:'Длинное имя исполнителя'}],featured_artists:[],release_id:1,release_title:'Example album',duration_seconds:303,lastfm_rating:87,has_lyrics:id===1,stream_url:'/audio.mp3'}));
 const near=(a,b,message)=>assert.ok(Math.abs(a-b)<1,`${message}: ${a} vs ${b}`);
+async function checkCompactBar(page) {
+ const bar = page.locator('.player-bar');
+ const viewport = page.viewportSize();
+ const rect = await bar.boundingBox();
+ const content = await page.locator('#center-scroll').boundingBox();
+ const narrow = viewport.width <= 640;
+ assert.ok(rect.height <= (narrow ? 112 : 72), `compact bar height at ${viewport.width}px: ${rect.height}`);
+ near(rect.y + rect.height, viewport.height, 'player stays at the bottom');
+ near(content.y + content.height, rect.y, 'library meets the player without overlap or a gap');
+ for (const selector of ['.player-cover', '.player-track-title', '.player-btn-prev', '.player-btn-play',
+  '.player-btn-next', '.lyrics-toggle', '.volume-btn', '.player-right > .queue-toggle-btn', '.device-picker', '.progress-bar']) {
+  assert.ok(await bar.locator(selector).isVisible(), `compact bar shows ${selector} at ${viewport.width}px`);
+ }
+ const controls = await bar.evaluate(el => [...el.querySelectorAll('button, input, .progress-bar')]
+  .filter(item => item.checkVisibility({visibilityProperty:true, opacityProperty:true}) && item.offsetWidth && item.offsetHeight &&
+   !item.closest('.device-popover'))
+  .map(item => {
+   const r = item.getBoundingClientRect();
+   const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+   return {name:item.getAttribute('aria-label') || item.title || item.className,
+    left:r.left, right:r.right, top:r.top, bottom:r.bottom, reachable:item.contains(hit)};
+  }));
+ for (const control of controls) {
+  assert.ok(control.left >= -1 && control.right <= viewport.width + 1 &&
+   control.top >= rect.y - 1 && control.bottom <= viewport.height + 1,
+   `${control.name} is inside the compact bar at ${viewport.width}px`);
+  assert.ok(control.reachable, `${control.name} can be hit at ${viewport.width}px`);
+ }
+ const centerY = box => box.y + box.height / 2;
+ const transport = await bar.locator('.player-btn-play').boundingBox();
+ const queueButton = bar.getByRole('button',{name:'Queue',exact:true});
+ const tools = await queueButton.boundingBox();
+ const cover = await bar.locator('.player-cover').boundingBox();
+ near(centerY(transport), centerY(tools), 'transport and secondary tools share a row');
+ assert.ok(transport.x + transport.width <= tools.x, 'transport is to the left of the secondary tools');
+ if (narrow) {
+  assert.ok(cover.y + cover.height <= transport.y + 1, 'narrow player has a separate compact track row');
+  assert.ok(transport.width >= 36 && transport.height >= 36, 'primary playback control keeps a touch target');
+ } else near(centerY(cover), centerY(transport), 'wide player uses a single row');
+ const seek = bar.getByRole('slider').and(bar.locator('.progress-bar'));
+ const initial = await seek.evaluate(el => {
+  const player = Alpine.store('player');
+  return {value:Number(el.value), time:player.currentTime, progress:player.progress,
+   fraction:Number(el.value) / Number(el.max), duration:player.duration};
+ });
+ near(initial.value, initial.time, 'seek thumb matches current playback time');
+ near(initial.fraction * 100, initial.progress, 'seek fill matches current playback time');
+ await seek.focus();
+ assert.ok(await seek.evaluate(el => document.activeElement === el), 'seek is keyboard accessible');
+ await page.evaluate(() => {
+  const player = Alpine.store('player');
+  window.originalSeek = player.seek;
+  player.seek = value => {
+   window.lastPlayerSeek = value;
+   player.currentTime = value;
+   player.progress = value * 100 / player.duration;
+  };
+ });
+ try {
+  await page.keyboard.press('ArrowRight');
+  assert.ok(await page.evaluate(() => window.lastPlayerSeek > 0), 'keyboard seek reaches the active player');
+  const bounds = await seek.boundingBox();
+  await seek.click({position:{x: Math.round(bounds.width / 2), y: Math.max(1, Math.floor(bounds.height / 2))}});
+  const fraction = await page.evaluate(() => window.lastPlayerSeek / Alpine.store('player').duration);
+  assert.ok(Math.abs(fraction - 0.5) < 0.03, `seeking halfway targets half the duration: ${fraction}`);
+  const volume = bar.getByRole('slider').and(bar.locator('.volume-slider'));
+  if (!(await volume.isVisible())) await bar.locator('.volume-btn').click();
+  const oldVolume = await page.evaluate(() => Alpine.store('player').volume);
+  await volume.focus();
+  await page.keyboard.press(oldVolume > 0 ? 'ArrowLeft' : 'ArrowRight');
+  const changed = await page.evaluate(() => ({
+   volume:Alpine.store('player').volume, ratio:window.lastPlayerSeek / Alpine.store('player').duration,
+  }));
+  assert.notEqual(changed.volume, oldVolume, 'the volume slider responds to the keyboard');
+  assert.equal(changed.ratio, fraction, 'changing volume does not seek');
+  await page.keyboard.press('Escape');
+  await bar.locator('.player-btn-play').focus();
+ } finally {
+  await page.evaluate(({time, progress}) => {
+   const player = Alpine.store('player');
+   player.seek = window.originalSeek;
+   player.currentTime = time;
+   player.progress = progress;
+  }, initial);
+ }
+ await page.evaluate(() => {
+  const player = Alpine.store('player');
+  window.layoutTrack = player.currentTrack;
+  player.currentTrack = null;
+ });
+ await bar.locator('.player-current-track').waitFor({state:'detached'});
+ near((await bar.locator('.player-btn-play').boundingBox()).x, transport.x, 'transport stays put when the track changes');
+ near((await queueButton.boundingBox()).x, tools.x, 'empty state preserves the tool columns');
+ await page.evaluate(() => { Alpine.store('player').currentTrack = window.layoutTrack; });
+ await bar.locator('.player-current-track').waitFor();
+}
 async function checkRowMenu(page, row, track) {
  const more=row.locator('.track-more-btn'),menu=page.locator('.track-action-menu:visible');
  const activate=button=>page.viewportSize().width<=420 ? button.tap() : button.click();
@@ -43,7 +139,7 @@ async function checkRowMenu(page, row, track) {
 (async()=>{
  const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
  try {
-  for(const viewport of [{width:1440,height:1000},{width:900,height:1000},{width:820,height:1000},{width:575,height:900},{width:390,height:844},{width:320,height:740}]){
+  for(const viewport of [{width:320,height:740},{width:390,height:844},{width:575,height:900},{width:820,height:1000},{width:900,height:1000},{width:1440,height:1000},{width:641,height:844}]){
    const page=await browser.newPage({viewport,reducedMotion:'reduce',hasTouch:viewport.width<=420,isMobile:viewport.width<=420}),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.route('**/*',route=>{
     const url=new URL(route.request().url());
@@ -118,7 +214,8 @@ async function checkRowMenu(page, row, track) {
    const current=page.locator('.player-current-track');
    const similar=current.getByRole('button',{name:'Find similar tracks',exact:true});
    const bounds=await current.boundingBox(),button=await similar.boundingBox();
-   assert.ok(button&&button.x>=bounds.x && button.x+button.width<=bounds.x+bounds.width+1,'similarity button fits the now-playing area');
+   assert.ok(button&&button.x>=bounds.x && button.x+button.width<=bounds.x+bounds.width+1,
+    `similarity button fits the now-playing area at ${viewport.width}px: ${JSON.stringify({button,bounds})}`);
    for(const selector of ['.player-track-title','.player-current-like','.player-current-share']){
     const neighbor=await current.locator(selector).boundingBox();
     assert.ok(neighbor.x+neighbor.width<=button.x+1 || button.x+button.width<=neighbor.x+1,'similarity button does not overlap '+selector);
@@ -128,14 +225,8 @@ async function checkRowMenu(page, row, track) {
    near(actions.y+actions.height/2,info.y+info.height/2,'playlist actions share title row');
    assert.ok(actions.x>=0&&actions.x+actions.width<=viewport.width,'actions fit viewport');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'no horizontal page overflow');
-   if(viewport.width<=900){
-    assert.equal(await page.locator('.player-right > .lyrics-toggle:visible').count(),0);
-    const volume=await page.locator('.volume-control').boundingBox(),right=await page.locator('.player-right').boundingBox();
-    assert.ok(volume.x+volume.width<=right.x+right.width,'volume stays inside controls');
-    const device=await page.locator('.player-right > .device-picker').boundingBox();
-    near(device.y+device.height/2,volume.y+volume.height/2,'device control stays on volume row');
-    assert.ok(device.x+device.width<=viewport.width,'device picker stays inside viewport');
-   }else{
+   await checkCompactBar(page);
+   if(viewport.width>900){
     const duration=await row.locator('.track-duration').boundingBox();assert.ok(actions.x+actions.width<=duration.x+1,'actions do not overlap duration');
    }
    await page.screenshot({path:`target/player-layout-likes-${viewport.width}.png`});
@@ -145,10 +236,17 @@ async function checkRowMenu(page, row, track) {
    const editingActions=await row.locator('.track-actions').boundingBox(),editingInfo=await row.locator('.playlist-track-info').boundingBox();
    near(editingActions.y+editingActions.height/2,editingInfo.y+editingInfo.height/2,'editing actions stay in title row');
    if(viewport.width<=900){
-    await page.evaluate(()=>Alpine.store('mobile').playerExpanded=true);await page.waitForSelector('.player-bar.mobile-expanded');
+    await page.locator('.player-cover').click();await page.waitForSelector('.player-bar.mobile-expanded');
     assert.equal(await page.locator('.lyrics-toggle:visible').count(),1,'expanded player has one lyrics button');
     const expandedButtons=await page.locator('.player-buttons').boundingBox();assert.ok(expandedButtons.x>=-1&&expandedButtons.x+expandedButtons.width<=viewport.width+1,`expanded transport buttons fit viewport: ${JSON.stringify({viewport,expandedButtons})}`);
+    const full=page.locator('.mobile-full-player');
+    assert.ok(await full.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'expanded player scrolls without horizontal overflow');
+    for(const selector of ['.player-btn-shuffle','.player-btn-prev','.player-btn-play','.player-btn-next','.player-btn-repeat','.volume-slider','.lyrics-toggle']){
+     assert.ok(await full.locator(selector).isVisible(),'expanded player exposes '+selector);
+    }
     await page.screenshot({path:`target/player-layout-expanded-${viewport.width}.png`});
+    await full.locator('.mobile-player-collapse-btn').click();
+    await page.locator('.player-bar.mobile-expanded').waitFor({state:'detached'});
    }
    for(const seed of tracks.slice(0,2)){
     await page.evaluate(track=>{Alpine.store('player').currentTrack=track;},seed);
@@ -169,6 +267,6 @@ async function checkRowMenu(page, row, track) {
    await similar.waitFor({state:'hidden'});
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('Player layout checks passed at 1440, 900, 820, 575, 390 and 320 px.');
+  console.log('Player layout, seek and volume controls passed at 1440, 900, 820, 641, 575, 390 and 320 px.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

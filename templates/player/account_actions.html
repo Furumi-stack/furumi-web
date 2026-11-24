@@ -3,25 +3,26 @@
     <div class="offline-account-summary">
         <div aria-live="polite">
             <strong x-text="!offline.enabled ? '{{ t.player_offline_disabled }}' : offline.manual ? '{{ t.player_offline_manual }}' : offline.active ? '{{ t.player_offline_auto }}' : '{{ t.player_offline_online }}'"></strong>
-            <small x-show="offline.enabled || offline.bytes" x-text="'{{ t.player_offline_used }} · ' + offline.formatBytes(offline.bytes)"></small>
+            <small x-show="offline.enabled || offline.bytes" x-text="offline.formatBytes(offline.bytes) + ' / ' + offline.formatBytes(offline.limitBytes)"></small>
         </div>
         <button type="button" class="offline-manage" title="{{ t.player_offline_manage_label }}" aria-label="{{ t.player_offline_manage_label }}"
                 @click="$store.user.openSettings('offline-settings-title')">{{ t.player_offline_manage }}</button>
     </div>
+    <progress class="offline-account-meter" x-show="offline.enabled || offline.bytes" x-cloak
+              :max="offline.limitBytes" :value="offline.bytes" aria-label="{{ t.player_offline_used }}"
+              :aria-valuetext="offline.formatBytes(offline.bytes) + ' / ' + offline.formatBytes(offline.limitBytes)"></progress>
     <button type="button" role="switch" class="offline-switch-row" x-show="offline.enabled" x-cloak
             :aria-checked="offline.manual" :disabled="offline.busy" @click="offline.setManual(!offline.manual)">
         <span>{{ t.player_offline_cache_only }}</span><span class="offline-switch" aria-hidden="true"></span>
     </button>
 </section>
 {% endif %}
-<div class="account-action-list">
-    <a data-online-only href="#listening" :aria-current="$store.library.view === 'listening' ? 'page' : null"
-       @click="$store.user.menuOpen = false">
+<div class="account-action-list" @click="if ($event.target.closest('a[href]')) $store.user.menuOpen = false">
+    <a data-online-only href="#listening" :aria-current="$store.library.view === 'listening' ? 'page' : null">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V12M9 20V6M14 20V3M19 20V9"/></svg>
         {{ t.player_my_listening }}
     </a>
-    <a href="#followed" :aria-current="$store.library.view === 'followed' ? 'page' : null"
-       @click="$store.user.menuOpen = false">
+    <a href="#followed" :aria-current="$store.library.view === 'followed' ? 'page' : null">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0m.5-9 2.5 2.5L23 9"/></svg>
         {{ t.player_followed_page }}
     </a>

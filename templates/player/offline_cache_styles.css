@@ -1,0 +1,127 @@
+.user-settings-overlay .user-settings-modal.cache-view {
+    width: min(950px, calc(100% - 24px));
+    height: min(82dvh, 740px);
+    max-width: none;
+    max-height: none;
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+}
+.offline-cache-manager, .offline-cache-layout { min-height: 0; height: 100%; }
+.offline-cache-layout {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    --cache-gutter: clamp(14px, 3vw, 26px);
+    --cache-columns: minmax(130px, 1.8fr) minmax(100px, 1.1fr) repeat(2, minmax(82px, .85fr)) minmax(48px, .6fr) 34px;
+}
+.offline-cache-head, .offline-cache-pages {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding-inline: var(--cache-gutter);
+}
+.offline-cache-head { align-items: flex-start; padding-block: 12px 16px; border-bottom: 1px solid var(--border-color); }
+.offline-cache-head h3 { margin: 3px 0; font-size: 22px; }
+.offline-cache-head p, .offline-cleanup-content > p, .offline-cache-notice, .offline-cache-error,
+.offline-cache-confirm p, .offline-cache-empty { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
+.offline-cache-back, .offline-cache-icon, .offline-cache-button, .offline-cache-clear {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer;
+}
+.offline-cache-back { margin-left: -4px; padding: 4px; min-height: 32px; font-size: 12px; }
+.offline-cache-layout svg:not(.mobile-list-action svg) {
+    width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.offline-cache-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px var(--cache-gutter) 0; }
+.offline-cache-tools, .offline-cache-sort, .offline-cleanup-controls, .offline-cache-confirm-actions, .offline-cache-pages > div {
+    display: flex; align-items: center; gap: 7px;
+}
+.offline-cache-tools { justify-content: space-between; gap: 12px; }
+.offline-cache-search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 10px; }
+.offline-cache-search, .offline-cache-layout select, .offline-cache-layout input[type="date"] {
+    box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary);
+}
+.offline-cache-search svg { color: var(--text-secondary); }
+.offline-cache-search input {
+    min-width: 0; width: 100%; height: 36px; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px;
+}
+.offline-cache-search:focus-within { border-color: var(--accent); }
+.offline-cache-search input:focus { outline: none; }
+.offline-cache-layout select, .offline-cache-layout input[type="date"] {
+    min-width: 0; max-width: 100%; padding: 0 8px; height: 38px; font: inherit; font-size: 13px; color-scheme: dark;
+}
+.offline-cache-sort label, .offline-cache-columns, .offline-cache-list small { color: var(--text-secondary); font-size: 12px; }
+.offline-cache-icon { width: 34px; height: 34px; padding: 0; }
+.offline-cache-icon .ascending { transform: scaleY(-1); }
+.offline-cache-layout :is(button, summary, select, input[type="date"]):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.offline-cache-layout button:disabled { opacity: .45; cursor: default; }
+.offline-cache-layout :is(.offline-cache-back,.offline-cache-icon,.offline-cache-clear):not(:disabled):hover {
+    background: var(--bg-hover); color: var(--text-primary);
+}
+.offline-cache-cleanup { margin: 12px 0; border-block: 1px solid var(--border-color); }
+.offline-cache-cleanup summary { width: fit-content; padding-block: 9px; cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+.offline-cleanup-content { display: grid; gap: 9px; padding-bottom: 12px; }
+.offline-cleanup-controls { flex-wrap: wrap; }
+.offline-cache-button { min-height: 36px; padding: 0 12px; border: 1px solid var(--border-color); background: var(--bg-active); color: var(--text-primary); font-size: 13px; }
+.offline-cache-button:not(:disabled):hover { border-color: var(--text-secondary); }
+.offline-cache-clear { min-height: 36px; padding: 0 8px; margin-left: auto; font-size: 13px; }
+.offline-cache-confirm {
+    position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none;
+    box-sizing: border-box; margin: 0; padding: 16px; border: 0; background: transparent; color: var(--text-primary);
+}
+.offline-cache-confirm[open] { display: grid; place-items: center; }
+.offline-cache-confirm::backdrop { background: rgba(0,0,0,.65); }
+.offline-confirm-card {
+    width: min(100%, 360px); box-sizing: border-box; padding: 20px; border-radius: 12px;
+    border: 1px solid var(--border-color); background: var(--bg-elevated); box-shadow: 0 16px 48px rgba(0,0,0,.45);
+}
+.offline-confirm-card h4 { margin: 0 0 8px; font-size: 18px; }
+.offline-confirm-card p { margin-top: 4px; }
+.offline-cache-confirm-actions { justify-content: flex-end; margin-top: 18px; }
+.offline-cache-destructive, .offline-cache-error { color: #f5b6b1; }
+.offline-cache-destructive { border-color: #69443f; background: #342624; }
+.offline-cache-notice, .offline-cache-error, .offline-cache-empty { padding-block: 10px; }
+.offline-cache-columns, .offline-cache-list li {
+    display: grid; grid-template-columns: var(--cache-columns); align-items: center; gap: 10px; padding: 8px 0;
+}
+.offline-cache-columns { border-bottom: 1px solid var(--border-color); }
+.offline-cache-list { margin: 0; padding: 0; list-style: none; }
+.offline-cache-list li { min-height: 52px; border-bottom: 1px solid var(--border-color); font-variant-numeric: tabular-nums; font-size: 13px; }
+.offline-cache-list li:last-child { border-bottom: 0; }
+.offline-cache-list li > div { min-width: 0; overflow-wrap: anywhere; }
+.offline-cache-track strong, .offline-cache-track small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.offline-cache-track strong { font-size: 14px; font-weight: 600; }
+.offline-cache-list small { display: block; line-height: 1.35; }
+.offline-cache-downloaded small, .offline-cache-played small, .offline-cache-plays small {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+}
+.offline-cache-pages { min-height: 49px; border-top: 1px solid var(--border-color); font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.offline-cache-pages > div > span { min-width: 4ch; text-align: center; }
+@media (max-width: 700px) {
+    .user-settings-overlay .user-settings-modal.cache-view { height: min(90dvh, 840px); }
+    .offline-cache-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .offline-cache-sort { display: grid; grid-template-columns: auto minmax(0,1fr) 38px; }
+    .offline-cache-columns { display: none; }
+    .offline-cache-list li {
+        grid-template-columns: repeat(4, minmax(0,1fr));
+        grid-template-areas: "track track track remove" "audio audio audio plays" "downloaded downloaded played played";
+        gap: 5px 12px; padding: 10px 0;
+    }
+    .offline-cache-track { grid-area: track; }
+    .offline-cache-audio { grid-area: audio; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+    .offline-cache-played { grid-area: played; }
+    .offline-cache-downloaded { grid-area: downloaded; }
+    .offline-cache-downloaded, .offline-cache-played { align-self: start; }
+    .offline-cache-plays { grid-area: plays; }
+    .offline-cache-delete { grid-area: remove; justify-self: end; }
+    .offline-cache-icon { width: 38px; height: 38px; }
+    .offline-cache-downloaded small, .offline-cache-played small, .offline-cache-plays small { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+    .offline-cache-cleanup summary { padding-block: 12px; }
+    .offline-cleanup-controls { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
+    .offline-cleanup-controls :is(select,input) { width: 100%; }
+    .offline-cleanup-controls .offline-cache-clear { margin-left: 0; }
+}
+@media (max-width: 390px) {
+    .offline-cleanup-controls { grid-template-columns: minmax(0,1fr); }
+}

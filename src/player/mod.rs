@@ -4087,28 +4087,18 @@ async fn load_artist_detail(
     let featured_tracks = build_track_items(featured_rows, pool).await?;
 
     let top_tracks = sqlx::query_as::<_, PlaylistTrackRow>(
-        r#"SELECT * FROM (
-               SELECT DISTINCT ON (lower(t.title::text))
-                      NULL::bigint AS playlist_track_id,
-                      t.id, t.title::text as title, t.track_number, t.disc_number,
-                      t.duration_seconds, t.cover_file_id,
-                      r.cover_file_id as release_cover_file_id,
-                      r.id as release_id,
-                      r.title::text as release_title,
-                      r.year as release_year,
-                      COALESCE(mf.uploader_name, 'UFO')::text AS uploader_name,
-                      mf.audio_format,
-                      mf.audio_bitrate,
-                      mf.audio_sample_rate,
-                      mf.audio_bit_depth,
-                      mf.file_size_bytes,
-                      t.lastfm_listeners,
-                      t.lastfm_playcount,
-                      t.lastfm_rating,
-                      t.lastfm_updated_at
+        r#"WITH ranked AS (
+               SELECT t.id,
+                      lower(trim(regexp_replace(normalize(t.title::text, NFKC) COLLATE furumusic_unicode,
+                                                '[[:space:]]+', ' ', 'g'))) AS title_key,
+                      row_number() OVER (
+                          ORDER BY COALESCE(t.lastfm_rating, 0) DESC,
+                                   COALESCE(t.lastfm_playcount, 0) DESC,
+                                   COALESCE(t.lastfm_listeners, 0) DESC,
+                                   r.year DESC NULLS LAST, t.track_number NULLS LAST, t.id
+                      ) AS rank
                FROM furumusic__track t
                JOIN furumusic__release r ON r.id = t.release_id
-               LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
                WHERE t.is_hidden = false
                  AND r.is_hidden = false
                  AND t.id IN (
@@ -4119,15 +4109,23 @@ async fn load_artist_detail(
                        JOIN furumusic__track rt ON rt.release_id = ra.release_id
                       WHERE ra.artist_id = $1
                  )
-               ORDER BY lower(t.title::text), COALESCE(t.lastfm_rating, 0) DESC
-           ) deduped
-           ORDER BY COALESCE(lastfm_rating, 0) DESC,
-                    COALESCE(lastfm_playcount, 0) DESC,
-                    COALESCE(lastfm_listeners, 0) DESC,
-                    release_year DESC NULLS LAST,
-                    track_number NULLS LAST,
-                    id
-           LIMIT 50"#,
+           ), top_titles AS (
+               SELECT title_key, min(rank) AS first_rank
+               FROM ranked GROUP BY title_key ORDER BY first_rank LIMIT 50
+           )
+           SELECT NULL::bigint AS playlist_track_id,
+                  t.id, t.title::text AS title, t.track_number, t.disc_number,
+                  t.duration_seconds, t.cover_file_id, r.cover_file_id AS release_cover_file_id,
+                  r.id AS release_id, r.title::text AS release_title, r.year AS release_year,
+                  COALESCE(mf.uploader_name, 'UFO')::text AS uploader_name,
+                  mf.audio_format, mf.audio_bitrate, mf.audio_sample_rate, mf.audio_bit_depth, mf.file_size_bytes,
+                  t.lastfm_listeners, t.lastfm_playcount, t.lastfm_rating, t.lastfm_updated_at
+           FROM top_titles
+           JOIN ranked USING (title_key)
+           JOIN furumusic__track t ON t.id = ranked.id
+           JOIN furumusic__release r ON r.id = t.release_id
+           LEFT JOIN furumusic__media_file mf ON mf.id = t.audio_file_id
+           ORDER BY top_titles.first_rank, ranked.rank"#,
     )
     .bind(artist_id)
     .fetch_all(pool)

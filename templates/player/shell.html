@@ -10,9 +10,7 @@
         {% if !guest %}
         <aside class="sidebar-left">
             {% include "player/sidebar_nav.html" %}
-            <div class="sidebar-account" x-show="$store.user.profile" x-cloak
-                 @click.outside="$store.user.menuOpen = false"
-                 @focusout="if (!$el.contains($event.relatedTarget)) $store.user.menuOpen = false"
+            <div class="sidebar-account" data-account-menu x-show="$store.user.profile" x-cloak
                  @keydown.escape="if ($store.user.menuOpen) { $store.user.menuOpen = false; $refs.accountTrigger.focus() }">
                 <button class="sidebar-account-trigger" type="button" x-ref="accountTrigger"
                         aria-controls="sidebar-account-actions" :aria-expanded="$store.user.menuOpen"
@@ -96,7 +94,7 @@
                      x-data="{ expanded:false, left:0, right:0, observer:null, init() { this.observer=new ResizeObserver(()=>this.measure()); this.observer.observe($el); }, destroy() { this.observer?.disconnect(); }, measure() { const bar=$el.getBoundingClientRect(); const panel=$el.closest('.content-topbar').getBoundingClientRect(); this.left=Math.max(0,bar.left-panel.left); this.right=Math.max(0,panel.right-bar.right); } }"
                      :class="{ 'search-expanded':expanded, 'lyrics-search-mode':$store.library.searchMode==='lyrics' }"
                      :style="{ '--search-expand-left':left+'px', '--search-expand-right':right+'px' }"
-                     @focusin="measure(); expanded=true; $store.user.menuOpen=false"
+                     @focusin="measure(); expanded=true"
                      @focusout="if (!$el.contains($event.relatedTarget)) expanded=false"
                      @resize.window="measure()">
                     <div class="search-field">
@@ -132,9 +130,7 @@
                 </button>
                 {% endif %}
                 {% if !guest %}
-                <div class="mobile-account-control" x-show="$store.user.profile" x-cloak
-                     @click.outside="$store.user.menuOpen = false"
-                     @focusout="if (!$el.contains($event.relatedTarget)) $store.user.menuOpen = false"
+                <div class="mobile-account-control" data-account-menu x-show="$store.user.profile" x-cloak
                      @keydown.escape="if ($store.user.menuOpen) { $store.user.menuOpen = false; $refs.mobileAccountTrigger.focus() }">
                     <button class="mobile-account-chip" type="button" x-ref="mobileAccountTrigger"
                             aria-label="{{ t.player_account_menu }}" aria-controls="mobile-account-actions"
@@ -263,7 +259,7 @@
                             </template>
                             <!-- Tracks section -->
                             <template x-if="$store.library.displaySearchResults.tracks.length">
-                                <div class="search-section">
+                                <div class="search-section" x-data="{ versionGroups: $store.searchGroups }">
                                     <h2 class="search-section-title">{{ t.player_tracks }}</h2>
                                     <div class="track-list-header">
                                         <span>#</span>
@@ -282,9 +278,7 @@
                                                   :title="track.federation_only ? $store.library.federationDownloadTooltip(track.content_id) || $store.library.federationFailure(track.content_id)?.message : null"></span>
                                             <div class="track-info">
                                                 <div class="track-title search-track-title">
-    <button class="search-version-toggle" type="button" x-show="!track._searchGroupChild && track._searchGroupCount>1" @click.stop="$store.searchGroups.toggle(track)" @dblclick.stop :aria-expanded="track._searchGroupExpanded" :aria-controls="track._searchGroupControls" :title="$store.searchGroups.label(track)" :aria-label="$store.searchGroups.label(track)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/></svg><span x-text="track._searchGroupCount"></span>
-    </button>
+    {% include "player/track_version_toggle.html" %}
     <span class="search-track-name" x-text="track.title"></span>
 </div>
                                                 <div class="track-artists-inline">
@@ -455,75 +449,7 @@
                         </div>
                     </div>
                     <template x-if="$store.library.currentArtist.top_tracks && $store.library.currentArtist.top_tracks.length > 0">
-                        <section class="artist-release-group" x-data="{ expanded: false }">
-                            <div class="artist-release-group-heading">
-                                <h2 class="artist-release-group-title">{{ t.player_top_tracks }}</h2>
-                                <button class="artist-top-tracks-toggle"
-                                        type="button"
-                                        x-show="$store.library.currentArtist.top_tracks.length > 5"
-                                        @click="expanded = !expanded"
-                                        :aria-expanded="expanded"
-                                        x-cloak>
-                                    <span x-text="expanded ? '{{ t.player_collapse }}' : '{{ t.player_expand_all }}'"></span>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                         :class="{ expanded: expanded }">
-                                        <polyline points="6 9 12 15 18 9"/>
-                                    </svg>
-                                </button>
-                            </div>
-                            <div class="track-list-header">
-                                <span>#</span>
-                                <span>{{ t.player_title }}</span>
-                                <span></span>
-                                <span></span>
-                                <span style="text-align:right">{{ t.player_duration }}</span>
-                            </div>
-                            <template x-for="(track, idx) in (expanded
-                                ? $store.library.currentArtist.top_tracks
-                                : $store.library.currentArtist.top_tracks.slice(0, 5))" :key="track.id">
-                                <div class="track-row artist-appearance-row"
-                                     :class="{ playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id }"
-                                     @dblclick="$store.queue.playRelease($store.library.currentArtist.top_tracks, idx)">
-                                    <span class="track-num" x-text="idx + 1"></span>
-                                    <div class="track-info">
-                                        <button class="artist-appearance-cover"
-                                                type="button"
-                                                @click.stop="$store.library.openRelease(track.release_id)"
-                                                :title="track.release_title"
-                                                aria-label="{{ t.player_release }}">
-                                            <template x-if="track.cover_url">
-                                                <img :src="track.cover_url" alt="" aria-hidden="true" loading="lazy">
-                                            </template>
-                                            <template x-if="!track.cover_url">
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
-                                            </template>
-                                        </button>
-                                        <div class="artist-appearance-copy">
-                                            <div class="track-title">
-                                                <span x-text="track.title"></span>
-                                                <span style="color:var(--text-subdued)"> · </span>
-                                                <a class="artist-link" :href="$store.library.releaseHref($store.library.trackRelease(track))" @click.stop @dblclick.stop x-text="track.release_title"></a>
-                                            </div>
-                                            <div class="track-artists-inline">
-                                                {% include "player/track_artist_links.html" %}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <span></span>
-                                    <div class="track-actions">
-                                        {% include "player/track_row_badges.html" %}
-                                        <button data-online-only data-member-only class="like-btn" :class="{ liked: $store.likes.has(track.id) }" @click.stop="$store.likes.toggle(track.id)" title="{{ t.player_like }}">
-                                            <svg viewBox="0 0 24 24" :fill="$store.likes.has(track.id) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
-                                        </button>
-                                        <button class="track-action-btn queue-insert-btn queue-next-btn" @click.stop="$store.queue.addNextInQueue([track])" title="{{ t.player_play_next }}">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h10M5 12h7M5 18h10"/><path d="M17 9l4 3-4 3" fill="currentColor" stroke="none"/></svg>
-                                        </button>
-                                        {% include "player/track_actions_button.html" %}
-                                    </div>
-                                    <span class="track-duration" x-text="formatTime(track.duration_seconds)"></span>
-                                </div>
-                            </template>
-                        </section>
+                        {% include "player/artist_popular_tracks.html" %}
                     </template>
 
                     <template x-for="group in $store.library.artistReleaseGroups()" :key="group.type">
@@ -893,13 +819,31 @@
 
             <!-- Playlist Detail -->
             <template x-if="$store.library.view === 'playlist_detail' && $store.library.currentPlaylist">
-                <div>
+                <div class="playlist-detail-view" x-data="playlistTrackFilter" x-effect="setPlaylist($store.library.currentPlaylist)">
                     <div class="breadcrumb">
                         <a @click="$store.library.goArtists()">{{ t.player_library }}</a>
                         <span>/</span>
                         <span x-text="$store.playlists.displayTitle($store.library.currentPlaylist)"></span>
                     </div>
                     {% include "player/playlist_header.html" %}
+                    <div class="playlist-search-toolbar" role="search" aria-label="{{ t.player_playlist_search }}">
+                        <span class="playlist-match-count" role="status" x-show="query.trim() && matchCount" x-cloak
+                              x-text="formatArtistCount(matchCount, 'tracks')"></span>
+                        <div class="playlist-search-field">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+                            <input id="playlist-track-search" type="search" x-ref="playlistSearch" autocomplete="off" spellcheck="false"
+                                   aria-label="{{ t.player_playlist_search }}" placeholder="{{ t.player_playlist_search }}"
+                                   aria-controls="playlist-filter-rows" :value="query"
+                                   @input="if (!$event.isComposing) setQuery($el.value)" @compositionend="setQuery($el.value)"
+                                   @keydown.escape.stop="if (!$event.isComposing) { if (query) { $event.preventDefault(); setQuery('') } else $el.blur() }"
+                                   @keydown.space.stop>
+                            <button class="playlist-search-clear" type="button" x-show="query" x-cloak
+                                    aria-label="{{ t.player_clear_playlist_search }}" title="{{ t.player_clear_playlist_search }}"
+                                    @click="setQuery(''); $refs.playlistSearch.focus()">
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 5.5 9 9m0-9-9 9"/></svg>
+                            </button>
+                        </div>
+                    </div>
                     <div class="track-list-header playlist-track-list-header"
                          :class="{ editing: $store.playlists.isEditingCurrent() }">
                         <span class="playlist-edit-cell"
@@ -911,97 +855,19 @@
                         <span></span>
                         <span style="text-align:right">{{ t.player_duration }}</span>
                     </div>
-                    <template x-for="(track, idx) in $store.library.currentPlaylist.tracks"
-                              :key="$store.library.currentPlaylist.kind === 'likes' ? (track.content_id || track.id) : (track.playlist_track_id || (track.id + '-' + idx))">
-                        <div class="track-row playlist-track-row"
-                             :data-playlist-index="idx"
-                             :class="{ playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id, editing: $store.playlists.isEditingCurrent(), dragging: $store.playlists._dragIdx === idx }"
-                             :draggable="$store.playlists.isEditingCurrent() && !!track.playlist_track_id"
-                             @dblclick="if (!$store.playlists.isEditingCurrent()) $store.queue.playRelease($store.library.currentPlaylist.tracks, idx)"
-                             @dragstart="if (!$store.playlists.startDrag($event, idx)) $event.preventDefault()"
-                             @dragend="$store.playlists.endDrag()"
-                             @dragover.prevent="$store.playlists.dragOver($event, idx)"
-                             @dragleave="$event.currentTarget.classList.remove('drag-over')"
-                             @drop.prevent="$event.currentTarget.classList.remove('drag-over'); $store.playlists.dropOn(idx)">
-                            <button data-online-only data-member-only class="playlist-track-remove"
-                                    x-show="$store.playlists.isEditingCurrent()"
-                                    x-cloak
-                                    @click.stop="$store.playlists.removeCurrentTrack(track, idx)"
-                                    title="{{ t.player_remove }}"
-                                    aria-label="{{ t.player_remove }}">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="18" y1="6" x2="6" y2="18"/>
-                                    <line x1="6" y1="6" x2="18" y2="18"/>
-                                </svg>
-                            </button>
-                            <span class="track-num federation-track-status">
-                                <template x-if="!track.federation_pending || $store.library.isTrackLocal(track._federationTrack)">
-                                    <span x-text="idx + 1"></span>
-                                </template>
-                                <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && !$store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                                        <circle cx="12" cy="12" r="3"/>
-                                        <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
-                                        <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
-                                    </svg>
-                                </template>
-                                <template x-if="track.federation_pending && $store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
-                                    <span class="federation-error-badge"
-                                          :title="$store.library.federationFailure(track.content_id).message">!</span>
-                                </template>
-                                <template x-if="track.federation_pending && $store.library.federationDownload(track.content_id)">
-                                    <span class="federation-download-progress"
-                                          :class="{ indeterminate: !$store.library.federationDownload(track.content_id).total }">
-                                        <svg viewBox="0 0 20 20">
-                                            <circle class="progress-track" cx="10" cy="10" r="8"/>
-                                            <circle class="progress-value" cx="10" cy="10" r="8"
-                                                    :style="`stroke-dashoffset: ${50.27 * (1 - $store.library.federationDownload(track.content_id).percent / 100)}`"/>
-                                        </svg>
-                                        <span class="progress-percent"
-                                              x-show="$store.library.federationDownload(track.content_id).total"
-                                              x-text="Math.round($store.library.federationDownload(track.content_id).percent)"></span>
-                                        <span class="federation-download-tooltip"
-                                              x-text="$store.library.federationDownloadTooltip(track.content_id)"></span>
-                                    </span>
-                                </template>
-                            </span>
-                            <div class="track-info playlist-track-info">
-                                <button data-online-only data-member-only class="playlist-drag-handle"
-                                        x-show="$store.playlists.isEditingCurrent() && !!track.playlist_track_id"
-                                        x-cloak
-                                        @mousedown.stop
-                                        @click.stop
-                                        @pointerdown.stop="$store.playlists.startPointerReorder($event, idx)"
-                                        title="{{ t.player_edit }}"
-                                        aria-label="{{ t.player_edit }}">
-                                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
-                                </button>
-                                <div class="playlist-track-copy">
-                                    <div class="track-title" x-text="track.title"></div>
-                                    <div class="track-artists-inline">
-                                        {% include "player/track_artist_links.html" %}
-                                    </div>
+                    <div id="playlist-filter-rows" x-ref="trackList">
+                        <template x-for="{track, idx, key, leaving, entering} in visibleRows" :key="key">
+                            <div class="playlist-filter-row" :class="{'is-leaving':leaving, 'is-entering':entering}"
+                                 :aria-hidden="leaving ? 'true' : null" :inert="leaving ? true : null">
+                                <div class="playlist-filter-clip">
+                                    {% include "player/playlist_track_row.html" %}
                                 </div>
                             </div>
-                            <span></span>
-                            <div class="track-actions">
-                                {% include "player/track_row_badges.html" %}
-                                <button data-online-only data-member-only class="like-btn"
-                                        :class="{ liked: track.federation_pending ? $store.library.federationIsLiked(track._federationTrack) : $store.likes.has(track.id) }"
-                                        @click.stop="track.federation_pending ? $store.library.toggleFederationLike(track._federationTrack) : $store.likes.toggle(track.id)"
-                                        title="{{ t.player_like }}">
-                                    <svg viewBox="0 0 24 24"
-                                         :fill="track.federation_pending ? ($store.library.federationIsLiked(track._federationTrack) ? 'currentColor' : 'none') : ($store.likes.has(track.id) ? 'currentColor' : 'none')"
-                                         stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
-                                </button>
-                                <button class="track-action-btn queue-insert-btn queue-next-btn" @click.stop="$store.queue.addNextInQueue([track])" title="{{ t.player_play_next }}">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h10M5 12h7M5 18h10"/><path d="M17 9l4 3-4 3" fill="currentColor" stroke="none"/></svg>
-                                </button>
-                                {% include "player/track_actions_button.html" %}
-                            </div>
-                            <span class="track-duration" x-text="formatTime(track.duration_seconds)"></span>
-                        </div>
-                    </template>
+                        </template>
+                    </div>
+                    <p class="playlist-search-empty" role="status" x-show="query.trim() && !matchCount" x-cloak>
+                        {{ t.player_playlist_no_matches }}
+                    </p>
                 </div>
             </template>
         </div>
@@ -1113,7 +979,7 @@
     </div>
 
     <!-- Player Bar -->
-    <div class="player-bar"
+    <div class="player-bar" @keydown.space.stop
          :class="{ 'mobile-expanded': $store.mobile.playerExpanded }">
         <div class="mobile-full-player">
             <button class="mobile-player-collapse-btn" type="button" @click.stop="$store.mobile.closePlayerFullscreen()" title="{{ t.player_close }}" aria-label="{{ t.player_close }}">
@@ -1150,30 +1016,7 @@
                         </div>
                     </template>
                     <div class="player-track-info">
-                        <div class="player-track-title-row">
-                            <div class="player-track-title" x-text="$store.player.currentTrack.title"></div>
-                            <div class="player-current-actions" data-member-only data-online-only>
-                                <button data-online-only class="like-btn player-current-like"
-                                        :class="{ liked: $store.likes.has($store.player.currentTrack.id) }"
-                                        @click.stop="$store.likes.toggle($store.player.currentTrack.id)"
-                                        title="{{ t.player_like }}"
-                                        aria-label="{{ t.player_like }}">
-                                    <svg viewBox="0 0 24 24" :fill="$store.likes.has($store.player.currentTrack.id) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
-                                </button>
-                                <button class="track-action-btn player-current-share"
-                                        @click.stop="$store.sharing.copyTrack($store.player.currentTrack, $event.currentTarget)"
-                                        title="{{ t.player_share_track }}"
-                                        aria-label="{{ t.player_share_track }}">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.6l6.8-3.9M8.6 13.4l6.8 3.9"/></svg>
-                                </button>
-                                <button type="button" class="track-action-btn player-current-similar"
-                                        x-show="$store.library.similarityTrackId($store.player.currentTrack)"
-                                        @keydown.space.stop @click.stop="$store.library.searchSimilar($store.player.currentTrack)"
-                                        title="{{ t.player_find_similar }}" aria-label="{{ t.player_find_similar }}">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="m16 16 5 5M5.5 10h2l1.3-3 2.2 6 1.5-3h2"/></svg>
-                                </button>
-                            </div>
-                        </div>
+                        <div class="player-track-title" x-text="$store.player.currentTrack.title"></div>
                         <div class="player-track-artist">
                             <template x-for="(artist, artistIdx) in $store.library.trackArtistLinks($store.player.currentTrack)" :key="artist.href + '-' + artistIdx">
                                 <span>
@@ -1193,22 +1036,40 @@
                                x-text="$store.player.currentTrack.release_title"></a>
                         </div>
                     </div>
+                    <div class="player-current-actions" data-member-only data-online-only>
+                        <button data-online-only class="like-btn player-current-like"
+                                :class="{ liked: $store.likes.has($store.player.currentTrack.id) }"
+                                @click.stop="$store.likes.toggle($store.player.currentTrack.id)"
+                                title="{{ t.player_like }}"
+                                aria-label="{{ t.player_like }}">
+                            <svg viewBox="0 0 24 24" :fill="$store.likes.has($store.player.currentTrack.id) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
+                        </button>
+                        <button class="track-action-btn player-current-share"
+                                @click.stop="$store.sharing.copyTrack($store.player.currentTrack, $event.currentTarget)"
+                                title="{{ t.player_share_track }}"
+                                aria-label="{{ t.player_share_track }}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.6l6.8-3.9M8.6 13.4l6.8 3.9"/></svg>
+                        </button>
+                        <button type="button" class="track-action-btn player-current-similar"
+                                x-show="$store.library.similarityTrackId($store.player.currentTrack)"
+                                @keydown.space.stop @click.stop="$store.library.searchSimilar($store.player.currentTrack)"
+                                title="{{ t.player_find_similar }}" aria-label="{{ t.player_find_similar }}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="m16 16 5 5M5.5 10h2l1.3-3 2.2 6 1.5-3h2"/></svg>
+                        </button>
+                    </div>
                 </div>
             </template>
             </div>
 
             <div class="player-controls">
             <div class="player-buttons">
-                <button class="player-btn" :class="{ active: $store.player.shuffle }" @click="$store.player.toggleShuffle()" title="{{ t.player_shuffle }}">
+                <button class="player-btn player-btn-shuffle" :aria-pressed="$store.player.shuffle" :class="{ active: $store.player.shuffle }" @click="$store.player.toggleShuffle()" title="{{ t.player_shuffle }}">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
                 </button>
-            <button class="player-btn lyrics-toggle lyrics-toggle-mobile" type="button" @click.stop="$store.lyrics.open($store.player.currentTrack,true)" :disabled="!$store.player.currentTrack || !!$store.player.currentTrack.podcast" :title="$store.lyrics.text('lyrics')" :aria-label="$store.lyrics.text('lyrics')">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>
-            </button>
                 <button class="player-btn player-btn-prev" @click="$store.player.prev()" title="{{ t.player_previous }}">
                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
                 </button>
-                <button class="player-btn player-btn-play" @click="$store.player.toggle()">
+                <button class="player-btn player-btn-play" :aria-label="$store.player.isPlaying ? '{{ t.player_pause }}' : '{{ t.player_play }}'" @click="$store.player.toggle()">
                     <template x-if="!$store.player.isPlaying">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                     </template>
@@ -1219,7 +1080,7 @@
                 <button class="player-btn player-btn-next" @click="$store.player.next()" title="{{ t.player_next }}">
                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
                 </button>
-                <button class="player-btn" :class="{ active: $store.player.repeatMode !== 'off' }" @click="$store.player.cycleRepeat()" title="{{ t.player_repeat }}">
+                <button class="player-btn player-btn-repeat" :aria-pressed="$store.player.repeatMode !== 'off'" :class="{ active: $store.player.repeatMode !== 'off' }" @click="$store.player.cycleRepeat()" title="{{ t.player_repeat }}">
                     <template x-if="$store.player.repeatMode !== 'one'">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
                     </template>
@@ -1230,22 +1091,13 @@
             </div>
             <div class="player-timeline">
                 <span class="player-time" x-text="formatTime($store.player.currentTime)"></span>
-                <div class="progress-bar"
-                     @pointerdown.prevent="$store.player.startProgressDrag($event)"
-                     aria-label="{{ t.player_duration }}">
-                    <div class="progress-bar-fill" :style="'width:' + $store.player.progress + '%'">
-                        <div class="progress-bar-thumb"></div>
-                    </div>
-                </div>
-                <div class="player-progress-strip-times"
-                     x-text="'-' + formatTime(Math.max(0, $store.player.duration - $store.player.currentTime)) + ' / ' + formatTime($store.player.duration)"></div>
+                <input type="range" class="player-slider progress-bar" min="0" :max="$store.player.duration || 1" step="1"
+                       :value="$store.player.currentTime" :disabled="!$store.player.duration"
+                       :style="'--filled:' + $store.player.progress + '%'"
+                       aria-label="{{ t.player_seek }}" :aria-valuetext="formatTime($store.player.currentTime)"
+                       @input="$store.player.seek(Number($el.value))">
                 <span class="player-time" x-text="formatTime($store.player.duration)"></span>
             </div>
-            <a class="player-version-chip"
-               data-online-only href="https://github.com/house-of-vanity/furumusic"
-               target="_blank"
-               rel="noopener noreferrer"
-               aria-label="Furumusic on GitHub">v{{ t.app_version() }}</a>
             </div>
 
             <div class="player-right">
@@ -1253,7 +1105,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>
             </button>
             <div class="volume-control">
-                <button class="volume-btn" @click="$store.player.toggleMute()">
+                <button class="volume-btn" :aria-label="$store.player.volume ? '{{ t.player_mute }}' : '{{ t.player_unmute }}'" @click="$store.player.toggleMute()">
                     <template x-if="$store.player.volume === 0">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
                     </template>
@@ -1264,13 +1116,10 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
                     </template>
                 </button>
-                <div class="volume-slider"
-                     @pointerdown.prevent="$store.player.startVolumeDrag($event)"
-                     aria-label="{{ t.player_volume }}">
-                    <div class="volume-slider-fill" :style="'width:' + $store.player.volumeSliderPercent() + '%'">
-                        <div class="volume-slider-thumb"></div>
-                    </div>
-                </div>
+                <input type="range" class="player-slider volume-slider" min="0" max="100" step="1"
+                       :value="$store.player.volumeSliderPercent()" :style="'--filled:' + $store.player.volumeSliderPercent() + '%'"
+                       aria-label="{{ t.player_volume }}" :aria-valuetext="Math.round($store.player.volumeSliderPercent()) + '%'"
+                       @input="$store.player.setVolume($store.player._volumeFromSliderPosition(Number($el.value) / 100))">
             </div>
             <button class="queue-toggle-btn" :class="{ active: $store.queue.visible }" @click="$store.queue.visible = !$store.queue.visible" title="{{ t.player_queue }}">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>

@@ -1,85 +1,145 @@
 <script>
 document.addEventListener('alpine:init',()=>{
-    const closeTimers = new Map();
-    Alpine.store('searchGroups',{
-        states: {},
-        reset() {
-            for (const timer of closeTimers.values()) clearTimeout(timer);
-            closeTimers.clear();
-            this.states = {};
-        },
-        normalize(value){return String(value || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();},
-        key(track,source){
-            const metadata=track.metadata || track;
-            const artists=(metadata.artists || []).map(a=>this.normalize(a.name || a.label || a)).filter(Boolean).sort();
-            // A group keeps the search ranking of its first version.
-            return JSON.stringify([source,this.normalize(metadata.title),artists]);
-        },
-        rowId(track,source){return 'search-version-'+source+'-'+encodeURIComponent(String(track.searchKey || track.key?.content_id || track.id));},
-        rows(tracks, source, enabled = true) {
-            const groups = new Map();
-            for (const [index, track] of (tracks || []).entries()) {
-                const key = enabled ? this.key(track, source) : JSON.stringify([source, index]);
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push({ track, index });
-            }
-            const rows = [];
-            let number = 0;
-            for (const [key, members] of groups) {
-                const state = this.states[key];
-                const count = state ? members.length : 1;
-                const headIndex = rows.length;
-                const controls = [];
-                number++;
-                for (let version = 0; version < count; version++) {
-                    const { track, index } = members[version];
-                    const id = this.rowId(track, source);
-                    if (version > 0) controls.push(id);
-                    rows.push({
-                        ...track,
-                        _searchSourceIndex: index,
-                        _searchRowId: id,
-                        _searchGroupKey: key,
-                        _searchGroupCount: members.length,
-                        _searchGroupNumber: number,
-                        _searchGroupChild: version > 0,
-                        _searchGroupExpanded: state === 'open',
-                        _searchGroupHidden: version > 0 && state === 'closing',
-                        _searchGroupControls: null,
-                    });
+    function normalizedName(value) {
+        return String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+    }
+
+    function groupTracks(tracks, keyFor) {
+        const groups = new Map();
+        for (const [index, track] of (tracks || []).entries()) {
+            const key = keyFor(track, index);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({track, index});
+        }
+        return groups;
+    }
+
+    function versionGroups() {
+        const closeTimers = new Map();
+        return {
+            states: {},
+            reset() {
+                for (const timer of closeTimers.values()) clearTimeout(timer);
+                closeTimers.clear();
+                this.states = {};
+            },
+            key(track,source){
+                const metadata=track.metadata || track;
+                const artists=(metadata.artists || []).map(a=>normalizedName(a.name || a.label || a)).filter(Boolean).sort();
+                // A group keeps the search ranking of its first version.
+                return JSON.stringify([source,normalizedName(metadata.title),artists]);
+            },
+            rowId(track,source){return 'search-version-'+source+'-'+encodeURIComponent(String(track.searchKey || track.key?.content_id || track.id));},
+            rows(tracks, source, enabled = true) {
+                const groups = groupTracks(tracks, (track, index) =>
+                    enabled ? this.key(track, source) : JSON.stringify([source, index]));
+                return this.groupRows(groups, source);
+            },
+            groupRows(groups, source, numberOffset = 0, foldVersions = false) {
+                const rows = [];
+                let number = numberOffset;
+                for (const [key, members] of groups) {
+                    const savedState = this.states[key];
+                    const state = foldVersions && savedState ? 'closing' : savedState;
+                    const count = state ? members.length : 1;
+                    const headIndex = rows.length;
+                    const controls = [];
+                    number++;
+                    for (let version = 0; version < count; version++) {
+                        const { track, index } = members[version];
+                        const id = this.rowId(track, source);
+                        if (version > 0) controls.push(id);
+                        rows.push({
+                            ...track,
+                            _searchSourceIndex: index,
+                            _searchRowId: id,
+                            _searchGroupKey: key,
+                            _searchGroupCount: members.length,
+                            _searchGroupNumber: number,
+                            _searchGroupChild: version > 0,
+                            _searchGroupExpanded: state === 'open',
+                            _searchGroupHidden: version > 0 && state === 'closing',
+                            _searchGroupControls: null,
+                        });
+                    }
+                    if (controls.length) rows[headIndex]._searchGroupControls = controls.join(' ');
                 }
-                if (controls.length) rows[headIndex]._searchGroupControls = controls.join(' ');
-            }
-            return rows;
-        },
-        toggle(track) {
-            const key = track._searchGroupKey;
-            clearTimeout(closeTimers.get(key));
-            closeTimers.delete(key);
-            if (this.states[key] !== 'open') {
-                this.states[key] = 'open';
-            } else if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                delete this.states[key];
-            } else {
-                // Keep the children mounted through the 160 ms grid transition.
-                this.states[key] = 'closing';
-                closeTimers.set(key, setTimeout(() => {
+                return rows;
+            },
+            playRows(rows, tracks, sourceIndex) {
+                const visible = rows.filter(row => !row._searchGroupHidden);
+                const position = visible.findIndex(row => row._searchSourceIndex === sourceIndex);
+                if (position >= 0) Alpine.store('queue').playRelease(visible.map(row => tracks[row._searchSourceIndex]), position);
+            },
+            toggle(track) {
+                const key = track._searchGroupKey;
+                clearTimeout(closeTimers.get(key));
+                closeTimers.delete(key);
+                if (this.states[key] !== 'open') {
+                    this.states[key] = 'open';
+                } else if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
                     delete this.states[key];
-                    closeTimers.delete(key);
-                }, 180));
+                } else {
+                    // Keep the children mounted through the 160 ms grid transition.
+                    this.states[key] = 'closing';
+                    closeTimers.set(key, setTimeout(() => {
+                        delete this.states[key];
+                        closeTimers.delete(key);
+                    }, 180));
+                }
+            },
+            label(track){
+                const ru=document.documentElement.lang.startsWith('ru');
+                return (track._searchGroupExpanded?(ru?'Свернуть версии':'Collapse versions'):(ru?'Показать версии':'Show versions'))+' ('+track._searchGroupCount+')';
+            },
+            recordingDetails(track) {
+                const metadata = track.metadata || track;
+                const details = [metadata.release?.key?.year || metadata.year || metadata.release_year,
+                    metadata.audio_format?.toUpperCase(), metadata.audio_bitrate ? metadata.audio_bitrate + ' kbps' : null]
+                    .filter(Boolean).join(' · ');
+                return details && (metadata.release?.title || metadata.release_title) ? ' · ' + details : details;
+            },
+        };
+    }
+
+    Alpine.store('searchGroups', versionGroups());
+    Alpine.data('artistPopularTracks', () => ({
+        versionGroups: versionGroups(),
+        groups: [],
+        expanded: false,
+        folding: false,
+        foldTimer: null,
+        setTracks(tracks) {
+            this.groups = [...groupTracks(tracks, track => JSON.stringify(normalizedName(track.title)))];
+        },
+        get previewRows() {
+            return this.versionGroups.groupRows(this.groups.slice(0, 5), 'artist', 0, this.folding);
+        },
+        get overflowRows() {
+            return this.expanded || this.folding
+                ? this.versionGroups.groupRows(this.groups.slice(5), 'artist', 5, this.folding) : [];
+        },
+        toggleList() {
+            clearTimeout(this.foldTimer);
+            this.expanded = !this.expanded;
+            this.folding = !this.expanded;
+            if (this.folding) {
+                if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) this.finishFold();
+                // A transition can be skipped if both clicks arrive before the next paint.
+                else this.foldTimer = setTimeout(() => this.finishFold(), 220);
             }
         },
-        label(track){
-            const ru=document.documentElement.lang.startsWith('ru');
-            return (track._searchGroupExpanded?(ru?'Свернуть версии':'Collapse versions'):(ru?'Показать версии':'Show versions'))+' ('+track._searchGroupCount+')';
+        finishFold() {
+            if (!this.folding) return;
+            clearTimeout(this.foldTimer);
+            this.folding = false;
+            this.versionGroups.reset();
         },
-        recordingDetails(track) {
-            const metadata = track.metadata || track;
-            const details = [metadata.release?.key?.year || metadata.year || metadata.release_year,
-                metadata.audio_format?.toUpperCase(), metadata.audio_bitrate ? metadata.audio_bitrate + ' kbps' : null]
-                .filter(Boolean).join(' · ');
-            return details && (metadata.release?.title || metadata.release_title) ? ' · ' + details : details;
+        play(track) {
+            const rows = this.versionGroups.groupRows(this.groups, 'artist', 0, this.folding);
+            this.versionGroups.playRows(rows, Alpine.store('library').currentArtist.top_tracks, track._searchSourceIndex);
         },
-    });
+        destroy() { clearTimeout(this.foldTimer); this.versionGroups.reset(); },
+    }));
 });
 </script>

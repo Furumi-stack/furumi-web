@@ -109,11 +109,15 @@ document.addEventListener('alpine:init', () => {
                 const id = ++noticeId;
                 this.undoNotices.push({id, item, order, expires:Date.now() + undoWindow, restoring:false});
                 setTimeout(() => this.expireUndo(id), undoWindow);
-                if (keyboard) Alpine.nextTick(() => this.focusVisible('.pin-undo-notice[data-undo-id="' + id + '"] button'));
+                if (keyboard) Alpine.nextTick(() => this.focusVisible('.pin-undo-notice[data-undo-id="' + id + '"] .pin-undo-action'));
             });
         },
         expireUndo(id) {
             this.undoNotices = this.undoNotices.filter(n => n.id !== id || n.restoring);
+        },
+        dismissUndo(id, event) {
+            this.expireUndo(id);
+            if (event.detail === 0) Alpine.nextTick(() => this.focusVisible('.music-nav-pages a[href="#artists"]'));
         },
         undo(id, event) {
             const notice = this.undoNotices.find(n => n.id === id);

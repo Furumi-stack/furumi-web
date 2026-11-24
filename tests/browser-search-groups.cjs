@@ -5,6 +5,82 @@ const html=fs.readFileSync('target/podcast-player-fixture.html','utf8'),alpine=f
 const local=(id,title='Still Loving You',artist='Scorpions')=>({id,title,artists:[{id:1,name:artist}],featured_artists:[],release_title:'Release '+id,release_id:id,duration_seconds:300+id,audio_format:'flac',lastfm_rating:87});
 const remote=(id,title='Still Loving You')=>({key:{content_id:'b3:'+String(id).padStart(64,'0')},metadata:{title,artists:[{name:'Scorpions'}],featured_artists:[],release:{title:'Remote release '+id},duration_seconds:300+id},availability:{state:'federated',local:null,federation:[{owner:'peer',item_id:String(id)}]}});
 const data={local:[local(1),local(2,'Another song'),local(3),local(4,'Still Loving You','Other artist'),local(5)],remote:[remote(11),remote(12),remote(13,'Other remote song')]};
+async function checkArtistPopularTracks(page) {
+ await page.emulateMedia({reducedMotion:'no-preference'});
+ const tracks = [
+  local(11,'За закрытой дверью','Noize MC'), local(12,'За Закрытой Дверью','Noize MC & Guest'),
+  ...Array.from({length:6}, (_, i) => local(13 + i, 'Song ' + i, 'Noize MC')),
+ ];
+ const artist = {id:397,name:'Noize MC',releases:[],top_tracks:tracks,featured_tracks:[],total_track_count:tracks.length};
+ await page.route('**/api/player/artists/397', route => route.fulfill({json:artist}));
+ await page.evaluate(() => { location.hash = 'artist/397'; });
+ const section = page.locator('.artist-top-tracks');
+ const rows = section.locator('.artist-appearance-row');
+ const toggle = section.locator('.artist-top-tracks-toggle');
+ await rows.first().waitFor();
+ assert.equal(await rows.count(), 5, 'collapsed artist preview counts unique titles');
+ assert.equal(await rows.first().locator('.search-version-toggle span').textContent(), '2');
+ assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+ const bounds = await toggle.boundingBox(), list = await section.locator('#artist-popular-tracks').boundingBox();
+ assert.ok(bounds.y >= list.y + list.height - 1 && bounds.width >= list.width * .9 && bounds.height <= 32);
+ await rows.first().press('Enter');
+ assert.deepEqual(await page.evaluate(() => window.groupPlays.at(-1)), {source:'local',ids:[11,13,14,15,16,17,18],id:11});
+ await rows.first().locator('.search-version-toggle').click();
+ await rows.nth(1).press('Enter');
+ assert.equal(await rows.count(), 6);
+ assert.equal(await page.evaluate(() => window.groupPlays.at(-1).id), 12, 'variant plays its own recording');
+ // Sample the running browser transition at its midpoint, independently of the CI frame rate.
+ const samples = await section.evaluate(async el => {
+  const button = el.querySelector('.artist-top-tracks-toggle'), tail = el.querySelector('.artist-popular-overflow');
+  const measure = () => ({height:tail.getBoundingClientRect().height,
+   button:button.getBoundingClientRect().top - el.getBoundingClientRect().top});
+  async function sample() {
+   const before = measure();
+   button.click();
+   await Alpine.nextTick();
+   const slide = tail.getAnimations().find(a => a.transitionProperty === 'grid-template-rows');
+   if (!slide) throw Error('Missing popular track list slide');
+   const duration = slide.effect.getTiming().duration;
+   slide.pause(); slide.currentTime = duration / 2;
+   const middle = measure(), inert = tail.inert, mounted = tail.querySelectorAll('.track-row').length;
+   slide.play(); await slide.finished;
+   await Alpine.nextTick();
+   return {before,middle,after:measure(),inert,mounted,duration};
+  }
+  return [await sample(),await sample()];
+ });
+ const [open,close] = samples;
+ for (const [result,sign] of [[open,1],[close,-1]]) {
+  assert.ok(result.duration >= 100 && result.duration <= 150);
+  for (const key of ['height','button']) {
+   assert.ok(sign * (result.middle[key] - result.before[key]) > 1, key+' changes during the slide');
+   assert.ok(sign * (result.after[key] - result.middle[key]) > 1, key+' reaches its endpoint after the midpoint');
+  }
+ }
+ assert.equal(close.mounted,2);
+ assert.equal(close.inert,true);
+ await rows.nth(5).waitFor({state:'detached'});
+ assert.equal(await rows.count(),5);
+ assert.equal(await rows.first().locator('.search-version-toggle').getAttribute('aria-expanded'), 'false');
+ // Reverse an in-flight close and let its stale cleanup deadline pass.
+ await toggle.click();
+ await section.locator('.artist-popular-overflow').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+ await toggle.evaluate(async button => {
+  button.click(); await Alpine.nextTick();
+  const tail = button.parentNode.querySelector('.artist-popular-overflow');
+  const slide = tail.getAnimations().find(a => a.transitionProperty === 'grid-template-rows');
+  if (!slide) throw Error('Missing transition to reverse');
+  slide.currentTime = slide.effect.getTiming().duration / 2;
+  button.click();
+ });
+ await page.waitForTimeout(240);
+ assert.equal(await rows.count(),7);
+ assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+ await page.emulateMedia({reducedMotion:'reduce'});
+ await toggle.press('Enter');
+ await rows.nth(5).waitFor({state:'detached'});
+ assert.equal(await section.locator('.artist-popular-overflow').evaluate(el=>el.getAnimations().length),0);
+}
 data.remote[0].metadata.artists[0].local_id=1;
 data.remote[0].metadata.release.local_id=442;
 data.remote[0].metadata.featured_artists=[{name:'Guest & Co'}];
@@ -169,8 +245,9 @@ data.remote[0].availability.local={track_id:111, stream_url:'/api/player/stream/
    assert.deepEqual(await page.evaluate(()=>window.groupPlays.at(-1).ids),['fed:'+remote(12).key.content_id,1,2]);
    assert.equal(await page.evaluate(()=>window.groupPlays.at(-1).id),'fed:'+remote(12).key.content_id);
    assert.equal(await page.evaluate(()=>Alpine.store('player').volume),0.37);
+   await checkArtistPopularTracks(page);
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('Grouped local/federation search, animation, playback and streaming checks passed.');
+  console.log('Search and artist version groups, expansion, playback and streaming checks passed.');
  }finally{await browser.close();server.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

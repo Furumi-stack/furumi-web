@@ -42,7 +42,6 @@
 .lyrics-overlay:not(.lyrics-fullscreen) .lyrics-footer {padding-top:9px;padding-bottom:9px}
 .lyrics-transport {display:flex;gap:10px}
 .lyrics-dialog :focus-visible {outline:2px solid #e5fff4;outline-offset:4px}
-.lyrics-toggle-mobile {display:none!important}
 .lyrics-presence {color:var(--accent,#80bda6)!important;width:24px!important;min-width:24px!important;padding:3px!important}
 .lyrics-presence svg {width:15px;height:15px}
 @media(max-width:768px) {
@@ -56,10 +55,6 @@
  .lyrics-line {font-size:30px;padding:10px 0}
  .lyrics-footer {padding-left:20px;padding-right:20px;gap:8px;flex-wrap:wrap}
 }
-@media (max-width:900px), (pointer:coarse) and (max-width:1024px) {
- .lyrics-toggle-mobile {display:inline-flex!important}
- .player-right > .lyrics-toggle {display:none}
-}
 @media(prefers-reduced-motion:reduce) {.lyrics-line {transition:none}}
 :root {
     --bg-primary: #121212;
@@ -72,7 +67,7 @@
     --text-subdued: #6a6a6a;
     --accent: #1db954;
     --accent-hover: #1ed760;
-    --player-height: 80px;
+    --player-height: 64px;
     --sidebar-width: 240px;
     --queue-width: 300px;
     --border-color: #282828;
@@ -788,16 +783,6 @@ button.user-stat:hover {
     margin-bottom: 14px;
     text-transform: capitalize;
 }
-.artist-release-group-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 14px;
-}
-.artist-release-group-heading .artist-release-group-title {
-    margin-bottom: 0;
-}
 .artist-top-tracks-toggle {
     border: 0;
     background: transparent;
@@ -816,13 +801,45 @@ button.user-stat:hover {
     color: var(--text-primary);
     background: var(--bg-hover);
 }
-.artist-top-tracks-toggle svg {
-    width: 15px;
-    height: 15px;
-    transition: transform 0.18s ease;
+.artist-top-tracks .artist-top-tracks-toggle {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    min-height: 26px;
+    margin-top: 3px;
+    padding: 2px 8px;
+    gap: 9px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
 }
-.artist-top-tracks-toggle svg.expanded {
+.artist-top-tracks .artist-top-tracks-toggle::before,
+.artist-top-tracks .artist-top-tracks-toggle::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+}
+.artist-top-tracks-toggle svg {
+    width: 34px;
+    height: 8px;
+    transition: transform 160ms ease-out;
+}
+.artist-top-tracks-toggle[aria-expanded="true"] svg {
     transform: rotate(180deg);
+}
+.artist-top-tracks-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.artist-popular-overflow {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 140ms ease-in-out;
+}
+.artist-popular-overflow.is-open { grid-template-rows: 1fr; }
+.artist-popular-overflow-clip { min-height: 0; overflow: hidden; }
+.artist-top-folding .search-result-entry { transition-duration: 140ms; }
+@media (prefers-reduced-motion: reduce) {
+    .artist-top-tracks-toggle svg, .artist-popular-overflow { transition: none; }
 }
 
 /* Release detail header */
@@ -930,8 +947,7 @@ button.user-stat:hover {
 }
 
 .playlist-track-row.drag-over {
-    border-top: 2px solid var(--accent);
-    margin-top: -2px;
+    box-shadow: inset 0 2px var(--accent);
 }
 
 .playlist-track-remove {
@@ -1698,33 +1714,27 @@ button.user-stat:hover {
     background: var(--bg-secondary);
     border-top: 1px solid var(--border-color);
     display: grid;
-    grid-template-columns: 1fr 2fr 1fr;
+    grid-template-areas: "now transport seek tools";
+    grid-template-columns: minmax(0, 1.05fr) auto minmax(0, 1fr) auto;
     align-items: center;
-    padding: 0 16px var(--safe-bottom);
+    column-gap: clamp(8px, 1.35vw, 24px);
+    padding: 0 max(12px, env(safe-area-inset-right)) var(--safe-bottom) max(12px, env(safe-area-inset-left));
     z-index: 10;
     flex-shrink: 0;
 }
 
-.player-now-playing {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    overflow: hidden;
-    min-width: 0;
-}
-
-.player-now-playing > div { min-width: 0; }
+.player-now-playing { grid-area: now; min-width: 0; }
 
 .player-current-track {
     display: flex;
     align-items: center;
-    gap: 12px;
-    overflow: hidden;
+    gap: 9px;
+    min-width: 0;
 }
 
 .player-cover {
-    width: 56px;
-    height: 56px;
+    width: 44px;
+    height: 44px;
     border: 0;
     padding: 0;
     color: inherit;
@@ -1773,13 +1783,6 @@ button.user-stat:hover {
     min-width: 0;
 }
 
-.player-track-title-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
 .player-track-title {
     font-size: 13px;
     font-weight: 500;
@@ -1792,7 +1795,7 @@ button.user-stat:hover {
 .player-current-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 2px;
     flex: 0 0 auto;
 }
 
@@ -1837,18 +1840,13 @@ button.user-stat:hover {
     color: var(--text-primary);
 }
 
-.player-controls {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    min-width: 0;
-}
+.player-controls { display: contents; }
 
 .player-buttons {
+    grid-area: transport;
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: clamp(2px, .4vw, 8px);
 }
 
 .player-btn {
@@ -1871,8 +1869,8 @@ button.user-stat:hover {
 .player-btn.active { color: var(--accent); }
 
 .player-btn-play {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     background: var(--text-primary);
     border-radius: 50%;
     display: flex;
@@ -1884,77 +1882,66 @@ button.user-stat:hover {
 .player-btn-play:hover { transform: scale(1.06); background: #fff; }
 
 .player-timeline {
+    grid-area: seek;
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: 100%;
-    max-width: 600px;
+    gap: 6px;
+    min-width: 0;
 }
 
-.player-time { font-size: 11px; color: var(--text-subdued); min-width: 40px; text-align: center; }
-
-.player-progress-strip-times {
-    display: none;
+.player-time {
+    flex: none;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
 }
 
-.progress-bar {
-    flex: 1;
-    height: 28px;
+.player-slider {
+    --rail-color: var(--text-secondary);
+    --rail: linear-gradient(to right, var(--rail-color) var(--filled, 0%), var(--bg-active) var(--filled, 0%));
+    appearance: none;
+    height: 30px;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
     background: transparent;
-    border-radius: 6px;
     cursor: pointer;
-    position: relative;
-    touch-action: none;
-    display: flex;
-    align-items: center;
+    touch-action: pan-y;
 }
-
-.progress-bar::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 50%;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--bg-active);
-    transform: translateY(-50%);
+.player-slider::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 4px;
+    background: var(--rail);
 }
-
-.progress-bar:hover::before { height: 6px; }
-
-.progress-bar-fill {
-    height: 4px;
-    background: var(--text-primary);
-    border-radius: 2px;
-    position: relative;
-    z-index: 1;
-    pointer-events: none;
-    transition: width 0.1s linear;
+.player-slider::-moz-range-track {
+    height: 3px;
+    border-radius: 4px;
+    background: var(--rail);
 }
-
-.progress-bar:hover .progress-bar-fill {
-    height: 6px;
-    background: var(--accent);
-}
-
-.progress-bar-thumb {
-    width: 12px;
-    height: 12px;
+.player-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    margin-top: -3.5px;
     border-radius: 50%;
-    background: var(--text-primary);
-    position: absolute;
-    right: -6px;
-    top: 50%;
-    transform: translateY(-50%);
-    opacity: 0;
-    transition: opacity 0.15s;
+    background: var(--rail-color);
 }
-
-.progress-bar:hover .progress-bar-thumb,
-.progress-bar:active .progress-bar-thumb { opacity: 1; }
+.player-slider::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--rail-color);
+}
+.progress-bar { flex: 1; width: 0; --rail-color: var(--accent); }
+.player-slider:hover, .player-slider:focus-visible { --rail-color: var(--accent-hover); }
+.player-slider:disabled { cursor: default; opacity: .55; }
+.player-bar :is(button, input, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.player-bar .player-cover:focus-visible { outline-offset: -2px; }
 
 .player-right {
+    grid-area: tools;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -1981,58 +1968,7 @@ button.user-stat:hover {
 .volume-btn:hover { color: var(--text-primary); }
 .volume-btn svg { width: 18px; height: 18px; }
 
-.volume-slider {
-    width: 104px;
-    height: 28px;
-    background: transparent;
-    border-radius: 6px;
-    cursor: pointer;
-    position: relative;
-    touch-action: none;
-    display: flex;
-    align-items: center;
-}
-
-.volume-slider::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 50%;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--bg-active);
-    transform: translateY(-50%);
-}
-
-.volume-slider-fill {
-    height: 4px;
-    background: var(--text-primary);
-    border-radius: 2px;
-    position: relative;
-    z-index: 1;
-    pointer-events: none;
-}
-
-.volume-slider:hover .volume-slider-fill { background: var(--accent); }
-
-.volume-slider-thumb {
-    position: absolute;
-    right: -6px;
-    top: 50%;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--text-primary);
-    transform: translateY(-50%);
-    opacity: 0;
-    transition: opacity 0.15s;
-}
-
-.volume-slider:hover .volume-slider-thumb,
-.volume-slider:active .volume-slider-thumb {
-    opacity: 1;
-}
+.volume-slider { width: clamp(56px, 6vw, 104px); }
 
 .queue-toggle-btn {
     background: none;
@@ -2676,28 +2612,13 @@ button.user-stat:hover {
     white-space: nowrap;
 }
 
-.player-version-chip {
-    width: 100%;
-    max-width: 600px;
-    margin-top: -2px;
-    padding-left: 0;
-    color: var(--text-subdued);
-    opacity: 0.55;
-    font-size: 9px;
-    line-height: 1;
-    font-weight: 500;
-    text-align: center;
-    text-decoration: none;
-    pointer-events: auto;
-    transition: opacity 120ms ease;
-}
-
-.player-version-chip:hover,
-.player-version-chip:focus-visible {
-    color: var(--text-subdued);
-    opacity: 0.9;
+.settings-app-version {
+    display: inline-block;
+    color: var(--text-secondary);
+    font-size: 12px;
     text-decoration: none;
 }
+.settings-app-version:hover, .settings-app-version:focus-visible { color: var(--text-primary); text-decoration: underline; }
 
 .mobile-account-chip {
     display: none;
@@ -5534,11 +5455,6 @@ button.user-stat:hover {
 }
 
 @media (max-width: 900px), (pointer: coarse) and (max-width: 1024px) {
-    :root {
-        --player-height: 214px;
-        --player-bar-space: calc(var(--player-height) + var(--safe-bottom));
-    }
-
     .sidebar-left { display: none; }
 
     .center-content {
@@ -5685,333 +5601,9 @@ button.user-stat:hover {
         padding: 10px 8px;
     }
 
-    .player-bar {
-        position: relative;
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: 62px 58px 44px;
-        grid-template-areas:
-            "now"
-            "buttons"
-            "actions";
-        gap: 4px;
-        align-items: center;
-        padding: 34px 12px calc(9px + var(--safe-bottom));
-        touch-action: auto;
-        user-select: none;
-    }
-
-    .player-now-playing {
-        grid-area: now;
-        justify-content: stretch;
-        text-align: left;
-        min-width: 0;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-current-track {
-        display: grid;
-        grid-template-columns: 52px minmax(0, 1fr) auto;
-        grid-template-rows: repeat(3, auto);
-        align-items: center;
-        justify-content: stretch;
-        column-gap: 10px;
-        row-gap: 1px;
-        width: 100%;
-        max-width: 620px;
-        margin: 0 auto;
-        overflow: visible !important;
-    }
-
-    .player-cover {
-        width: 52px;
-        height: 52px;
-        cursor: pointer;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-track-info {
-        display: contents;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-track-title-row {
-        display: contents;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-current-actions {
-        grid-column: 3;
-        grid-row: 1 / span 3;
-        gap: 4px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-current-actions > button {
-        display: flex;
-        width: 30px;
-        height: 30px;
-        flex: 0 0 30px;
-        padding: 5px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-current-actions svg {
-        width: 17px;
-        height: 17px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-track-title,
-    .player-bar:not(.mobile-expanded) .player-track-artist,
-    .player-bar:not(.mobile-expanded) .player-track-release {
-        grid-column: 2;
-        min-width: 0;
-        text-align: left;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-cover {
-        grid-column: 1;
-        grid-row: 1 / span 3;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-track-title {
-        grid-row: 1;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-track-artist {
-        grid-row: 2;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-track-release {
-        grid-row: 3;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-current-like {
-        order: 1;
-    }
-
-    .player-track-release {
-        display: block;
-        color: var(--text-subdued);
-        font-size: 10px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .player-controls {
-        display: contents;
-    }
-
-    .player-buttons {
-        grid-area: buttons;
-        justify-self: center;
-        gap: 4px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-buttons .player-btn:first-child,
-    .player-bar:not(.mobile-expanded) .player-buttons .player-btn:last-child {
-        display: none;
-    }
-
-    .player-btn {
-        min-width: 42px;
-        min-height: 42px;
-        padding: 7px;
-    }
-
-    .player-btn-prev {
-        min-width: 40px;
-        min-height: 40px;
-    }
-
-    .player-btn-next {
-        min-width: 50px;
-        min-height: 50px;
-    }
-
-    .player-btn svg {
-        width: 22px;
-        height: 22px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-btn-prev svg {
-        width: 28px;
-        height: 28px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-btn-next svg {
-        width: 34px;
-        height: 34px;
-    }
-
-    .player-btn-play {
-        width: 56px;
-        height: 56px;
-    }
-
-    .player-btn-play svg {
-        width: 24px;
-        height: 24px;
-    }
-
-    .player-timeline {
-        max-width: none;
-        gap: 5px;
-        align-self: center;
-        padding-right: 58px;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-timeline {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 21px;
-        gap: 0;
-        padding-right: 0;
-        z-index: 1;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-time {
-        display: none;
-    }
-
-    .player-bar:not(.mobile-expanded) .progress-bar,
-    .player-bar:not(.mobile-expanded) .progress-bar:hover {
-        width: 100%;
-        height: 21px;
-        border-radius: 0;
-        background: rgba(29, 185, 84, 0.18);
-    }
-
-    .player-bar:not(.mobile-expanded) .progress-bar::before {
-        display: none;
-    }
-
-    .player-bar:not(.mobile-expanded) .progress-bar-fill {
-        height: 100%;
-        border-radius: 0;
-        background: var(--accent);
-    }
-
-    .player-bar:not(.mobile-expanded) .progress-bar-thumb {
-        display: none;
-    }
-
-    .player-bar:not(.mobile-expanded) .player-progress-strip-times {
-        position: absolute;
-        top: 22px;
-        right: 10px;
-        height: 10px;
-        display: flex;
-        align-items: center;
-        padding: 0;
-        color: var(--text-subdued);
-        font-size: 9px;
-        font-weight: 700;
-        line-height: 1;
-        pointer-events: none;
-        text-shadow: none;
-        white-space: nowrap;
-    }
-
-    .player-version-chip {
-        display: block;
-        position: absolute;
-        right: 8px;
-        bottom: calc(2px + var(--safe-bottom));
-        width: auto;
-        max-width: none;
-        margin-top: 0;
-        padding-left: 0;
-        font-size: 8px;
-        line-height: 1;
-        opacity: 0.58;
-        text-align: right;
-    }
-
-    .player-time {
-        min-width: 34px;
-        font-size: 10px;
-    }
-
-    .player-right {
-        grid-area: actions;
-        justify-self: stretch;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 40px 40px;
-        align-items: center;
-        gap: 6px;
-        width: 100%;
-        min-width: 0;
-    }
-
-    .volume-control {
-        display: grid;
-        grid-template-columns: 30px minmax(0, 1fr);
-        align-items: center;
-        gap: 6px;
-        justify-self: center;
-        width: min(100%, 360px);
-        min-width: 0;
-    }
-
-    .player-right > .queue-toggle-btn,
-    .player-right > .device-picker {
-        justify-self: end;
-    }
-
-    .volume-btn {
-        min-width: 30px;
-        min-height: 36px;
-        justify-content: center;
-        padding: 6px;
-    }
-
-    .volume-slider {
-        display: flex;
-        width: 100%;
-        height: 34px;
-        border-radius: 6px;
-    }
-
-    .volume-slider-fill {
-        height: 7px;
-        border-radius: 999px;
-    }
-
-    .volume-slider::before {
-        height: 7px;
-        border-radius: 999px;
-    }
-
-    .volume-slider-thumb {
-        width: 17px;
-        height: 17px;
-        right: -8.5px;
-        opacity: 1;
-    }
-
-    .progress-bar {
-        height: 34px;
-        border-radius: 999px;
-    }
-
-    .progress-bar::before,
-    .progress-bar-fill {
-        height: 6px;
-        border-radius: 999px;
-    }
-
-    .progress-bar-thumb {
-        opacity: 1;
-    }
-
-    .queue-toggle-btn {
-        min-width: 36px;
-        min-height: 36px;
-        padding: 6px;
-    }
-
-    .queue-toggle-btn svg,
-    .volume-btn svg {
-        width: 21px;
-        height: 21px;
-    }
+    .player-cover { cursor: pointer; }
+    .player-bar:not(.mobile-expanded) .player-btn-shuffle,
+    .player-bar:not(.mobile-expanded) .player-btn-repeat { display: none; }
 
     .player-bar.mobile-expanded {
         position: fixed;
@@ -6073,7 +5665,9 @@ button.user-stat:hover {
     }
 
     .player-bar.mobile-expanded .mobile-full-player .player-now-playing {
+        display: flex;
         justify-content: center;
+        align-items: center;
         align-self: stretch;
         width: 100%;
         min-height: max(300px, calc(100dvh - 248px));
@@ -6112,10 +5706,6 @@ button.user-stat:hover {
         overflow: visible;
     }
 
-    .player-bar.mobile-expanded .mobile-full-player .player-track-title-row {
-        justify-content: center;
-    }
-
     .player-bar.mobile-expanded .mobile-full-player .player-track-title {
         font-size: 22px;
         font-weight: 800;
@@ -6149,10 +5739,6 @@ button.user-stat:hover {
         flex-direction: column;
         align-items: center;
         gap: 14px;
-    }
-
-    .player-bar.mobile-expanded .mobile-full-player .player-version-chip {
-        display: none;
     }
 
     .player-bar.mobile-expanded .mobile-full-player .player-buttons {
@@ -6200,37 +5786,21 @@ button.user-stat:hover {
         order: 1;
     }
 
-    .player-bar.mobile-expanded .mobile-full-player .progress-bar {
-        height: 36px;
-        border-radius: 999px;
-    }
-
-    .player-bar.mobile-expanded .mobile-full-player .progress-bar::before,
-    .player-bar.mobile-expanded .mobile-full-player .progress-bar-fill {
-        height: 7px;
-    }
-
-    .player-bar.mobile-expanded .mobile-full-player .progress-bar-thumb {
-        opacity: 1;
-    }
+    .player-bar.mobile-expanded .mobile-full-player .progress-bar { height: 40px; }
 
     .player-bar.mobile-expanded .mobile-full-player .player-right {
-        position: static;
-        grid-area: actions;
-        justify-self: center;
         width: min(100%, 560px);
         flex: 0 0 auto;
-        grid-template-columns: 44px minmax(0, 1fr) 48px 48px;
         gap: 8px;
         padding: 0;
         border-radius: 0;
         background: transparent;
     }
 
-    .player-bar.mobile-expanded .player-buttons > .lyrics-toggle-mobile {display:none!important}
-    .player-bar.mobile-expanded .player-right > .lyrics-toggle {display:flex}
-
     .player-bar.mobile-expanded .mobile-full-player .volume-control {
+        display: grid;
+        flex: 1;
+        min-width: 0;
         grid-template-columns: 44px minmax(0, 1fr);
         gap: 8px;
     }
@@ -6247,7 +5817,7 @@ button.user-stat:hover {
     }
 
     .player-bar.mobile-expanded .mobile-full-player .volume-slider {
-        display: flex;
+        width: 100%;
         height: 44px;
     }
 
@@ -6417,11 +5987,6 @@ button.user-stat:hover {
 }
 
 @media (max-width: 560px) {
-    :root {
-        --player-height: 214px;
-        --player-bar-space: calc(var(--player-height) + var(--safe-bottom));
-    }
-
     .center-content {
         padding: 12px;
     }
@@ -6961,88 +6526,6 @@ button.user-stat:hover {
         max-height: 42dvh;
     }
 
-    .player-bar {
-        gap: 8px;
-        padding-left: 10px;
-        padding-right: 10px;
-        grid-template-rows: 60px 56px 42px;
-    }
-
-    .player-track-title { font-size: 12px; }
-    .player-track-artist { font-size: 10px; }
-    .player-track-release { font-size: 9px; }
-    .player-buttons { gap: 2px; }
-
-    .player-right {
-        grid-template-columns: minmax(0, 1fr) 34px 34px;
-        width: 100%;
-        gap: 4px;
-    }
-
-    .volume-control {
-        grid-template-columns: 22px minmax(0, 1fr);
-        width: min(100%, 320px);
-        gap: 4px;
-    }
-
-    .player-version-chip {
-        padding-left: 0;
-        font-size: 8px;
-        opacity: 0.58;
-    }
-
-    .volume-control {
-        gap: 4px;
-    }
-
-    .volume-btn {
-        min-width: 24px;
-        min-height: 34px;
-        padding: 5px;
-    }
-
-    .queue-toggle-btn {
-        min-width: 34px;
-        min-height: 34px;
-        padding: 5px;
-    }
-
-    .volume-slider {
-        display: flex;
-        width: 100%;
-    }
-
-    .player-btn {
-        min-width: 42px;
-        min-height: 42px;
-        padding: 7px;
-    }
-
-    .player-btn-prev {
-        min-width: 40px;
-        min-height: 40px;
-    }
-
-    .player-btn-next {
-        min-width: 50px;
-        min-height: 50px;
-    }
-
-    .player-btn svg {
-        width: 22px;
-        height: 22px;
-    }
-
-    .player-btn-play {
-        width: 56px;
-        height: 56px;
-    }
-
-    .player-btn-play svg {
-        width: 24px;
-        height: 24px;
-    }
-
     .player-bar.mobile-expanded .mobile-full-player {
         gap: 14px;
         padding-left: 14px;
@@ -7066,6 +6549,56 @@ button.user-stat:hover {
         width: 68px;
         height: 68px;
     }
+}
+
+@media (min-width: 641px) and (max-width: 800px) {
+    :root { --player-height: 68px; }
+    .player-bar:not(.mobile-expanded) {
+        grid-template-areas: "seek seek seek" "now transport tools";
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-rows: 24px minmax(0, 1fr);
+    }
+    .player-bar:not(.mobile-expanded) .progress-bar { height: 24px; }
+    .player-bar:not(.mobile-expanded) .player-cover { width: 36px; height: 36px; }
+}
+
+/* Put track details and transport on separate rows while keeping the utilities docked beside playback. */
+@media (max-width: 640px) {
+    :root { --player-height: 110px; }
+    .player-bar:not(.mobile-expanded) {
+        grid-template-areas: "seek seek" "now now" "transport tools";
+        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-rows: 24px 43px 40px;
+        gap: 0 8px;
+        padding-inline: max(10px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-right));
+    }
+    .player-bar:not(.mobile-expanded) .player-current-track { gap: 8px; }
+    .player-bar:not(.mobile-expanded) .player-cover { width: 38px; height: 38px; }
+    .player-bar:not(.mobile-expanded) .player-track-info { flex: 1; }
+    .player-bar:not(.mobile-expanded) .player-track-title { font-size: 13px; line-height: 16px; }
+    .player-bar:not(.mobile-expanded) .player-track-artist,
+    .player-bar:not(.mobile-expanded) .player-track-release { font-size: 10px; line-height: 12px; margin: 0; }
+    .player-bar:not(.mobile-expanded) .player-current-actions { gap: 0; }
+    .player-bar:not(.mobile-expanded) .player-current-actions > button { width: 32px; height: 32px; flex-basis: 32px; }
+    .player-bar:not(.mobile-expanded) .player-buttons { justify-self: start; gap: 2px; }
+    .player-bar:not(.mobile-expanded) .player-buttons .player-btn { width: 32px; height: 36px; }
+    .player-bar:not(.mobile-expanded) .player-buttons .player-btn-play { width: 36px; height: 36px; }
+    .player-bar:not(.mobile-expanded) .player-right { gap: 0; }
+    .player-bar:not(.mobile-expanded) .player-right :is(.player-btn, .volume-btn, .queue-toggle-btn) {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 36px;
+        padding: 6px;
+    }
+    .player-bar:not(.mobile-expanded) .volume-control { flex: 1; max-width: 290px; min-width: 0; gap: 2px; }
+    .player-bar:not(.mobile-expanded) .volume-btn { flex: none; }
+    .player-bar:not(.mobile-expanded) .volume-slider { flex: 1; width: 0; }
+    .player-bar:not(.mobile-expanded) .progress-bar { height: 24px; }
+}
+@media (max-width: 360px) {
+    .player-bar:not(.mobile-expanded) { column-gap: 4px; }
+    .player-bar:not(.mobile-expanded) .player-right :is(.player-btn, .volume-btn, .queue-toggle-btn) { width: 30px; }
 }
 
 @media (max-width: 420px) {

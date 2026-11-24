@@ -1,8 +1,13 @@
 <div class="pin-feedback" aria-live="polite" aria-relevant="additions text" @keydown.space.stop>
     <template x-for="notice in $store.pins.undoNotices" :key="notice.id">
         <div class="pin-undo-notice" :data-undo-id="notice.id">
+            <button type="button" class="pin-notice-close" :disabled="notice.restoring"
+                    :aria-label="'{{ t.player_close }} · ' + notice.item.title" title="{{ t.player_close }}"
+                    @click="$store.pins.dismissUndo(notice.id, $event)">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg>
+            </button>
             <span><span>{{ t.player_pin_removed }}</span> · <strong x-text="notice.item.title"></strong></span>
-            <button type="button" :disabled="notice.restoring" :aria-label="'{{ t.player_pin_undo }} · ' + notice.item.title"
+            <button type="button" class="pin-undo-action" :disabled="notice.restoring" :aria-label="'{{ t.player_pin_undo }} · ' + notice.item.title"
                     @click="$store.pins.undo(notice.id, $event)">{{ t.player_pin_undo }}</button>
         </div>
     </template>

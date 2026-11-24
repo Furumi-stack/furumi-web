@@ -177,8 +177,6 @@ async function checkOfflineControls(page, trigger, panel) {
                 this.manual = this.active = on;
                 document.documentElement.classList.toggle('offline-active', on);
             },
-            removeTrack(id) { this.items = this.items.filter(track => track.id !== id); },
-            clearCache() { this.items = []; this.bytes = 0; },
         });
     });
     const enable = section.getByRole('switch');
@@ -192,7 +190,7 @@ async function checkOfflineControls(page, trigger, panel) {
     await panel.getByRole('button', {name:'Manage offline music'}).click();
     await page.waitForFunction(() => document.activeElement?.id === 'offline-settings-title');
     await enable.click();
-    await section.getByText('No music saved on this device yet.').waitFor();
+    await section.getByText('Saved music', {exact:true}).waitFor();
     const range = section.getByRole('slider', {name:'Cache limit'});
     assert.equal(await range.getAttribute('aria-valuetext'), '3 GB');
     const marks = await section.locator('.offline-scale-marks span').evaluateAll(list =>
@@ -212,21 +210,31 @@ async function checkOfflineControls(page, trigger, panel) {
     await range.press('End');
     assert.equal(await range.getAttribute('aria-valuetext'), '512 GB');
     await page.evaluate(() => Object.assign(Alpine.store('offline'), {
-        bytes:3e6, items:[{id:7,title:'One',artist:'Artist',bytes:2e6},{id:8,title:'Two',artist:'Artist',bytes:1e6}],
+        bytes:44e6, limitBytes:3e9,
+        items:[{id:7,title:'One',artist:'Artist',bytes:40e6},{id:8,title:'Two',artist:'Artist',bytes:4e6}],
     }));
-    await section.getByRole('button', {name:'Remove from this device · One'}).click();
-    assert.equal(await section.locator('.offline-saved-list li').count(), 1);
-    page.once('dialog', dialog => dialog.dismiss());
-    await section.getByRole('button', {name:'Clear cache'}).click();
-    assert.equal(await section.locator('.offline-saved-list li').count(), 1);
-    page.once('dialog', dialog => dialog.accept());
-    await section.getByRole('button', {name:'Clear cache'}).click();
-    await section.getByText('No music saved on this device yet.').waitFor();
+    await section.getByRole('button', {name:'Open cache'}).waitFor();
+    assert.equal(await section.getByText('One', {exact:true}).count(), 0, 'settings show the cache summary');
     await close.click();
+    await trigger.click();
+    const offlineAccount = panel.locator('.offline-account');
+    await offlineAccount.getByText('Online', {exact:true}).click();
+    assert.ok(await panel.isVisible(), 'clicking status text keeps the account menu open');
+    await offlineAccount.click({position:{x:1,y:1}});
+    assert.ok(await panel.isVisible(), 'clicking empty space inside the account menu leaves it open');
+    const meter = offlineAccount.getByRole('progressbar');
+    assert.equal(await meter.getAttribute('aria-valuetext'), '44 MB / 3 GB');
+    await offlineAccount.getByText('44 MB / 3 GB',{exact:true}).waitFor();
+    assert.equal(await meter.evaluate(el => el.position), 44e6/3e9, 'usage is drawn against the configured limit');
+    await meter.click();
+    assert.ok(await panel.isVisible(), 'clicking the meter leaves the menu open');
+    await page.locator('.content-topbar').click({position:{x:1,y:1}});
+    await panel.waitFor({state:'hidden'});
     await trigger.click();
     const manual = panel.getByRole('switch', {name:'Use saved music only'});
     await manual.click();
     assert.equal(await manual.getAttribute('aria-checked'), 'true');
+    assert.ok(await panel.isVisible(), 'toggling saved music keeps the menu open');
     assert.equal(await panel.getByRole('link', {name:'My listening'}).isVisible(), false);
     assert.equal(await panel.getByRole('link', {name:'Followed'}).isVisible(), true);
     await panel.getByRole('button', {name:'Settings'}).click();
@@ -344,7 +352,7 @@ async function checkPinActions(browser, mobile) {
         await notice(item).getByRole('button',{name:/Undo/i}).waitFor();
         assert.ok(await notice(item).evaluate(el =>
             el.scrollWidth <= el.clientWidth + 1 &&
-            el.querySelector('button').getBoundingClientRect().right <= el.closest('.pin-feedback').getBoundingClientRect().right + 1
+            [...el.querySelectorAll('button')].every(button => button.getBoundingClientRect().right <= el.closest('.pin-feedback').getBoundingClientRect().right + 1)
         ), 'Undo remains fully visible for long titles');
     };
     const undo = item => notice(item).getByRole('button',{name:/Undo/i}).click();
@@ -389,6 +397,20 @@ async function checkPinActions(browser, mobile) {
     if (mobile) await openDrawer();
     await expectOrder([c,a,d]);
     await undo(b);
+    await expectOrder([c,b,a,d]);
+
+    await unpin(a);
+    await unpin(d);
+    await expectOrder([c,b]);
+    const priorWrites = writes.length;
+    await notice(d).getByRole('button',{name:'Close · '+d.title,exact:true}).click();
+    await notice(d).waitFor({state:'hidden'});
+    assert.ok(await notice(a).isVisible(), 'dismissing one unpin notice preserves the other');
+    await expectOrder([c,b]);
+    assert.equal(writes.length,priorWrites,'dismissing a notice leaves the stored arrangement alone');
+    await undo(a);
+    await expectOrder([c,b,a]);
+    await page.evaluate(item=>Alpine.store('pins').toggle(item),d);
     await expectOrder([c,b,a,d]);
 
     loseUnpinReply = true;

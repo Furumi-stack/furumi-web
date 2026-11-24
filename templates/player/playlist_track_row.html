@@ -1,0 +1,89 @@
+<div class="track-row playlist-track-row"
+     :data-playlist-index="idx"
+     :class="{ playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id, editing: $store.playlists.isEditingCurrent(), dragging: $store.playlists._dragIdx === idx }"
+     :draggable="$store.playlists.isEditingCurrent() && !!track.playlist_track_id"
+     tabindex="0" @keydown.enter.self.prevent="if (!$store.playlists.isEditingCurrent()) $store.queue.playRelease($store.library.currentPlaylist.tracks, idx)"
+     @dblclick="if (!$store.playlists.isEditingCurrent()) $store.queue.playRelease($store.library.currentPlaylist.tracks, idx)"
+     @dragstart="if (!$store.playlists.startDrag($event, idx)) $event.preventDefault()"
+     @dragend="$store.playlists.endDrag()"
+     @dragover.prevent="$store.playlists.dragOver($event, idx)"
+     @dragleave="$event.currentTarget.classList.remove('drag-over')"
+     @drop.prevent="$event.currentTarget.classList.remove('drag-over'); $store.playlists.dropOn(idx)">
+    <button data-online-only data-member-only class="playlist-track-remove"
+            x-show="$store.playlists.isEditingCurrent()"
+            x-cloak
+            @click.stop="$store.playlists.removeCurrentTrack(track, idx)"
+            title="{{ t.player_remove }}"
+            aria-label="{{ t.player_remove }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+    </button>
+    <span class="track-num federation-track-status">
+        <template x-if="!track.federation_pending || $store.library.isTrackLocal(track._federationTrack)">
+            <span x-text="idx + 1"></span>
+        </template>
+        <template x-if="track.federation_pending && !$store.library.federationDownload(track.content_id) && !$store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M5.6 8.5a7.5 7.5 0 000 7M18.4 8.5a7.5 7.5 0 010 7"/>
+                <path d="M2.8 5.8a11 11 0 000 12.4M21.2 5.8a11 11 0 010 12.4"/>
+            </svg>
+        </template>
+        <template x-if="track.federation_pending && $store.library.federationFailure(track.content_id) && !$store.library.isTrackLocal(track._federationTrack)">
+            <span class="federation-error-badge"
+                  :title="$store.library.federationFailure(track.content_id).message">!</span>
+        </template>
+        <template x-if="track.federation_pending && $store.library.federationDownload(track.content_id)">
+            <span class="federation-download-progress"
+                  :class="{ indeterminate: !$store.library.federationDownload(track.content_id).total }">
+                <svg viewBox="0 0 20 20">
+                    <circle class="progress-track" cx="10" cy="10" r="8"/>
+                    <circle class="progress-value" cx="10" cy="10" r="8"
+                            :style="`stroke-dashoffset: ${50.27 * (1 - $store.library.federationDownload(track.content_id).percent / 100)}`"/>
+                </svg>
+                <span class="progress-percent"
+                      x-show="$store.library.federationDownload(track.content_id).total"
+                      x-text="Math.round($store.library.federationDownload(track.content_id).percent)"></span>
+                <span class="federation-download-tooltip"
+                      x-text="$store.library.federationDownloadTooltip(track.content_id)"></span>
+            </span>
+        </template>
+    </span>
+    <div class="track-info playlist-track-info">
+        <button data-online-only data-member-only class="playlist-drag-handle"
+                x-show="$store.playlists.isEditingCurrent() && !!track.playlist_track_id"
+                x-cloak
+                @mousedown.stop
+                @click.stop
+                @pointerdown.stop="$store.playlists.startPointerReorder($event, idx)"
+                title="{{ t.player_edit }}"
+                aria-label="{{ t.player_edit }}">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+        </button>
+        <div class="playlist-track-copy">
+            <div class="track-title" x-text="track.title"></div>
+            <div class="track-artists-inline">
+                {% include "player/track_artist_links.html" %}
+            </div>
+        </div>
+    </div>
+    <span></span>
+    <div class="track-actions">
+        {% include "player/track_row_badges.html" %}
+        <button data-online-only data-member-only class="like-btn"
+                :class="{ liked: track.federation_pending ? $store.library.federationIsLiked(track._federationTrack) : $store.likes.has(track.id) }"
+                @click.stop="track.federation_pending ? $store.library.toggleFederationLike(track._federationTrack) : $store.likes.toggle(track.id)"
+                title="{{ t.player_like }}">
+            <svg viewBox="0 0 24 24"
+                 :fill="track.federation_pending ? ($store.library.federationIsLiked(track._federationTrack) ? 'currentColor' : 'none') : ($store.likes.has(track.id) ? 'currentColor' : 'none')"
+                 stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 000-7.78z"/></svg>
+        </button>
+        <button class="track-action-btn queue-insert-btn queue-next-btn" @click.stop="$store.queue.addNextInQueue([track])" title="{{ t.player_play_next }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h10M5 12h7M5 18h10"/><path d="M17 9l4 3-4 3" fill="currentColor" stroke="none"/></svg>
+        </button>
+        {% include "player/track_actions_button.html" %}
+    </div>
+    <span class="track-duration" x-text="formatTime(track.duration_seconds)"></span>
+</div>

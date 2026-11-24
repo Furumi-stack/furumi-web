@@ -1,6 +1,6 @@
 <section class="user-settings-section offline-settings" aria-labelledby="offline-settings-title" @keydown.space.stop
          x-data="{
-             get offline() { return $store.offline }, min: 100000000, max: 512000000000, draft: null, visibleTracks: 30,
+             get offline() { return $store.offline }, min: 100000000, max: 512000000000, draft: null,
              marks: [100000000,1000000000,10000000000,100000000000,512000000000],
              position(bytes) { return 100 * Math.log(Math.max(this.min, bytes) / this.min) / Math.log(this.max / this.min) },
              bytesAt(position) {
@@ -41,24 +41,11 @@
                 <div><strong>{{ t.player_offline_saved }}</strong>
                     <small x-text="formatArtistCount(offline.items.length, 'tracks') + ' · ' + offline.formatBytes(offline.bytes)"></small>
                 </div>
-                <button type="button" class="offline-manage" x-show="offline.items.length" :disabled="offline.busy"
-                        @click="if (window.confirm('{{ t.player_offline_confirm_clear }}')) offline.clearCache()">{{ t.player_offline_clear }}</button>
+                <button type="button" id="open-offline-cache" class="offline-manage" @click="openCache()">
+                    {{ t.player_offline_open_cache }}
+                </button>
             </div>
             <p x-show="!offline.items.length">{{ t.player_offline_empty }}</p>
-            <ul class="offline-saved-list" x-show="offline.items.length" aria-label="{{ t.player_offline_saved }}">
-                <template x-for="track in offline.items.slice(0, visibleTracks)" :key="track.id">
-                    <li><div><strong x-text="track.title"></strong><small x-text="track.artist"></small></div>
-                        <span class="offline-track-size" x-text="offline.formatBytes(track.bytes)"></span>
-                        <button type="button" :disabled="offline.busy"
-                                :aria-label="'{{ t.player_offline_remove }} · ' + track.title" title="{{ t.player_offline_remove }}"
-                                @click="offline.removeTrack(track.id)">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>
-                        </button>
-                    </li>
-                </template>
-            </ul>
-            <button type="button" class="offline-manage" x-show="offline.items.length > visibleTracks"
-                    @click="visibleTracks += 30">{{ t.player_offline_show_more }}</button>
         </div>
     </template>
 </section>

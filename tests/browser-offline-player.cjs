@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const {checkCacheManager} = require('./offline-cache-manager.cjs');
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const player = path.resolve(__dirname, '../src/player');
 const html = fs.readFileSync('target/podcast-player-fixture.html','utf8');
@@ -134,8 +135,10 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
         await page.goto(base+'/#artist/'+remoteArtist);
         await page.waitForFunction(() => Alpine.store('library').currentArtist?.name === 'Remote artist');
         assert.deepEqual(await page.evaluate(() => Alpine.store('library').currentArtist.releases.map(r=>r.title)),['Remote release']);
+        await page.evaluate(() => Alpine.store('player').pause());
+        for (const width of [1280,320]) await checkCacheManager(page,log,width);
         assert.deepEqual(errors,[]);
-        console.log('Real player opt-in, local/federated WAV playback, offline navigation, cold reload and recovery passed.');
+        console.log('Real offline playback, navigation, cold reload, recovery and desktop/mobile cache management passed.');
     } catch (error) {
         const state = await page.evaluate(() => {
             const offline = window.Alpine?.store('offline'), p = window.Alpine?.store('player');

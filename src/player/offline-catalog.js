@@ -53,6 +53,8 @@
         return {id, content_id:t.content_id, title:t.title, artists, featured_artists:featured,
             release_id:releaseId, release_title:releaseTitle, release_year:year, track_number:t.track_number ?? null,
             disc_number:t.disc_number ?? null, duration_seconds:t.duration_seconds || 0, cover_url:coverKey(t.cover_url),
+            audio_format:t.audio_format ?? metadata.audio_format, audio_bitrate:t.audio_bitrate ?? metadata.audio_bitrate,
+            audio_sample_rate:t.audio_sample_rate ?? metadata.audio_sample_rate, audio_bit_depth:t.audio_bit_depth ?? metadata.audio_bit_depth,
             uploader_name:'Federation', offline_remote:true, has_lyrics:false, stream_url:BASE + 'stream/' + id,
             offline_release:{artists:releaseArtists,release_type:key.release_type || ''}};
     }
@@ -175,9 +177,15 @@
             return {tracks, bytes:bytes || 0};
         }
         async list() {
-            const [rows, plays] = await Promise.all([this.all('tracks'), this.all('plays')]);
+            const tx = (await this.db()).transaction(['tracks','plays','files']);
+            const files = tx.objectStore('files');
+            const [rows, plays, fileKeys, fileInfo] = await Promise.all([
+                requests(tx.objectStore('tracks').getAll()), requests(tx.objectStore('plays').getAll()),
+                requests(files.getAllKeys()), requests(files.getAll()),
+            ]);
+            const mime = new Map(fileKeys.map((key,i) => [key, fileInfo[i].mime]));
             const counts = new Map(plays.map(p => [p.id, p]));
-            return rows.map(r => ({...r.track, bytes:r.bytes, downloaded_at:r.downloaded_at,
+            return rows.map(r => ({...r.track, bytes:r.bytes, audio_mime:mime.get(r.file), downloaded_at:r.downloaded_at,
                 last_played_at:counts.get(r.id)?.last_played_at || null, play_count:counts.get(r.id)?.play_count || 0}));
         }
         async has(value) {
@@ -406,16 +414,93 @@
                 if (!activeNames.has(name)) await dir.removeEntry(name);
             }
         }
-        async remove(trackId) {
-            const id = OfflineCatalog.trackId(trackId);
-            if (!id) return;
-            await navigator.locks.request(this.name, async () => {
-                await this.write(['tracks','plays','pending','lyrics','meta'], get => {
-                    get('tracks').delete(id); get('plays').delete(id); get('pending').delete(id); get('lyrics').delete(id);
-                    get('meta').put(crypto.randomUUID(),'revision');
-                });
-                await this.prune(await this.directory());
+        previewCleanup(criteria = {}) {
+            return this._cleanup(criteria, null);
+        }
+        removeMany(ids, criteria = {}) {
+            if (!Array.isArray(ids)) throw new TypeError('Expected selected track IDs');
+            const selected = new Set(ids.map(trackId).filter(Boolean));
+            return navigator.locks.request(this.name, () => this._cleanup(criteria, selected));
+        }
+        async remove(value) {
+            const id = trackId(value);
+            if (id) await navigator.locks.request(this.name, () => this._cleanup({}, new Set([id]), true));
+        }
+        async _cleanup(criteria, selected, cancelUnstored = false) {
+            for (const [field, cutoff] of Object.entries(criteria)) {
+                if (!['downloadedBefore','lastPlayedBefore'].includes(field) || !Number.isFinite(cutoff))
+                    throw new TypeError('Invalid offline cleanup cutoff');
+            }
+            const deleting = selected !== null;
+            const db = await this.db();
+            const tx = db.transaction(deleting ? stores : ['tracks','plays','files','assets'], deleting ? 'readwrite' : 'readonly');
+            const get = name => tx.objectStore(name);
+            const finished = new Promise((resolve,reject) => {
+                tx.oncomplete = resolve;
+                tx.onabort = () => reject(tx.error || new DOMException('Cleanup aborted','AbortError'));
             });
+            let ids, bytes, discardedFiles;
+            try {
+                const [rows, activity, used] = await Promise.all([
+                    requests(get('tracks').getAll()), requests(get('plays').getAll()),
+                    deleting ? requests(get('meta').get('bytes')) : 0,
+                ]);
+                const lastPlay = new Map(activity.map(p => [p.id, p.last_played_at]));
+                const retainedFiles = new Set(), retainedAssets = new Set(), retainedReleases = new Set();
+                const files = new Set(), assets = new Set(), releases = new Set();
+                ids = [];
+                for (const row of rows) {
+                    const lastUsed = lastPlay.get(row.id) ?? row.downloaded_at;
+                    const matches = (!deleting || selected.has(row.id))
+                        && (criteria.downloadedBefore === undefined || row.downloaded_at < criteria.downloadedBefore)
+                        && (criteria.lastPlayedBefore === undefined || lastUsed < criteria.lastPlayedBefore);
+                    if (matches) ids.push(row.id);
+                    (matches ? files : retainedFiles).add(row.file);
+                    (matches ? releases : retainedReleases).add(row.track.release_id);
+                    for (const key of row.assets) (matches ? assets : retainedAssets).add(key);
+                }
+                const fileKeys = [...files].filter(key => !retainedFiles.has(key));
+                const assetKeys = [...assets].filter(key => !retainedAssets.has(key));
+                // OPFS holds the audio. These reads access file descriptors and Blob sizes only.
+                const [fileInfo, artwork] = await Promise.all([
+                    Promise.all(fileKeys.map(key => requests(get('files').get(key)))),
+                    Promise.all(assetKeys.map(key => requests(get('assets').get(key)))),
+                ]);
+                discardedFiles = fileInfo.filter(Boolean);
+                bytes = discardedFiles.reduce((n,f) => n + f.bytes, 0) + artwork.reduce((n,a) => n + (a?.size || 0), 0);
+                if (deleting) {
+                    // Reading plays and checking cutoffs in this same write transaction protects a newly played track.
+                    for (const id of cancelUnstored ? selected : ids) {
+                        for (const name of ['tracks','plays','pending','lyrics']) get(name).delete(id);
+                    }
+                    for (const key of fileKeys) get('files').delete(key);
+                    for (const key of assetKeys) get('assets').delete(key);
+                    for (const id of releases) if (!retainedReleases.has(id)) get('meta').delete('release/'+id);
+                    if (ids.length) {
+                        get('meta').put(Math.max(0,(used || 0) - bytes),'bytes');
+                        get('meta').put(crypto.randomUUID(),'revision');
+                    }
+                }
+                await finished;
+            } catch (error) {
+                try { tx.abort(); } catch { /* already completed or aborted */ }
+                await finished.catch(() => {});
+                throw error;
+            }
+            // Commit the index first so an interrupted removal can only leave an unreferenced file.
+            if (deleting && discardedFiles.length) {
+                try {
+                    const dir = await this.directory();
+                    for (const file of discardedFiles) {
+                        try { await dir.removeEntry(file.name); }
+                        catch (error) { if (error.name !== 'NotFoundError') throw error; }
+                    }
+                } catch (error) {
+                    this._reconciled = false;
+                    throw error;
+                }
+            }
+            return {ids, count:ids.length, bytes};
         }
         async clear() {
             await navigator.locks.request(this.name, async () => {
