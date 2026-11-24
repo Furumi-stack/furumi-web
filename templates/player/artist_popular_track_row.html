@@ -13,7 +13,7 @@
                         :title="track.release_title"
                         aria-label="{{ t.player_release }}">
                     <template x-if="track.cover_url">
-                        <img :src="track.cover_url" alt="" aria-hidden="true" loading="lazy">
+                        <img x-artwork="track.cover_url" alt="" aria-hidden="true" loading="lazy">
                     </template>
                     <template x-if="!track.cover_url">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>

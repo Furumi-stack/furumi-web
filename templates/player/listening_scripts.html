@@ -55,6 +55,7 @@ document.addEventListener('alpine:init', () => {
         clock(ms) { return times.format(new Date(ms)); },
         coverFailed(image) {
             image.setAttribute('data-unavailable', '');
+            if (Alpine.store('offline')?.localArtworkOnly) return;
             const path = image.getAttribute('src') || '';
             if (/^\/api\/player\/cover\/\d+\/small$/.test(path)) {
                 image.src = path.slice(0, -'/small'.length);

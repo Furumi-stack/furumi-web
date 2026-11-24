@@ -85,7 +85,7 @@
                                 :aria-pressed="header.selected.includes(option.cover_id)"
                                 :disabled="header.selected.length >= 4 && !header.selected.includes(option.cover_id)"
                                 @click="header.toggleRelease(option.cover_id)">
-                            <img :src="option.cover_url" alt="" loading="lazy" decoding="async">
+                            <img x-artwork="option.cover_url" alt="" loading="lazy" decoding="async">
                             <span aria-hidden="true" x-show="header.selected.includes(option.cover_id)" x-text="header.selected.indexOf(option.cover_id) + 1"></span>
                         </button>
                     </template>

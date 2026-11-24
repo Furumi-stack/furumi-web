@@ -123,7 +123,7 @@
                                 <li><span class="listening-rank-no" aria-hidden="true" x-text="index+1"></span>
                                     <div class="listening-rank-art" :class="{round:listens.kind === 'artists'}">
                                         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/></svg>
-                                        <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy"
+                                        <template x-if="item.cover_url"><img x-artwork="item.cover_url" alt="" loading="lazy"
                                             @error="listens.coverFailed($el)" @load="$el.removeAttribute('data-unavailable')"></template>
                                     </div>
                                     <div class="listening-entry-info">
@@ -158,7 +158,7 @@
                                     <time :datetime="new Date(item.started_at_ms).toISOString()" x-text="listens.clock(item.started_at_ms)"></time>
                                     <button class="listening-play-art" @click="listens.play(item)"
                                             :aria-label="listens.text('play') + ' ' + item.title">
-                                        <template x-if="item.cover_url"><img :src="item.cover_url" alt="" loading="lazy"
+                                        <template x-if="item.cover_url"><img x-artwork="item.cover_url" alt="" loading="lazy"
                                             @error="listens.coverFailed($el)" @load="$el.removeAttribute('data-unavailable')"></template>
                                         <svg viewBox="0 0 24 24" aria-hidden="true" :class="{placeholder: !item.cover_url}"><path d="M8 5v14l11-7z"/></svg>
                                     </button>

@@ -11,18 +11,13 @@ function redirectOnUnauthorized(status) {
 
 const playerFetch = window.fetch.bind(window);
 function playerOffline() { return window.Alpine?.store('offline')?.active === true; }
-function playbackSource(track) {
-    const offline = Alpine.store('offline');
-    if (!offline?.enabled || !offline.isSaved(track)) return track.stream_url;
-    const remoteToken = track.federated_cache && track.content_id?.match(/^b3:([a-f0-9]{64})$/)?.[1];
-    return track.stream_url === '/api/player/stream/' + track.id ||
-        (remoteToken && track.stream_url === '/api/player/federation/cache/' + remoteToken)
-        ? track.stream_url + '?saved=1' : track.stream_url;
-}
 window.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input, window.location.href);
     const offline = window.Alpine?.store('offline');
-    if (offline?.active && !(offline.automatic && url.origin === location.origin && url.pathname === '/offline-probe')) {
+    // The browser can disable networking before it delivers the offline event.
+    const disconnected = offline?.enabled && offline.supported && navigator.onLine === false;
+    const recoveryProbe = offline?.automatic && url.origin === location.origin && url.pathname === '/offline-probe';
+    if (disconnected || (offline?.active && !recoveryProbe)) {
         if (url.origin === location.origin && url.pathname.startsWith('/api/player/')) {
             const request = new Request(input instanceof Request ? input : url.href, init);
             const local = await offline.localResponse(request);
@@ -744,9 +739,24 @@ document.addEventListener('alpine:init', () => {
     // Player store
     // -----------------------------------------------------------------------
     let playbackConnection = new AbortController();
+    let releaseSessionArtwork, sessionMetadataKey;
+    let pendingMedia = null, audioObjectUrl = null, audibleTrackId = null;
+
+    // Firefox updates onLine before delivering the offline event that switches the catalog.
+    function deviceSyncUnavailable() { return playerOffline() || navigator.onLine === false; }
+
+    function detachAudio() {
+        if (audio.hasAttribute('src')) {
+            audio.removeAttribute('src');
+            audio.load();
+        }
+        if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+        audioObjectUrl = null;
+    }
     window.addEventListener('furumusic:offline-mode', () => {
         playbackConnection.abort();
         playbackConnection = new AbortController();
+        Alpine.store('player')._updateMediaSession();
     });
 
     Alpine.store('player', {
@@ -787,6 +797,8 @@ document.addEventListener('alpine:init', () => {
             });
 
             audio.addEventListener('timeupdate', () => {
+                // Loading or losing an HTTP source can report a zero position before cache recovery.
+                if (pendingMedia || audio.error || !audio.readyState) return;
                 this.currentTime = audio.currentTime;
                 this.duration = audio.duration || 0;
                 this.progress = this.duration > 0 ? (this.currentTime / this.duration) * 100 : 0;
@@ -796,7 +808,8 @@ document.addEventListener('alpine:init', () => {
             });
 
             audio.addEventListener('ended', () => {
-                if (playerOffline() && this._offlinePlaybackHeld) return;
+                if (pendingMedia || !audio.ended || (playerOffline() && this._offlinePlaybackHeld)) return;
+                audibleTrackId = null;
                 if (this.currentTrack?.podcast) {
                     this.isPlaying = false;
                     this.currentTrack.podcast_completed = true;
@@ -813,20 +826,22 @@ document.addEventListener('alpine:init', () => {
             });
 
             audio.addEventListener('playing', () => {
-                if (audio.paused || (playerOffline() && this._offlinePlaybackHeld)) return;
+                if (pendingMedia || audio.paused || (playerOffline() && this._offlinePlaybackHeld)) return;
+                audibleTrackId = this._localSourceTrackId;
                 if (!this._cachePlayCounted && Alpine.store('offline')?.enabled) {
                     this._cachePlayCounted = true;
                     Alpine.store('offline').played(this.currentTrack);
                 }
             });
             audio.addEventListener('play', () => {
-                if (audio.paused || (playerOffline() && this._offlinePlaybackHeld)) return;
+                if (pendingMedia || audio.paused || (playerOffline() && this._offlinePlaybackHeld)) return;
                 this.isPlaying = true;
                 if (!this._playbackStartedAt) this._playbackStartedAt = Math.floor(Date.now() / 1000);
                 this._lastAudioTime = audio.currentTime || 0;
                 this._sendNowPlaying();
             });
             audio.addEventListener('pause', () => {
+                if (pendingMedia || !audio.paused) return;
                 if (this.currentTrack?.podcast) Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed);
                 this._trackListenedDelta();
                 this.isPlaying = false;
@@ -835,6 +850,16 @@ document.addEventListener('alpine:init', () => {
 
             audio.addEventListener('loadedmetadata', () => {
                 this.duration = audio.duration || 0;
+            });
+            audio.addEventListener('error', () => {
+                const offline = Alpine.store('offline'), track = this.currentTrack;
+                if (!audio.error || pendingMedia || audioObjectUrl || !offline?.enabled || offline.active ||
+                    !track || track.id !== this._localSourceTrackId) return;
+                // A native media load can fail before fetch or navigator notices the outage.
+                offline.networkResult(false);
+                if (!offline.active && this._isLocalPlaybackDevice() && audibleTrackId === track.id && offline.isSaved(track)) {
+                    this._loadSource(track, this.currentTime, false, true);
+                }
             });
 
             // Periodic state save
@@ -851,10 +876,16 @@ document.addEventListener('alpine:init', () => {
             }
 
             // Save state on page unload
-            window.addEventListener('pagehide', () => {
+            window.addEventListener('pagehide', (event) => {
                 if (this._isLocalPlaybackDevice()) {
                     this._saveStateSync();
                     this._recordHistory('stopped', true);
+                }
+                if (!event.persisted) {
+                    releaseSessionArtwork?.();
+                    releaseSessionArtwork = sessionMetadataKey = null;
+                    pendingMedia = null;
+                    if (audioObjectUrl) detachAudio();
                 }
             });
             window.addEventListener('pageshow', (event) => {
@@ -946,19 +977,46 @@ document.addEventListener('alpine:init', () => {
             this._localSourceTrackId = track.id;
             this._historyRecorded = false;
             this._resetPlaybackTracking();
-            audio.src = playbackSource(track);
             const seekSeconds = Number(options.position_seconds || 0);
             this.currentTime = seekSeconds;
             this.duration = Number(track.duration_seconds || 0);
             this.progress = this.duration > 0 ? seekSeconds / this.duration * 100 : 0;
-            this._seekOnLoad(seekSeconds);
-            if (options.paused) {
+            this._updateMediaSession();
+            return this._loadSource(track, seekSeconds, !!options.paused);
+        },
+
+        async _loadSource(track, position, paused, recoverStream = false) {
+            const offline = Alpine.store('offline');
+            const localOnly = () => recoverStream || !!track.offline_remote || offline?.active || (offline?.enabled && navigator.onLine === false);
+            this._seekOnLoad(0);
+            pendingMedia = null;
+            audibleTrackId = null;
+            if (localOnly() || (offline?.enabled && offline.isSaved(track))) {
+                // Media requests can fail in browser offline mode before reaching the service worker.
+                // Keep the actual File in the media pipeline, with native seeking and streaming.
+                const request = pendingMedia = {position, paused, recoverStream};
+                detachAudio();
+                this.isPlaying = false;
+                const file = await offline.openAudio(track).catch(() => null);
+                if (pendingMedia !== request) return;
+                pendingMedia = null;
+                if (file) audioObjectUrl = URL.createObjectURL(file);
+                else if (localOnly()) {
+                    this._localSourceTrackId = null;
+                    return;
+                }
+                ({position, paused} = request);
+            } else if (audioObjectUrl) {
+                detachAudio();
+            }
+            audio.src = audioObjectUrl || track.stream_url;
+            this._seekOnLoad(position);
+            if (paused) {
                 audio.pause();
                 this.isPlaying = false;
             } else {
                 audio.play().catch(() => {});
             }
-            this._updateMediaSession();
         },
 
         _seekOnLoad(seconds) {
@@ -974,6 +1032,9 @@ document.addEventListener('alpine:init', () => {
         },
 
         _pauseLocal() {
+            audibleTrackId = null;
+            if (pendingMedia) pendingMedia.paused = true;
+            if (playerOffline()) this._offlinePlaybackHeld = true;
             audio.pause();
             this.isPlaying = false;
         },
@@ -982,7 +1043,9 @@ document.addEventListener('alpine:init', () => {
             // Read the online owner before offline mode makes this tab the active device.
             // Jam monitoring can play real local audio on a tab that only controls the owner.
             const ownedPlayback = this._isLocalPlaybackDevice();
-            this._offlinePlaybackHeld = !ownedPlayback || !this.isPlaying || audio.paused || audio.ended ||
+            const lostStream = (audio.error && audibleTrackId === this._localSourceTrackId) ||
+                (pendingMedia?.recoverStream && !pendingMedia.paused);
+            this._offlinePlaybackHeld = !ownedPlayback || ((!this.isPlaying || audio.paused) && !lostStream) || audio.ended ||
                 !this.currentTrack || this.currentTrack.id !== this._localSourceTrackId;
             if (this._offlinePlaybackHeld) this._pauseLocal();
             if (!ownedPlayback) this._cachePlayCounted = false;
@@ -991,28 +1054,38 @@ document.addEventListener('alpine:init', () => {
         useOfflineCatalog(saved) {
             const byId = new Map(saved.map(t => [Number(t.id), t]));
             const byContent = new Map(saved.filter(t => t.content_id).map(t => [t.content_id, t]));
-            const lookup = t => t && (byId.get(OfflineCatalog.trackId(t)) || byContent.get(t.content_id));
+            const lookup = track => {
+                if (!track) return null;
+                const local = byId.get(OfflineCatalog.trackId(track));
+                return local && (!track.content_id || !local.content_id || local.content_id === track.content_id)
+                    ? local : byContent.get(track.content_id);
+            };
             const queue = Alpine.store('queue');
             queue.tracks = queue.tracks.map(lookup).filter(Boolean);
             const previous = this.currentTrack;
             const cached = lookup(previous);
             if (cached) {
                 queue.syncCurrentIndexToTrack(cached);
-                const playingHere = !this._offlinePlaybackHeld && !audio.paused && !audio.ended;
-                if (!this._offlineSession || this._localSourceTrackId !== cached.id || this.isPlaying !== playingHere) {
+                if ((audioObjectUrl || pendingMedia) && this._localSourceTrackId === previous.id) {
+                    // Already reading this recording locally. Keep its decoder, playhead and play count.
+                    this.currentTrack = this._historyTrack = cached;
+                    this._localSourceTrackId = cached.id;
+                    if (audibleTrackId === previous.id) audibleTrackId = cached.id;
+                    this._offlineSession = true;
+                } else {
                     const counted = this._cachePlayCounted;
-                    this._playLocal(cached, {paused:!playingHere, position_seconds:this.currentTime});
+                    this._playLocal(cached, {paused:this._offlinePlaybackHeld, position_seconds:this.currentTime});
                     this._cachePlayCounted = counted;
                 }
             } else if (previous) {
                 this._offlineSession = true;
                 this._seekOnLoad(0);
                 this._pauseLocal();
-                audio.removeAttribute('src');
-                audio.load();
+                pendingMedia = null;
+                detachAudio();
                 this.currentTrack = this._historyTrack = this._localSourceTrackId = null;
                 this.currentTime = this.progress = this.duration = 0;
-                if ('mediaSession' in navigator) navigator.mediaSession.metadata = null;
+                this._updateMediaSession();
             }
             if (!cached) queue.currentIndex = -1;
             Alpine.store('offline').saveState(this._buildStatePayload(true));
@@ -1038,22 +1111,29 @@ document.addEventListener('alpine:init', () => {
                 this._remoteStateBaseTime = this.currentTime;
                 this._remoteStateReceivedAt = Date.now();
                 if (this._shouldMirrorRemoteLocally()) {
-                    audio.play().catch(() => {});
+                    this._resumeLocal();
                 }
                 this._sendRemote('resume');
                 return;
             }
             this._offlinePlaybackHeld = false;
-            if (playerOffline() && this.currentTrack && (!this._offlineSession || this._localSourceTrackId !== this.currentTrack.id)) {
+            const offline = Alpine.store('offline');
+            const retrySaved = audio.error && !audioObjectUrl && offline?.enabled && offline.isSaved(this.currentTrack);
+            if (this.currentTrack && (retrySaved || (playerOffline() && (!this._offlineSession || this._localSourceTrackId !== this.currentTrack.id)))) {
                 this._playLocal(this.currentTrack, {position_seconds:this.currentTime});
                 return;
             }
-            audio.play().catch(() => {});
+            this._resumeLocal();
+        },
+
+        _resumeLocal() {
+            if (pendingMedia) pendingMedia.paused = false;
+            else audio.play().catch(() => {});
         },
 
         toggle() {
             if (!this.currentTrack) return;
-            if (this.isPlaying) { this.pause(); }
+            if (this.isPlaying || pendingMedia && !pendingMedia.paused) { this.pause(); }
             else { this.resume(); }
         },
 
@@ -1071,6 +1151,15 @@ document.addEventListener('alpine:init', () => {
                 this._sendRemote('seek', { time: nextTime });
                 return;
             }
+            if (pendingMedia) {
+                pendingMedia.position = this.currentTime = nextTime;
+                return;
+            }
+            if (!audio.readyState) {
+                this.currentTime = nextTime;
+                this._seekOnLoad(nextTime);
+                return;
+            }
             audio.currentTime = nextTime;
             this._lastAudioTime = audio.currentTime || 0;
         },
@@ -1078,7 +1167,7 @@ document.addEventListener('alpine:init', () => {
         seekRelative(delta) {
             if (!this.currentTrack) return;
             const duration = this.duration || audio.duration || 0;
-            const current = this._shouldSendRemote() ? this.currentTime : audio.currentTime;
+            const current = pendingMedia || !audio.readyState || this._shouldSendRemote() ? this.currentTime : audio.currentTime;
             const max = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
             this.seek(Math.max(0, Math.min(max, current + delta)));
         },
@@ -1265,7 +1354,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _applyRemotePlaybackState(state) {
-            if (!state) return;
+            if (!state || deviceSyncUnavailable()) return;
             const queue = Alpine.store('queue');
             const tracks = Array.isArray(state.tracks) ? state.tracks.filter(Boolean) : [];
             if (queue && tracks.length > 0) {
@@ -1289,7 +1378,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _syncLocalPlaybackState(state) {
-            if (!state) return;
+            if (!state || deviceSyncUnavailable()) return;
             const queue = Alpine.store('queue');
             const tracks = Array.isArray(state.tracks) ? state.tracks.filter(Boolean) : [];
             if (queue && tracks.length > 0) {
@@ -1314,6 +1403,9 @@ document.addEventListener('alpine:init', () => {
                     position_seconds: desiredTime,
                     paused: !!state.paused,
                 });
+            } else if (pendingMedia) {
+                pendingMedia.position = desiredTime;
+                pendingMedia.paused = !!state.paused;
             } else {
                 const drift = Math.abs((audio.currentTime || 0) - desiredTime);
                 const driftLimit = state.paused ? 0.08 : 0.75;
@@ -1351,7 +1443,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _executeRemoteCommand(command) {
-            if (!command || !command.command) return;
+            if (!command?.command || deviceSyncUnavailable()) return;
             const payload = command.payload || {};
             const queue = Alpine.store('queue');
             this._remoteExecuting = true;
@@ -1405,18 +1497,32 @@ document.addEventListener('alpine:init', () => {
         },
 
         _updateMediaSession() {
-            if (!('mediaSession' in navigator) || !this.currentTrack) return;
+            if (!('mediaSession' in navigator)) return;
             const t = this.currentTrack;
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: t.title,
-                artist: t.artists.map(a => a.name).join(', '),
-                artwork: t.cover_url ? [{ src: coverVariantUrl(t.cover_url, 'large'), sizes: '512x512', type: 'image/jpeg' }] : [],
-            });
-            navigator.mediaSession.setActionHandler('play', () => this.resume());
-            navigator.mediaSession.setActionHandler('pause', () => this.pause());
-            navigator.mediaSession.setActionHandler('previoustrack', () => this.prev());
-            navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
-            navigator.mediaSession.setActionHandler('seekto', (d) => { if (d.seekTime != null) this.seek(d.seekTime); });
+            const artist = Array.isArray(t?.artists) ? t.artists.map(a => a?.name || a).join(', ') : '';
+            const cover = typeof t?.cover_url === 'string' ? coverVariantUrl(t.cover_url, 'large') : null;
+            const key = t && JSON.stringify([t.id, t.title, artist, cover, Alpine.store('offline').localArtworkOnly]);
+            if (key === sessionMetadataKey) return;
+            sessionMetadataKey = key;
+            releaseSessionArtwork?.();
+            releaseSessionArtwork = null;
+            // OS media controls are optional. An unsupported action or image must never interrupt audio.
+            try {
+                const metadata = t ? new MediaMetadata({title:t.title, artist}) : null;
+                navigator.mediaSession.metadata = metadata;
+                if (!metadata) return;
+                if (cover) releaseSessionArtwork = Alpine.store('offline').bindArtwork(cover, src => {
+                    try {
+                        // Firefox requires absolute URLs for MediaImage, including online covers.
+                        metadata.artwork = src ? [{src:new URL(src, document.baseURI).href}] : [];
+                    } catch { /* Keep the text if the platform rejects this artwork. */ }
+                });
+                navigator.mediaSession.setActionHandler('play', () => this.resume());
+                navigator.mediaSession.setActionHandler('pause', () => this.pause());
+                navigator.mediaSession.setActionHandler('previoustrack', () => this.prev());
+                navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
+                navigator.mediaSession.setActionHandler('seekto', d => { if (d.seekTime != null) this.seek(d.seekTime); });
+            } catch { /* Playback does not depend on Media Session support. */ }
         },
 
         _buildStatePayload(forDeviceCache = false) {
@@ -1518,9 +1624,8 @@ document.addEventListener('alpine:init', () => {
                                     this._localSourceTrackId = currentTrack.id;
                                     this._historyRecorded = false;
                                     this._resetPlaybackTracking();
-                                    audio.src = playbackSource(currentTrack);
-                                    // Seek to saved position once metadata is loaded
-                                    this._seekOnLoad((state.position_ms || 0) / 1000);
+                                    this.currentTime = (state.position_ms || 0) / 1000;
+                                    this._loadSource(currentTrack, this.currentTime, true);
                                     this._updateMediaSession();
                                 }
                             }
@@ -1710,7 +1815,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async _requestState(path, payload) {
-            if (playerOffline()) return null;
+            if (deviceSyncUnavailable()) return null;
             const {signal} = playbackConnection;
             const res = await fetch(path, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1718,11 +1823,11 @@ document.addEventListener('alpine:init', () => {
             });
             if (!res.ok) return null;
             const data = await res.json();
-            return signal.aborted || playerOffline() ? null : data;
+            return signal.aborted || deviceSyncUnavailable() ? null : data;
         },
 
         async heartbeat() {
-            if (playerOffline()) return;
+            if (deviceSyncUnavailable()) return;
             try {
                 const data = await this._requestState('/api/player/devices/heartbeat', this.requestPayload());
                 if (data) this._apply(data);
@@ -1730,7 +1835,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async poll() {
-            if (playerOffline()) return;
+            if (deviceSyncUnavailable()) return;
             try {
                 const data = await this._requestState('/api/player/devices/poll', this.requestPayload());
                 if (!data) return;
@@ -1758,7 +1863,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _apply(data) {
-            if (playerOffline()) return;
+            if (deviceSyncUnavailable()) return;
             const previousJamId = this.currentJamId;
             this.activeDeviceId = data.active_device_id || null;
             this.devices = Array.isArray(data.devices) ? data.devices : [];
@@ -1940,7 +2045,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async loadFedDevices() {
-            if (playerOffline()) return;
+            if (deviceSyncUnavailable()) return;
             const {signal} = playbackConnection;
             try {
                 const res = await fetch('/api/player/fed-devices', {signal});
@@ -2062,7 +2167,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async select(deviceId) {
-            if (!deviceId || playerOffline()) return;
+            if (!deviceId || deviceSyncUnavailable()) return;
             const player = Alpine.store('player');
 
             try {
@@ -2086,7 +2191,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async sendCommand(command, payload = {}, targetDeviceId = null) {
-            if (playerOffline()) return false;
+            if (deviceSyncUnavailable()) return false;
             const jamId = this.isControllingRemoteJam() ? this.currentJamId : null;
             const target = jamId ? null : (targetDeviceId || this.activeDeviceId);
             if (!jamId && (!target || target === this.id)) return false;

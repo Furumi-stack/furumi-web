@@ -286,7 +286,9 @@ async function handle(event) {
         const queueLookup = sameOrigin && request.method === 'POST' && url.pathname === '/api/player/tracks-by-ids';
         response = await fetch(queueLookup ? request.clone() : request, {signal:signal.signal});
     } catch {
-        if (request.signal.aborted || state.mode === 'disabled' || probe || !sameOrigin) return Response.error();
+        if (state.mode === 'disabled' || !sameOrigin) return Response.error();
+        // Cancelled device polls and failed reachability probes have no local payload to replay.
+        if (request.signal.aborted || probe) return unavailable();
         if (rootNavigation) await bind(event.resultingClientId, state.account);
         return fallback(request, state, rootNavigation);
     } finally {

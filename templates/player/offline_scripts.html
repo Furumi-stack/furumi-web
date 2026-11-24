@@ -20,6 +20,58 @@ document.addEventListener('alpine:init', () => {
     let wakeQueue = false, blocked = false, retryDelay = 5000;
     let revision = 0, listVersion = 0, lastSuccess = Date.now(), channel;
     function catalog() { return repo || (repo = new globalThis.OfflineCatalog(account)); }
+    // Share each disk-backed cover between visible tiles, the player and the OS media controls.
+    // The final consumer releases the URL when a row disappears or changes its artwork.
+    const covers = new Map();
+    function acquireCover(key, display) {
+        let entry = covers.get(key);
+        if (!entry) {
+            entry = {users:0, url:null};
+            covers.set(key, entry);
+            entry.ready = catalog().read('assets', key).then(blob => {
+                if (blob?.size && covers.get(key) === entry) entry.url = URL.createObjectURL(blob);
+            }).catch(() => {});
+        }
+        let live = true;
+        ++entry.users;
+        entry.ready.then(() => { if (live) display(entry.url); });
+        return () => {
+            live = false;
+            if (--entry.users) return;
+            covers.delete(key);
+            if (entry.url) URL.revokeObjectURL(entry.url);
+        };
+    }
+    const lazyCovers = new WeakMap();
+    const coverObserver = 'IntersectionObserver' in window && new IntersectionObserver(entries => {
+        for (const entry of entries) lazyCovers.get(entry.target)?.(entry.isIntersecting);
+    }, {rootMargin:'450px'});
+    const missingCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#747474" stroke-width="2"><circle cx="24" cy="24" r="13"/><circle cx="24" cy="24" r="3"/></svg>');
+    Alpine.directive('artwork', (image, {expression}, {evaluateLater, effect, cleanup}) => {
+        const read = evaluateLater(expression);
+        let dispose;
+        function clear() { dispose?.(); dispose = null; }
+        effect(() => read(url => {
+            clear();
+            const offline = Alpine.store('offline');
+            const show = src => {
+                if (src) image.setAttribute('src', src);
+                else image.removeAttribute('src');
+            };
+            if (!offline.localArtworkOnly || !url || /^(?:blob:|data:)/i.test(url)) { show(url); return; }
+            show(null);
+            const open = () => offline.bindArtwork(url, src => show(src || missingCover));
+            if (image.loading !== 'lazy' || !coverObserver) { dispose = open(); return; }
+            let release;
+            lazyCovers.set(image, visible => {
+                if (visible && !release) release = open();
+                if (!visible && release) { show(null); release(); release = null; }
+            });
+            coverObserver.observe(image);
+            dispose = () => { coverObserver.unobserve(image); lazyCovers.delete(image); release?.(); };
+        }));
+        cleanup(clear);
+    });
     function eligible(track) {
         return globalThis.OfflineCatalog?.canSave(track) === true;
     }
@@ -299,6 +351,17 @@ document.addEventListener('alpine:init', () => {
             }).catch(() => { this.error = label('storage'); });
         },
         localResponse(request) { return catalog().respond(request); },
+        get localArtworkOnly() { return this.active || (this.enabled && navigator.onLine === false); },
+        bindArtwork(url, display) {
+            if (!this.localArtworkOnly || !url || /^(?:blob:|data:)/i.test(url)) {
+                display(url);
+                return;
+            }
+            const key = OfflineCatalog.artworkKey(url);
+            if (key) return acquireCover(key, display);
+            display(null);
+        },
+        openAudio(track) { return catalog().openAudio(track); },
         async played(track) {
             if (!this.enabled || !eligible(track)) return;
             try {

@@ -17,6 +17,8 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             const tracks = [21,22,23].map((id,index) => ({id,title:'Song '+id,content_id:'b3:'+(id===23?'2':'1').repeat(64),
                 artists:[owner],featured_artists:[artist],release_id:id===22?38:37,release_title:'Album '+index,
                 stream_url:api+'stream/'+id,cover_url:api+'cover/13/small',file_size_bytes:6,has_lyrics:true}));
+            // A recording without its own picture still has the already saved album cover.
+            tracks[1].cover_url = null;
             const requests = [], bytes = new Uint8Array([0,1,2,3,4,5]);
             async function online(url, options = {}) {
                 requests.push(url);
@@ -40,6 +42,27 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             await Promise.all([repo.save(queueBefore[0],{fetch:online,limitBytes:100}),peerTab.save(tracks[1],{fetch:online,limitBytes:100})]);
             const queueAfter = await repo.pending();
             const afterSave = await repo.list();
+            const inspectAudio = async (store, track) => {
+                const blob = await store.openAudio(track);
+                return blob && [blob.type, [...new Uint8Array(await blob.arrayBuffer())]];
+            };
+            const direct = {
+                local:await inspectAudio(repo,21),
+                alias:await inspectAudio(repo,{id:1234,content_id:tracks[0].content_id}),
+                changedRecording:await inspectAudio(repo,{id:21,content_id:tracks[2].content_id}),
+                otherAccount:await inspectAudio(otherAccount,tracks[0]),
+            };
+            // Old, unhashed downloads can have a generic MIME and an extensionless OPFS filename.
+            const legacy = new OfflineCatalog(104);
+            const oldTrack = {...tracks[0],content_id:null,audio_format:'MP3'};
+            await legacy.save(oldTrack,{fetch:(url,options) => url === oldTrack.stream_url
+                ? new Response(bytes,{headers:{'Content-Type':'application/octet-stream'}}) : online(url,options)});
+            direct.legacy = await inspectAudio(legacy,tracks[0]);
+            direct.legacyById = await inspectAudio(legacy,oldTrack.id);
+            const entry = await legacy.read('files','track:'+oldTrack.id);
+            await (await legacy.directory()).removeEntry(entry.name);
+            direct.missingFile = await inspectAudio(legacy,oldTrack);
+            await legacy.clear();
             const beforeRemove = await repo.stats();
             const accountSeparated = await otherAccount.stats();
             const catalog = (await get('artists')).items;
@@ -83,6 +106,9 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
                 throw new Error('Unexpected remote path '+path);
             }});
             const [local] = await repo.list();
+            direct.federated = await inspectAudio(repo,federated);
+            direct.synthetic = await inspectAudio(repo,local.id);
+            direct.federatedId = await inspectAudio(repo,federated.id);
             await repo.observe(api+'tracks/content/like',[content,'b3:'+'c'.repeat(64)]);
             const remoteLikes = {
                 contents:await get('tracks/content/like'),
@@ -138,11 +164,15 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
                 range:[range.status,range.headers.get('Content-Range'),rangeBytes],suffix:suffixBytes,
                 invalidRange:invalidRange.status,head:[head.status,head.headers.get('Content-Length'),(await head.arrayBuffer()).byteLength],
                 error,truncated,files:files.length,afterRemove,remainingBytes,cleared:await repo.stats(),
-                mediaRequests,remoteDetails,notFound,cleanup,emptyContentLikes,legacyContentLikes,remoteLikes};
+                mediaRequests,remoteDetails,direct,notFound,cleanup,emptyContentLikes,legacyContentLikes,remoteLikes};
         });
         assert.equal(results.queueBefore,1);
         assert.equal(results.queueAfter,0);
+        const bytes = [0,1,2,3,4,5], mp3 = ['audio/mpeg',bytes], wav = ['audio/wav',bytes];
+        assert.deepEqual(results.direct,{local:mp3,alias:mp3,changedRecording:null,otherAccount:null,
+            legacy:mp3,legacyById:mp3,missingFile:null,federated:wav,synthetic:wav,federatedId:wav});
         assert.equal(results.afterSave.find(t=>t.id===21).play_count,2);
+        assert.equal(results.afterSave.find(t=>t.id===22).cover_url,'/api/player/cover/13/large');
         assert.ok(results.afterSave.every(t => t.downloaded_at>0));
         assert.deepEqual(results.beforeRemove,{tracks:2,bytes:8});
         assert.deepEqual(results.accountSeparated,{tracks:0,bytes:0});

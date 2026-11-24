@@ -64,10 +64,15 @@
     const missing = () => json({error:'Unavailable offline'}, 404);
     function coverKey(url) {
         if (typeof url !== 'string') return null;
+        if (url.startsWith(location.origin + '/')) url = url.slice(location.origin.length);
         // Serve the saved thumbnail for all resolutions of the same artwork.
         const match = url.match(/^\/api\/player\/cover\/(\d+)(?:\/(?:small|medium|large))?$/);
         if (match) return BASE + 'cover/' + match[1] + '/medium';
-        return /^\/api\/player\/playlists\/\d+\/cover\?v=[a-f\d]+$/i.test(url) ? url : null;
+        if (/^\/api\/player\/playlists\/\d+\/cover\?v=[a-f\d]+$/i.test(url)) return url;
+        return /^\/api\/player\/federation\/(?:tracks\/artwork|catalog\/artwork(?:\/discover)?)\?[^#]+$/.test(url) ? url : null;
+    }
+    function savedTrack(row) {
+        return row.track.cover_url || !row.release?.cover_url ? row.track : {...row.track, cover_url:row.release.cover_url};
     }
     function releaseInfo(release, track) {
         return {
@@ -86,8 +91,12 @@
     function contentKey(track) {
         return /^b3:[\da-f]{64}$/.test(track.content_id) ? track.content_id : 'track:' + track.id;
     }
-    function binary(file, request, mime) {
-        const headers = new Headers({'Content-Type':mime || file.type || 'application/octet-stream', 'Accept-Ranges':'bytes'});
+    const audioTypes = new Map(Object.entries({
+        mp3:'audio/mpeg', flac:'audio/flac', wav:'audio/wav', ogg:'audio/ogg', oga:'audio/ogg',
+        opus:'audio/ogg', mp4:'audio/mp4', m4a:'audio/mp4', alac:'audio/mp4', aac:'audio/aac', webm:'audio/webm',
+    }));
+    function binary(file, request) {
+        const headers = new Headers({'Content-Type':file.type || 'application/octet-stream', 'Accept-Ranges':'bytes'});
         const range = request.headers.get('Range');
         let start = 0, end = file.size - 1;
         if (range) {
@@ -119,6 +128,7 @@
 
     class OfflineCatalog {
         static trackId(value) { return trackId(value); }
+        static artworkKey(url) { return coverKey(url); }
         static canSave(track) {
             return !!track && !track.podcast && !track.federation_pending && (positiveId(track.id) !== null || preparedRemote(track));
         }
@@ -185,12 +195,36 @@
             ]);
             const mime = new Map(fileKeys.map((key,i) => [key, fileInfo[i].mime]));
             const counts = new Map(plays.map(p => [p.id, p]));
-            return rows.map(r => ({...r.track, bytes:r.bytes, audio_mime:mime.get(r.file), downloaded_at:r.downloaded_at,
+            return rows.map(r => ({...savedTrack(r), bytes:r.bytes, audio_mime:mime.get(r.file), downloaded_at:r.downloaded_at,
                 last_played_at:counts.get(r.id)?.last_played_at || null, play_count:counts.get(r.id)?.play_count || 0}));
         }
         async has(value) {
             const id = trackId(value);
             return id !== null && Boolean(await this.read('tracks',id));
+        }
+        async openAudio(track) {
+            const id = trackId(track);
+            const row = id && await this.read('tracks', id);
+            const source = track?.id ?? track;
+            const requested = track?.content_id ?? (typeof source === 'string' && source.startsWith('fed:') ? source.slice(4) : null);
+            const content = contentToken(requested) ? requested : null;
+            const key = content || row?.file;
+            let entry = key && await this.read('files', key);
+            // Older recordings without a content hash are stored under their local track ID.
+            if (!entry && content && row?.file === 'track:' + id) entry = await this.read('files', row.file);
+            if (!entry) return null;
+            try {
+                const handle = await (await this.directory()).getFileHandle(entry.name);
+                const file = await handle.getFile();
+                const format = track?.audio_format || row?.track?.audio_format;
+                const type = entry.mime && entry.mime !== 'application/octet-stream'
+                    ? entry.mime : file.type || audioTypes.get(normalized(format));
+                // OPFS filenames have no extension. Retype the disk-backed bytes without reading them into memory.
+                return type && type !== file.type ? file.slice(0, file.size, type) : file;
+            } catch (error) {
+                if (error.name === 'NotFoundError') return null;
+                throw error;
+            }
         }
         async enqueue(track) {
             if (!OfflineCatalog.canSave(track)) return;
@@ -516,10 +550,11 @@
             const revision = await this.read('meta','revision');
             if (this._catalog && this._revision === revision) return this._catalog;
             const rows = await this.all('tracks');
-            const tracks = rows.map(row => row.track);
+            const tracks = [];
             const artists = new Map(), releases = new Map();
             for (const row of rows) {
-                const t = row.track;
+                const t = savedTrack(row);
+                tracks.push(t);
                 const release = releases.get(t.release_id) || {...row.release, tracks:[]};
                 release.tracks.push(t);
                 releases.set(release.id, release);
@@ -614,21 +649,13 @@
                 const {ids} = await request.json().catch(() => ({}));
                 if (!Array.isArray(ids)) return json({error:'Expected track IDs'},400);
                 const rows = await Promise.all(ids.slice(0,500).map(trackId).filter(Boolean).map(id => this.read('tracks',id)));
-                return json(rows.filter(Boolean).map(row => row.track));
+                return json(rows.filter(Boolean).map(savedTrack));
             }
             if (!['GET','HEAD'].includes(request.method)) return null;
             let m;
             if ((m = /^(?:stream\/(\d+)|federation\/cache\/([a-f\d]{64}))$/.exec(path))) {
-                const key = m[1] ? (await this.read('tracks',Number(m[1])))?.file : 'b3:'+m[2];
-                const file = key && await this.read('files', key);
-                if (!file) return missing();
-                try {
-                    const handle = await (await this.directory()).getFileHandle(file.name);
-                    return binary(await handle.getFile(),request,file.mime);
-                } catch(error) {
-                    if (error.name === 'NotFoundError') return missing();
-                    throw error;
-                }
+                const file = await this.openAudio(m[1] ? Number(m[1]) : {content_id:'b3:'+m[2]});
+                return file ? binary(file,request) : missing();
             }
             const art = coverKey(url.pathname + url.search);
             if (art) {

@@ -8,7 +8,7 @@ const player = path.join(__dirname, '..', 'src', 'player');
 const catalog = fs.readFileSync(path.join(player, 'offline-catalog.js'), 'utf8');
 
 (async () => {
-    let account = '17', unavailable = false, authOutage = false, hangingRequest;
+    let account = '17', unavailable = false, authOutage = false, dropProbe = false, hangingRequest;
     const log = [];
     const server = http.createServer((req,res) => {
         const url = new URL(req.url, 'http://localhost');
@@ -24,6 +24,7 @@ const catalog = fs.readFileSync(path.join(player, 'offline-catalog.js'), 'utf8')
         if (authOutage && url.pathname === '/offline-probe') { res.statusCode = 500; return res.end(); }
         if (url.pathname === '/logout') { account = ''; return res.end('logged out'); }
         if (url.pathname === '/offline-probe') {
+            if (dropProbe) return req.socket.destroy();
             res.setHeader('X-Furumusic-Player-Account',account || '0');
             res.statusCode = account ? 204 : 401;
             return res.end();
@@ -116,6 +117,10 @@ const catalog = fs.readFileSync(path.join(player, 'offline-catalog.js'), 'utf8')
 
         await mode('auto');
         assert.equal(await page.evaluate(() => fetch('/offline-probe').then(r=>r.status)),204);
+        dropProbe = true;
+        assert.equal(await page.evaluate(() => fetch('/offline-probe').then(r=>r.status)),503,
+            'a disconnected probe gets an unavailable response from the worker');
+        dropProbe = false;
         await mode('online');
         assert.equal(await page.evaluate(() => fetch('/api/player/me').then(r=>r.json()).then(p=>p.name)), 'Network');
         authOutage = true;

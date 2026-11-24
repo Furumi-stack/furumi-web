@@ -1,6 +1,6 @@
 <template x-if="$store.podcasts.artwork(pod)">
     <img
-        :src="$store.podcasts.artwork(pod)"
+        x-artwork="$store.podcasts.artwork(pod)"
         alt=""
         aria-hidden="true"
         loading="lazy"
