@@ -41,11 +41,12 @@ pub(super) async fn detail_handler(
     let Some(mut share) = load_share(pool, &path.0.id).await? else {
         return Ok(json_error(StatusCode::NOT_FOUND, "shared music not found"));
     };
-    if auth::get_request_user(&auth_ctx, &session, &db)
+    let guest = auth::get_request_user(&auth_ctx, &session, &db)
         .await
-        .is_none()
-    {
-        for track in &mut share.tracks {
+        .is_none();
+    for track in &mut share.tracks {
+        track.uploader_name.clear();
+        if guest {
             track.stream_url = format!("/api/player/shares/{}/stream/{}", share.token, track.id);
             if track.cover_url.is_some() {
                 track.cover_url = Some(format!(

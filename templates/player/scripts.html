@@ -3487,8 +3487,8 @@ document.addEventListener('alpine:init', () => {
                 { label: T.duration, value: formatTime(track.duration_seconds) },
                 { label: T.audio, value: audio },
                 { label: T.size, value: this.bytes(track.file_size_bytes) },
-                { label: T.uploader, value: track.uploader_name || 'UFO' },
             ];
+            if (!SHARE_TOKEN) rows.push({ label: T.uploader, value: track.uploader_name || 'UFO' });
             if (track.lastfm_rating != null || track.lastfm_listeners != null || track.lastfm_playcount != null) {
                 const rating = Number(track.lastfm_rating || 0);
                 rows.push({ label: T.lastfmRating, value: Number.isFinite(rating) ? Math.round(rating) : T.unknown });

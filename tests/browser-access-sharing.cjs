@@ -77,6 +77,11 @@ const oidc = createServer(async (request, response) => {
         await menu.locator('[data-action="info"]').click();
         const infoModal=page.locator('.info-modal');
         await infoModal.waitFor();
+        assert.equal(await infoModal.getByText('Uploader',{exact:true}).count(),0);
+        for (const viewer of [guest, admin]) {
+            const detail = await viewer.request.get(base+'/api/player/shares/'+share.token);
+            assert.equal((await detail.json()).tracks[0].uploader_name, '');
+        }
         assert.equal(await infoModal.getByRole('button',{name:/start radio|find similar|download/i}).count(),0);
         await infoModal.locator('[title="Close"]').click();
         await more.click();
