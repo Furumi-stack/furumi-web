@@ -261,7 +261,7 @@ async function checkOfflineControls(page, trigger, panel) {
     await manual.click();
     assert.equal(await manual.getAttribute('aria-checked'), 'true');
     await banner.getByText('Offline', {exact:true}).waitFor();
-    await banner.getByText('Enabled manually', {exact:true}).waitFor();
+    await banner.getByText('Manual', {exact:true}).waitFor();
     await banner.evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
     const bounds = await banner.boundingBox();
     assert.equal(bounds.x, 0);
@@ -281,8 +281,8 @@ async function checkOfflineControls(page, trigger, panel) {
     await page.evaluate(() => Object.assign(Alpine.store('offline'), {manual:false, automatic:true}));
     await trigger.click();
     await panel.getByText('Offline · automatic').waitFor();
-    await banner.getByText('Server unreachable', {exact:true}).waitFor();
-    assert.equal(await banner.getByText('Enabled manually', {exact:true}).isVisible(), false);
+    await banner.getByText('No server', {exact:true}).waitFor();
+    assert.equal(await banner.getByText('Manual', {exact:true}).isVisible(), false);
     assert.ok(await banner.isVisible());
     assert.equal(await manual.getAttribute('aria-checked'), 'false');
     await page.evaluate(() => {

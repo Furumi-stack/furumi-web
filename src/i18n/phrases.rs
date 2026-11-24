@@ -293,8 +293,8 @@ translations! {
     player_offline_online:   "Online"                          , "Онлайн";
     player_offline_manual:   "Offline"                         , "Офлайн";
     player_offline_saved_only: "Saved music only"              , "Только сохранённая музыка";
-    player_offline_manual_reason: "Enabled manually"           , "Включён вручную";
-    player_offline_auto_reason: "Server unreachable"           , "Нет связи с сервером";
+    player_offline_manual_reason: "Manual"                     , "Вручную";
+    player_offline_auto_reason: "No server"                    , "Нет связи";
     player_offline_auto:     "Offline · automatic"             , "Офлайн · автоматически";
     player_offline_manage:   "Manage"                          , "Управление";
     player_offline_manage_label: "Manage offline music"        , "Управление офлайн-музыкой";
