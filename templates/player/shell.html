@@ -6,6 +6,20 @@
      @keydown.window="if ((e=$event).ctrlKey && e.key==='k') { e.preventDefault(); document.getElementById('search-input')?.focus(); } else if (e.key==='/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) { e.preventDefault(); document.getElementById('search-input')?.focus(); }"
      >
 
+    {% if !guest && share_token.is_empty() %}
+    <div class="offline-status-banner" role="status" aria-atomic="true"
+         :title="$store.offline.manual ? '{{ t.player_offline_mode }}' : '{{ t.player_offline_auto }}'">
+        <div class="offline-status-clip">
+            <div class="offline-status-content">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m3 3 18 18M7.1 7.1A7 7 0 0 0 5 12a4 4 0 0 0 0 8h12M10.2 5.2A7 7 0 0 1 19 11a4.5 4.5 0 0 1 2.5 7.4"/>
+                </svg>
+                <strong>{{ t.player_offline_manual }}</strong>
+                <span>{{ t.player_offline_saved_only }}</span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     <div class="main-content">
         {% if !guest %}
         <aside class="sidebar-left">
@@ -81,13 +95,6 @@
                     </svg>
                     <span class="connection-alert-text">{{ t.player_connection_lost }}</span>
                 </div>
-                {% if !guest %}
-                <span class="offline-topbar-state" data-offline-only role="status"
-                      :title="$store.offline.manual ? '{{ t.player_offline_mode }}' : '{{ t.player_offline_auto }}'">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 12V4h16v8m-5-4-4 4-2-2M4 15h16l1 5H3z"/></svg>
-                    <span>{{ t.player_offline_manual }}</span>
-                </span>
-                {% endif %}
                 {% if guest %}
                 <div class="guest-account">
                     <strong>{{ t.guest_label }}</strong>

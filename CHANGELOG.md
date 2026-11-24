@@ -17,7 +17,7 @@
   placeholders as well.
 - Expanding an artist's popular tracks scrolls to the section heading.
   Collapsing the list returns to the top of the artist page.
-
+- A compact full-width banner identifies offline playback across the player.
 - Personal settings group language and Last.fm side by side and bring offline
   storage, the cache limit and saved music together in one compact panel.
 - Connected devices use compact lists with counts, separate mobile tabs for

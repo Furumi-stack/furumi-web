@@ -72,9 +72,21 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 .offline-scale input::-moz-range-progress {height:4px; border-radius:4px; background:var(--accent)}
 .offline-scale input::-moz-range-thumb {width:12px; height:12px; border:0; border-radius:50%; background:var(--text-primary)}
 .offline-settings-status {margin:4px 0; color:var(--text-secondary); font-size:12px; line-height:1.4}
-.offline-topbar-state svg {width:15px; height:15px; flex:none}
 .offline-settings .offline-error {color:var(--error, #edadaa)}
-.offline-topbar-state {display:inline-flex; align-items:center; gap:5px; flex:none; padding:3px 7px; border:1px solid #d8c79430; border-radius:6px; background:#d8c7940d; color:#d8c794; font-size:12px; font-weight:600; line-height:1.4}
+.offline-status-banner {
+    display:grid; flex:none; grid-template-rows:0fr; visibility:hidden; opacity:0;
+    color:#d8c794; background:linear-gradient(100deg, #29271f, #20201d 46%, var(--bg-secondary));
+    transition:grid-template-rows 140ms ease, opacity 140ms ease, visibility 0s 140ms;
+}
+.offline-active .offline-status-banner {grid-template-rows:1fr; visibility:visible; opacity:1; transition-delay:0s}
+.offline-status-clip {min-height:0; overflow:hidden}
+.offline-status-content {
+    display:flex; align-items:center; gap:8px; min-height:30px; padding:4px clamp(12px, 2vw, 24px);
+    box-shadow:inset 0 -1px #d8c79426; font-size:12px; line-height:1.4;
+}
+.offline-status-content svg {width:16px; height:16px; flex:none}
+.offline-status-content strong {font-size:13px; font-weight:650}
+.offline-status-content span {padding-inline-start:9px; border-inline-start:1px solid #d8c79440; color:var(--text-secondary)}
 .offline-devices-note {padding:9px; color:var(--text-secondary); font-size:13px}
 @media (min-width:601px) {
     .offline-preferences.cache-disabled .offline-preferences-main {grid-area:1 / 1 / 2 / -1}
@@ -82,7 +94,6 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 }
 @media(max-width:600px) {
     .offline-account .offline-switch-row,.offline-manage {min-height:40px}
-    .offline-topbar-state {gap:3px; padding-inline:5px}
     .offline-settings {padding:8px 12px}
     .offline-preferences {grid-template-columns:minmax(0,1fr); gap:6px}
     .offline-preferences-head .offline-switch-row,.offline-saved-link {min-height:40px}
@@ -94,7 +105,7 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
     .offline-scale-marks span:nth-last-of-type(2) {transform:translateX(-100%)}
 }
 @media(prefers-reduced-motion: reduce) {
-    .offline-switch::before,.offline-preferences-help [role=tooltip],.offline-saved-reveal,.offline-saved-link {transition:none}
+    .offline-status-banner,.offline-switch::before,.offline-preferences-help [role=tooltip],.offline-saved-reveal,.offline-saved-link {transition:none}
     .offline-limit {transition-duration:0s !important}
 }
 @media(forced-colors:active) { .offline-scale input {appearance:auto} }

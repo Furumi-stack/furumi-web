@@ -255,11 +255,14 @@ async function checkOfflineControls(page, trigger, panel) {
     await help.press('Escape');
     await hint.waitFor({state:'hidden'});
     assert.ok(await panel.isVisible());
+    const banner = page.locator('.offline-status-banner');
+    assert.equal(await banner.isVisible(), false);
     await manual.click();
     assert.equal(await manual.getAttribute('aria-checked'), 'true');
-    const offlineStatus = page.locator('.offline-topbar-state span');
-    assert.equal(await offlineStatus.innerText(), 'Offline');
-    assert.ok((await offlineStatus.boundingBox()).width > 20, 'the status text is visible even on a small phone');
+    await banner.getByText('Offline', {exact:true}).waitFor();
+    const bounds = await banner.boundingBox();
+    assert.equal(bounds.x, 0);
+    assert.equal(bounds.width, page.viewportSize().width, 'offline banner spans the player on desktop and mobile');
     assert.ok(await panel.isVisible(), 'toggling saved music keeps the menu open');
     assert.equal(await panel.getByRole('link', {name:'My listening'}).isVisible(), false);
     assert.equal(await panel.getByRole('link', {name:'Followed'}).isVisible(), true);
@@ -273,6 +276,7 @@ async function checkOfflineControls(page, trigger, panel) {
     await page.evaluate(() => { Alpine.store('offline').manual = false; });
     await trigger.click();
     await panel.getByText('Offline · automatic').waitFor();
+    assert.ok(await banner.isVisible());
     assert.equal(await manual.getAttribute('aria-checked'), 'false');
     await page.evaluate(() => {
         Alpine.store('user').menuOpen = false;
