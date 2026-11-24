@@ -136,6 +136,19 @@ async function checkSidebar(browser, mobile) {
     }
     const trigger = page.locator(mobile ? '.mobile-account-chip' : '.sidebar-account-trigger');
     const panel = page.locator(mobile ? '#mobile-account-actions' : '#sidebar-account-actions');
+    await panel.evaluate(el => {
+        window.accountTransitions = [];
+        el.addEventListener('transitionend', event => {
+            if (event.target === el && event.propertyName === 'clip-path') window.accountTransitions.push(el.inert);
+        });
+    });
+    await trigger.click();
+    await page.waitForFunction(() => window.accountTransitions.includes(false));
+    await trigger.click();
+    await panel.waitFor({state:'hidden'});
+    await page.waitForFunction(() => window.accountTransitions.includes(true));
+    await page.emulateMedia({reducedMotion:'reduce'});
+    assert.equal(await panel.evaluate(el => getComputedStyle(el).transitionDuration), '0s');
     await trigger.click();
     await panel.getByRole('link', {name:'Followed'}).click();
     await page.getByRole('heading', {name:'Followed', exact:true}).waitFor();
@@ -154,7 +167,7 @@ async function checkSidebar(browser, mobile) {
     await trigger.click();
     await panel.getByRole('button', { name: 'Settings' }).click();
     await page.locator('.user-settings-modal').waitFor();
-    assert.equal(await panel.isVisible(), false);
+    await panel.waitFor({state:'hidden'});
     await checkOfflineControls(page, trigger, panel);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
