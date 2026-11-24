@@ -10,6 +10,15 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.3 — 2026-11-24
+
+- Furumi downloads the lyrics search model when indexing is enabled and reuses
+  it from the audio models directory. This removes about 487 MB of uncompressed
+  model files from the Docker image.
+- Shared track details omit the uploader's name.
+- The account menu opens and closes with a short animation on desktop and mobile
+  and respects the device's reduced motion preference.
+
 ## v0.16.2 — 2026-11-24
 
 - Saved tracks and their likes load when the browser loses its connection.
