@@ -1,0 +1,18 @@
+{% import "player/get_app_platform.html" as platform %}
+{% let releases = "https://github.com/Furumi-stack/furumi-tui/releases/latest" %}
+<section class="get-app-client" aria-labelledby="get-app-tui-title" x-data="{ activeGuide: null }">
+    <h3 id="get-app-tui-title">Furumi TUI</h3>
+    <p class="get-app-client-type">{{ t.player_app_terminal_client }}</p>
+    <div class="get-app-tiles">
+        {% call platform::tile("get-app-tui-arch", "Arch Linux", "M12 2 9.2 8.6l1.5 1.8-2.1-.6L3 21c2.5-1.5 4.9-2.5 7-2.9-.2-.5-.3-1-.3-1.6 0-1.7 1-3 2.3-3s2.3 1.3 2.3 3c0 .6-.1 1.1-.3 1.6 2.1.4 4.5 1.4 7 2.9l-3.6-7.2-2.5-1.5 1.8.3z") %}{% endcall %}
+        {% call platform::tile("get-app-tui-macos", "macOS", "M17.1 12.3c0-1.8.9-3.1 2.4-4-1-1.4-2.4-2.1-4.2-2.2-1.7-.1-2.7 1-3.6 1-.9 0-2.2-1-3.6-1C5.6 6.2 3 8.2 3 12c0 2.1.8 4.4 1.9 6 1 1.5 2 3 3.6 3 1.5 0 2-1 3.7-1s2.1 1 3.7 1 2.6-1.4 3.6-2.9c.7-1 1.1-2.1 1.4-2.9-2.2-.9-3.8-2-3.8-3zm-2.6-7.6c.8-1 1.3-2.2 1.2-3.5-1.2.1-2.6.8-3.4 1.8-.8.9-1.4 2.2-1.3 3.4 1.3.1 2.7-.7 3.5-1.7z") %}{% endcall %}
+        {% call platform::tile("get-app-tui-windows", "Windows", "M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 0h8v8h-8z") %}{% endcall %}
+        {% call platform::tile("get-app-tui-binaries", t.player_app_binaries, "M11 3h2v10l3.5-3.5L18 11l-6 6-6-6 1.5-1.5L11 13zm-7 15h2v2h12v-2h2v4H4z") %}{% endcall %}
+    </div>
+    <div class="get-app-guides">
+        {% call platform::guide("get-app-tui-arch", "Arch Linux", t.player_app_arch_guide, "./furumi", releases, t.player_app_latest_release, "https://github.com/house-of-vanity/arch_repo", t.player_app_arch_repo) %}{% endcall %}
+        {% call platform::guide("get-app-tui-macos", "macOS · Homebrew", t.player_app_macos_guide, "brew install house-of-vanity/tap/furumi\nfurumi", "https://github.com/house-of-vanity/homebrew-tap", "Homebrew tap", "", "") %}{% endcall %}
+        {% call platform::guide("get-app-tui-windows", "Windows", t.player_app_windows_guide, ".\\furumi.exe", releases, t.player_app_latest_release, "", "") %}{% endcall %}
+        {% call platform::guide("get-app-tui-binaries", t.player_app_binaries, t.player_app_binary_guide, "", releases, t.player_app_latest_release, "", "") %}{% endcall %}
+    </div>
+</section>

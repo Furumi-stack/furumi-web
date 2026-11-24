@@ -592,6 +592,7 @@ document.addEventListener('alpine:init', () => {
         accessStatus: "anonymous",
         menuOpen: false,
         settingsOpen: false,
+        getAppOpen: false,
         settingsFocus: 'user-settings-title',
         lastfm: { configured: false, connected: false, username: null, reauth_required: false, last_error: null },
         lastfmBusy: false,
@@ -710,11 +711,20 @@ document.addEventListener('alpine:init', () => {
             const dialog = document.querySelector('.user-settings-overlay[open]');
             await finishPlayerDialog(dialog, () => {
                 this.settingsOpen = false;
-                Alpine.nextTick(() => {
-                    const triggers = document.querySelectorAll('.sidebar-account-trigger, .mobile-account-chip');
-                    Array.from(triggers).find(button => button.getClientRects().length)?.focus({preventScroll:true});
-                });
+                Alpine.nextTick(() => this.focusAccountTrigger());
             });
+        },
+
+        async closeGetApp(dialog) {
+            await finishPlayerDialog(dialog, () => {
+                this.getAppOpen = false;
+                Alpine.nextTick(() => this.focusAccountTrigger());
+            });
+        },
+
+        focusAccountTrigger() {
+            const triggers = document.querySelectorAll('.sidebar-account-trigger, .mobile-account-chip');
+            Array.from(triggers).find(button => button.getClientRects().length)?.focus({preventScroll:true});
         },
 
         initials() {

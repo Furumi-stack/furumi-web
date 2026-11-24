@@ -1,0 +1,27 @@
+{% macro tile(guide, label, icon) %}
+<button class="get-app-tile" type="button" aria-controls="{{ guide }}"
+        :aria-expanded="activeGuide === $el.getAttribute('aria-controls')"
+        @click="const guide = $el.getAttribute('aria-controls'); activeGuide = activeGuide === guide ? null : guide">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ icon }}"/></svg>
+    {{ label }}
+</button>
+{% endmacro %}
+
+{% macro guide(id, title, description, command, link, link_label, extra_link, extra_label) %}
+<section class="get-app-guide" id="{{ id }}" x-cloak
+         x-show="activeGuide === $el.id" :inert="activeGuide === $el.id ? null : true"
+         x-transition:enter="get-app-guide-enter" x-transition:enter-start="get-app-guide-hidden"
+         x-transition:leave="get-app-guide-leave" x-transition:leave-end="get-app-guide-hidden">
+    <h4>{{ title }}</h4>
+    <p>{{ description }}</p>
+    {% if !command.is_empty() %}
+    <pre><code>{{ command }}</code></pre>
+    {% endif %}
+    <div class="get-app-links">
+        <a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ link_label }}</a>
+        {% if !extra_link.is_empty() %}
+        <a href="{{ extra_link }}" target="_blank" rel="noopener noreferrer">{{ extra_label }}</a>
+        {% endif %}
+    </div>
+</section>
+{% endmacro %}

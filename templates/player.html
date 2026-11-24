@@ -24,6 +24,9 @@ if ('serviceWorker' in navigator) {
 {% include "player/collection_styles.html" %}
 {% include "player/listening_styles.html" %}
 <style>{% include "player/dialog_styles.css" %}</style>
+{% if !guest %}
+<style>{% include "player/get_app.css" %}</style>
+{% endif %}
 {% if downloads_enabled %}
 <style>
 {% include "player/download_manager.css" %}
@@ -36,6 +39,7 @@ if ('serviceWorker' in navigator) {
 {% block body %}
 {% include "player/shell.html" %}
 {% include "player/modals.html" %}
+{% if !guest %}{% include "player/get_app.html" %}{% endif %}
 {% include "player/lyrics_modal.html" %}
 {% include "player/offline_scripts.html" %}
 {% include "player/offline_manager_scripts.html" %}

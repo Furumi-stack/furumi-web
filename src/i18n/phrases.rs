@@ -441,6 +441,15 @@ translations! {
     player_settings_connect: "Connect"                         , "Подключить";
     player_settings_reconnect: "Reconnect"                     , "Переподключить";
     player_settings_disconnect: "Disconnect"                   , "Отключить";
+    player_get_app: "Get app", "Скачать приложение";
+    player_app_terminal_client: "Terminal client", "Консольный клиент";
+    player_app_binaries: "Binaries", "Бинарники";
+    player_app_latest_release: "Latest release", "Последний релиз";
+    player_app_arch_repo: "Arch repository", "Репозиторий Arch";
+    player_app_arch_guide: "Check the Arch repository for package availability. You can also download the Linux archive, extract it, and run the binary from the extracted folder.", "Проверьте наличие пакета в репозитории Arch. Также можно скачать архив для Linux, распаковать его и запустить бинарник из распакованной папки.";
+    player_app_macos_guide: "On an Apple Silicon Mac with Homebrew, run these commands in Terminal.", "На Mac с Apple Silicon и установленным Homebrew выполните эти команды в Терминале.";
+    player_app_windows_guide: "Download the Windows x86-64 ZIP from the release assets, extract it, and run this command in PowerShell from the extracted folder.", "Скачайте ZIP для Windows x86-64 из файлов релиза, распакуйте его и выполните эту команду в PowerShell из распакованной папки.";
+    player_app_binary_guide: "In the release assets, choose the archive for your system and processor. Extract it and run the executable from the extracted folder.", "Выберите в файлах релиза архив для вашей системы и процессора. Распакуйте его и запустите исполняемый файл из распакованной папки.";
     player_log_out:          "Log out"                         , "Выйти";
     player_admin_panel:      "Admin Panel"                     , "Админка";
     player_info:             "Info"                            , "Информация";

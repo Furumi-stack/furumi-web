@@ -1,0 +1,18 @@
+<template x-if="$store.user.getAppOpen">
+    <dialog id="get-app-dialog" class="player-dialog" aria-labelledby="get-app-title" style="--dialog-width: 570px"
+            x-data x-init="$nextTick(() => { if ($el.isConnected) { $el.showModal(); document.getElementById('get-app-title').focus() } })"
+            @dismiss-player-dialog.stop="$store.user.closeGetApp($el)"
+            @cancel.prevent="$store.user.closeGetApp($el)" @click.self="$store.user.closeGetApp($el)" @keydown.space.stop>
+        <div class="player-dialog-surface">
+            {% let dialog_head_class = "" %}
+            {% let dialog_title_id = "get-app-title" %}
+            {% let dialog_title = t.player_get_app %}
+            {% let dialog_icon = "M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4" %}
+            {% let show_version = false %}
+            {% include "player/dialog_header.html" %}
+            <div class="get-app-body">
+                {% include "player/get_app_tui.html" %}
+            </div>
+        </div>
+    </dialog>
+</template>

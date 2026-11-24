@@ -42,6 +42,11 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9m4 0h3M4 12h2m4 0h10M4 18h8m4 0h4"/><circle cx="15" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>
         {{ t.nav_settings }}
     </button>
+    <button type="button" aria-haspopup="dialog" aria-controls="get-app-dialog"
+            @click="$store.user.menuOpen = false; $store.user.getAppOpen = true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>
+        {{ t.player_get_app }}
+    </button>
     <a data-online-only href="/admin/" x-show="$store.user.profile?.role === 'admin'" x-cloak>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v5c0 4.5 3.2 8 7.5 10 4.3-2 7.5-5.5 7.5-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
         {{ t.player_admin_panel }}
