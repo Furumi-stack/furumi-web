@@ -1,0 +1,39 @@
+<div class="download-destination">
+    <div class="download-destination-label">
+        <label for="{{ kind }}-target-playlist">{{ t.player_download_playlist_label }}</label>
+        <span class="download-playlist-help" x-data="{ help:false }"
+              @mouseenter="help=true" @mouseleave="help=false" @click.outside="help=false">
+            <button type="button" class="download-help-button" aria-label="{{ t.player_info }}"
+                    aria-describedby="{{ kind }}-playlist-hint" @focus="help=true" @blur="help=false"
+                    @click="help=true" @keydown.escape="if (help) { $event.stopPropagation(); $event.preventDefault(); help=false }">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/>
+                </svg>
+            </button>
+            <span id="{{ kind }}-playlist-hint" role="tooltip" x-cloak x-show="help" x-transition.opacity.duration.120ms>
+                {% if kind == "youtube" %}{{ t.player_youtube_destination_hint }}{% else %}{{ t.player_import_destination_hint }}{% endif %}
+            </span>
+        </span>
+    </div>
+    <div class="download-destination-fields">
+        <select class="download-field" id="{{ kind }}-target-playlist" x-model="$store.torrents.{{ kind }}PlaylistChoice"
+                {% if kind == "youtube" %}@change="$store.torrents.youtubePlaylistChoiceChanged()" :disabled="$store.torrents.youtubeSubmitting"
+                {% else %}@change="$store.torrents.importPlaylistChoiceChanged('{{ kind }}')"
+                {% if kind == "local" %}:disabled="$store.torrents.localFilesUploading || $store.torrents.localPlaylistLocked"
+                {% else %}:disabled="$store.torrents.loading || $store.torrents.torrentDestinationLocked()"{% endif %}{% endif %}>
+            <option value="">{{ t.player_youtube_no_destination }}</option>
+            <template x-for="playlist in $store.torrents.youtubeOwnedPlaylists()" :key="playlist.id">
+                <option :value="String(playlist.id)" x-text="playlist.title"></option>
+            </template>
+            <option value="__new__">{{ t.player_youtube_create_playlist }}</option>
+        </select>
+        <template x-if="$store.torrents.{{ kind }}PlaylistChoice === '__new__'">
+            <input class="download-field" type="text" maxlength="255" autocomplete="off"
+                   x-model="$store.torrents.{{ kind }}NewPlaylistTitle" placeholder="{{ t.player_youtube_new_playlist_name }}"
+                   aria-label="{{ t.player_youtube_new_playlist_name }}"
+                   {% if kind == "local" %}:disabled="$store.torrents.localFilesUploading || $store.torrents.localPlaylistLocked"
+                   {% else if kind == "torrent" %}:disabled="$store.torrents.loading || $store.torrents.torrentDestinationLocked()"
+                   {% else %}:disabled="$store.torrents.youtubeSubmitting"{% endif %}>
+        </template>
+    </div>
+</div>

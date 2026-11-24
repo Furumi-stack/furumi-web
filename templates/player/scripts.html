@@ -4949,7 +4949,9 @@ document.addEventListener('alpine:init', () => {
         downloadsEnabled: {{ downloads_enabled }},
         torrentDownloadsEnabled: {{ torrent_downloads_enabled }},
         youtubeDownloadsEnabled: {{ youtube_downloads_enabled }},
-        sourceTab: {% if youtube_downloads_enabled %}'youtube'{% else if torrent_downloads_enabled %}'torrents'{% else %}'files'{% endif %},
+        sourceTab: 'overview',
+        overviewLoading: false,
+        overviewLoaded: false,
         youtubeUrl: '',
         youtubePreview: null,
         youtubePreviewSelected: new Set(),
@@ -4961,11 +4963,10 @@ document.addEventListener('alpine:init', () => {
         localTargetPlaylistId: null,
         youtubePlaylistChoice: '',
         youtubeNewPlaylistTitle: '',
-        youtubePlaylistSyncKey: '',
+        downloadPlaylistStates: {},
         youtubePreviewLoading: false,
         youtubeJobs: [],
         youtubeExpandedJobId: null,
-        youtubeJobsInitialized: false,
         youtubeLoading: false,
         youtubeSubmitting: false,
         youtubeCancellingIds: new Set(),
@@ -4980,6 +4981,7 @@ document.addEventListener('alpine:init', () => {
         magnet: '',
         sessions: [],
         loadingSessions: false,
+        sessionsLoaded: false,
         currentJob: null,
         previewData: null,
         workspaceMode: 'empty',
@@ -5029,16 +5031,13 @@ document.addEventListener('alpine:init', () => {
         },
 
         open() {
-            if (!this.downloadsEnabled) return;
+            if (!this.downloadsEnabled || this.modal) return;
+            this.sourceTab = 'overview';
             this.modal = true;
             Alpine.store('playlists')?.reload?.();
             this.message = '';
             this.error = false;
-            if (this.sourceTab === 'youtube') this.loadYoutubeJobs();
-            else if (this.sourceTab === 'uploads') this.loadUploads();
-            else if (this.sourceTab === 'files') this.loadLocalUploadHistory();
-            else this.loadSessions();
-            if (this.sourceTab !== 'uploads') this.loadUploads({ silent: true });
+            this.refreshDownloads();
             this.loadAgentStatus();
             this._startRefresh();
         },
@@ -5060,21 +5059,31 @@ document.addEventListener('alpine:init', () => {
         },
 
         showSourceTab(tab) {
-            const tabs = ['files', 'uploads'];
-            if (this.youtubeDownloadsEnabled) tabs.unshift('youtube');
-            if (this.torrentDownloadsEnabled) tabs.unshift('torrents');
-            this.sourceTab = tabs.includes(tab) ? tab : tabs[0];
+            if (tab === 'torrents' && !this.torrentDownloadsEnabled || tab === 'youtube' && !this.youtubeDownloadsEnabled) return;
+            if (this.sourceTab === tab) return;
+            this._stopPoll();
+            if (tab === 'torrents') this.showTorrentOverview();
+            this.sourceTab = tab;
             this._setMessage('');
-            if (this.sourceTab === 'youtube') this.loadYoutubeJobs();
-            else if (this.sourceTab === 'uploads') {
-                this._stopPoll();
-                this.loadUploads();
+            this.refreshDownloads();
+        },
+
+        async refreshDownloads(silent = false) {
+            if (this.sourceTab === 'youtube') return this.loadYoutubeJobs({silent});
+            if (this.sourceTab === 'files') return this.loadLocalUploadHistory({silent});
+            if (this.sourceTab === 'uploads') return this.loadUploads({silent});
+            if (this.sourceTab === 'torrents') return this.loadSessions({silent});
+            if (this.overviewLoading) return;
+            this.overviewLoading = true;
+            try {
+                const requests = [this.loadLocalUploadHistory({silent})];
+                if (this.youtubeDownloadsEnabled) requests.push(this.loadYoutubeJobs({silent}));
+                if (this.torrentDownloadsEnabled) requests.push(this.loadSessions({silent}));
+                await Promise.all(requests);
+                this.overviewLoaded = true;
+            } finally {
+                this.overviewLoading = false;
             }
-            else if (this.sourceTab === 'files') {
-                this._stopPoll();
-                this.loadLocalUploadHistory();
-            }
-            else this.loadSessions();
         },
 
         async loadYoutubeJobs({ silent = false } = {}) {
@@ -5090,30 +5099,21 @@ document.addEventListener('alpine:init', () => {
                 ) {
                     this.youtubeExpandedJobId = null;
                 }
-                if (!this.youtubeJobsInitialized) {
-                    const activeJob = this.youtubeJobs.find(job => !this.youtubeJobTerminal(job.status));
-                    this.youtubeExpandedJobId = this.youtubePreview ? null : (activeJob?.id || null);
-                    this.youtubeJobsInitialized = true;
-                }
-                const playlistSyncKey = this.youtubeJobs
-                    .filter(job => Number(job.target_playlist_id || 0) > 0)
-                    .map(job => [
-                        job.id,
-                        job.status,
-                        Number(job.completed_items || 0),
-                        Number(job.failed_items || 0),
-                        Number(job.review_items || 0),
-                    ].join(':'))
-                    .join('|');
-                if (playlistSyncKey && playlistSyncKey !== this.youtubePlaylistSyncKey) {
-                    this.youtubePlaylistSyncKey = playlistSyncKey;
-                    Alpine.store('playlists')?.reload?.();
-                }
+                this.refreshChangedPlaylists('youtube', this.youtubeJobs);
             } catch (err) {
                 if (!silent) this._setMessage(err.message || T.youtubeLoadFailed, true);
             } finally {
                 if (!silent) this.youtubeLoading = false;
             }
+        },
+
+        refreshChangedPlaylists(source, jobs) {
+            const state = jobs.filter(job => job.target_playlist_id)
+                .map(job => [job.id, job.target_playlist_id, job.status, job.completed_items, job.failed_items, job.review_items].join(':'))
+                .sort().join('|');
+            const previous = this.downloadPlaylistStates[source];
+            this.downloadPlaylistStates[source] = state;
+            if (previous !== undefined && previous !== state) Alpine.store('playlists')?.reload?.();
         },
 
         clearYoutubePreview() {
@@ -5498,16 +5498,19 @@ document.addEventListener('alpine:init', () => {
             this._stopPoll();
             this.workspaceMode = 'new';
             this.file = null;
-            this.localFiles = [];
             this.magnet = '';
-            this.uploadProgress = 0;
-            this.uploadProgressText = '';
             this.currentJob = null;
             this.previewData = null;
             this.treeRoot = null;
             this.selected = new Set();
             this.expanded = new Set();
-            this._setMessage(T.chooseTorrent);
+            this._setMessage('');
+        },
+
+        showTorrentOverview() {
+            this._stopPoll();
+            this.workspaceMode = 'empty';
+            this._setMessage('');
         },
 
         _setMessage(message, error = false) {
@@ -5642,14 +5645,11 @@ document.addEventListener('alpine:init', () => {
 
         progressDetailText(job) {
             if (!job) return '';
-            const size = this.bytes(job.selected_size || job.total_size);
-            if (this.isCompleted(job)) return size;
+            const bytes = job.selected_size || job.total_size || this.previewData?.total_size;
+            if (!bytes) return '';
+            const size = this.bytes(bytes);
+            if (this.isCompleted(job) || !job.downloaded_bytes) return size;
             return this.bytes(job.downloaded_bytes) + ' / ' + size;
-        },
-
-        actionButtonClass() {
-            if (this.isCurrentCompletedLocked()) return 'modal-btn-ghost';
-            return this.isCurrentDownloading() ? 'modal-btn-pause' : 'modal-btn-primary';
         },
 
         actionButtonText() {
@@ -5660,7 +5660,7 @@ document.addEventListener('alpine:init', () => {
 
         actionButtonDisabled() {
             return this.loading
-                || (!this.isCurrentDownloading() && !this.importDestinationValid('torrent'))
+                || (!this.isCurrentDownloading() && (!this.selected.size || !this.importDestinationValid('torrent')))
                 || this.isCurrentCompletedLocked()
                 || this.normalizedStatus(this.currentJob) === 'resolving'
                 || !this.previewData
@@ -6164,16 +6164,7 @@ document.addEventListener('alpine:init', () => {
             this._stopRefresh();
             this._refreshTimer = setInterval(() => {
                 if (!this.modal) return;
-                if (this.sourceTab === 'youtube') {
-                    this.loadYoutubeJobs({ silent: true });
-                }
-                else if (this.sourceTab === 'uploads') {
-                    this.loadUploads({ silent: true });
-                }
-                else if (this.sourceTab === 'files') {
-                    this.loadLocalUploadHistory({ silent: true });
-                }
-                else this.loadSessions();
+                this.refreshDownloads(true);
                 this.loadAgentStatus();
             }, 5000);
         },
@@ -6209,10 +6200,7 @@ document.addEventListener('alpine:init', () => {
             const job = data.job || null;
             this.workspaceMode = 'session';
             this.file = null;
-            this.localFiles = [];
             this.magnet = '';
-            this.uploadProgress = 0;
-            this.uploadProgressText = '';
             this.previewData = preview;
             this.currentJob = job;
             this.torrentPlaylistChoice = job?.target_playlist_id ? String(job.target_playlist_id) : '';
@@ -6225,33 +6213,34 @@ document.addEventListener('alpine:init', () => {
             if (job) this._rememberJob(job);
         },
 
-        async loadSessions() {
+        async loadSessions({silent = false} = {}) {
             this.loadingSessions = true;
             try {
                 const res = await fetch('/api/player/torrents');
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.loadTorrentsFailed);
                 this.sessions = Array.isArray(data) ? data : [];
-                if (this.sessions.some(job => job.target_playlist_id)) Alpine.store('playlists')?.reload?.();
+                this.refreshChangedPlaylists('torrents', this.sessions);
                 this._syncCurrentJobFromSessions();
-                await this._refreshResolvedSelection();
+                if (this.sourceTab === 'torrents') await this._refreshResolvedSelection();
             } catch (err) {
-                this._setMessage(err.message || String(err), true);
+                if (!silent) this._setMessage(err.message || String(err), true);
             } finally {
+                this.sessionsLoaded = true;
                 this.loadingSessions = false;
             }
         },
 
         async _refreshResolvedSelection() {
-            if (!this.currentJob || !this.previewData || (this.previewData.files || []).length > 0) return;
+            if (this.workspaceMode !== 'session' || !this.currentJob || !this.previewData || (this.previewData.files || []).length > 0) return;
             const selected = this.sessions.find(job => job.id === this.currentJob.id);
             if (!selected || this.normalizedStatus(selected) === 'resolving') return;
             try {
                 const res = await fetch(`/api/player/torrents/session/${selected.id}`);
                 const data = await res.json();
-                if (!res.ok) return;
+                if (!res.ok || !this._isSelectedJob(selected.id)) return;
                 this._applySession(data);
-                this._setMessage(T.allFilesSelected);
+                this._setMessage('');
             } catch {}
         },
 
@@ -6259,18 +6248,22 @@ document.addEventListener('alpine:init', () => {
             if (!id || this.loading) return;
             this._stopPoll();
             this.loading = true;
-            this._setMessage(T.openingSavedTorrent);
+            this.workspaceMode = 'opening';
+            this._setMessage('');
             try {
                 const res = await fetch(`/api/player/torrents/session/${id}`);
                 const data = await res.json();
+                if (this.workspaceMode !== 'opening' || !this.modal || this.sourceTab !== 'torrents') return;
                 if (!res.ok) throw new Error(data.error || T.openTorrentFailed);
                 this._applySession(data);
-                this._setMessage(T.savedTorrentOpened);
                 if (data.job && (data.job.active || data.job.status === 'downloading' || data.job.status === 'moving')) {
                     this._poll(data.job.id);
                 }
             } catch (err) {
-                this._setMessage(err.message || String(err), true);
+                if (this.workspaceMode === 'opening') {
+                    this.workspaceMode = 'empty';
+                    this._setMessage(err.message || String(err), true);
+                }
             } finally {
                 this.loading = false;
             }
@@ -6286,11 +6279,12 @@ document.addEventListener('alpine:init', () => {
                 if (!res.ok) throw new Error(data.error || T.deleteTorrentFailed);
                 this.sessions = this.sessions.filter(job => job.id !== id);
                 if (this.previewData && this.previewData.id === id) {
+                    this._stopPoll();
                     this.previewData = null;
                     this.currentJob = null;
                     this.treeRoot = null;
                     this.selected = new Set();
-                    this.workspaceMode = this.sessions.length ? 'empty' : 'new';
+                    this.workspaceMode = 'empty';
                 }
                 this._setMessage(T.torrentRemoved);
             } catch (err) {
@@ -6466,7 +6460,7 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json().catch(() => null);
                 if (!res.ok) throw new Error(data?.error || T.fileUploadLoadFailed);
                 this.localUploadHistory = Array.isArray(data) ? data : [];
-                if (this.localUploadHistory.some(item => item.target_playlist_id)) Alpine.store('playlists')?.reload?.();
+                this.refreshChangedPlaylists('files', this.localUploadHistory);
             } catch (err) {
                 if (!silent) this._setMessage(err.message || T.fileUploadLoadFailed, true);
             } finally {
@@ -6509,7 +6503,7 @@ document.addEventListener('alpine:init', () => {
             this.workspaceMode = 'new';
             this.selected = new Set();
             this.expanded = new Set();
-            this._setMessage(this.file ? T.readingTorrent : T.resolvingMagnet);
+            this._setMessage('');
 
             try {
                 const payload = this.file
@@ -6522,9 +6516,7 @@ document.addEventListener('alpine:init', () => {
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.previewFailed);
-
-                this._applySession(data);
-                this._setMessage((data.preview?.files || []).length ? T.allFilesSelected : T.resolving);
+                if (this.isImporting() && this.modal && this.sourceTab === 'torrents') this._applySession(data);
                 await this.loadSessions();
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
@@ -6657,10 +6649,6 @@ document.addEventListener('alpine:init', () => {
             return rows;
         },
 
-        rowIndent(node) {
-            return Math.min(10 + Math.max(node.depth, 0) * 18, 82);
-        },
-
         toggleExpand(node) {
             if (node.type !== 'folder') return;
             const next = new Set(this.expanded);
@@ -6689,14 +6677,6 @@ document.addEventListener('alpine:init', () => {
             if (selected === 0) return 'empty';
             if (selected === total) return 'checked';
             return 'partial';
-        },
-
-        nodeCheckClass(node) {
-            const state = this.nodeState(node);
-            return {
-                checked: state === 'checked',
-                partial: state === 'partial',
-            };
         },
 
         toggleNode(node) {
@@ -6739,7 +6719,7 @@ document.addEventListener('alpine:init', () => {
                 this.currentJob = data;
                 this._rememberJob(data);
                 this._setMessage(T.downloadStarted);
-                this._poll(data.id);
+                if (this._isSelectedJob(data.id) && this.modal && this.sourceTab === 'torrents') this._poll(data.id);
                 await this.loadSessions();
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
@@ -6778,14 +6758,11 @@ document.addEventListener('alpine:init', () => {
                 try {
                     const res = await fetch(`/api/player/torrents/${id}/status`);
                     const data = await res.json();
+                    if (this._pollJobId !== id) return;
                     if (!res.ok) throw new Error(data.error || T.statusFailed);
                     this._rememberJob(data);
-                    if (this._isSelectedJob(id)) {
-                        this.currentJob = data;
-                        this._setMessage(
-                            this.statusLabel(data) + ' - ' + this.progressValue(data).toFixed(1) + '% - ' + this.bytes(data.downloaded_bytes),
-                            data.status === 'failed'
-                        );
+                    if (this._isSelectedJob(id) && data.status === 'failed') {
+                        this._setMessage(this.statusText(data), true);
                     }
                     if (data.status === 'complete' || data.status === 'failed') {
                         this._stopPoll();
@@ -6793,6 +6770,7 @@ document.addEventListener('alpine:init', () => {
                         this.loadAgentStatus();
                     }
                 } catch (err) {
+                    if (this._pollJobId !== id) return;
                     if (this._isSelectedJob(id)) this._setMessage(err.message || String(err), true);
                     this._stopPoll();
                 }

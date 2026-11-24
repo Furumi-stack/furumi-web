@@ -1,0 +1,131 @@
+<template x-if="manager.sourceTab === 'youtube'">
+<section id="downloads-youtube" class="download-source-pane" role="tabpanel" aria-labelledby="downloads-tab-youtube">
+    <form class="download-link-form" @submit.prevent="$store.torrents.previewYoutubeUrl()">
+        <label for="youtube-download-url">{{ t.player_youtube_url }}</label>
+        <div class="download-link-controls">
+            <input class="download-field" id="youtube-download-url" type="text" inputmode="url" autocomplete="url"
+                   spellcheck="false" x-model="$store.torrents.youtubeUrl" @input="$store.torrents.clearYoutubePreview()"
+                   placeholder="https://youtu.be/…" :readonly="$store.torrents.youtubeSubmitting">
+            <button class="download-button primary" type="submit"
+                    :disabled="$store.torrents.youtubePreviewLoading || $store.torrents.youtubeSubmitting || !$store.torrents.youtubeUrl.trim()">
+                {{ t.player_youtube_parse }}
+            </button>
+        </div>
+    </form>
+    <template x-if="$store.torrents.youtubePreviewLoading">
+        <div class="page-skeleton" aria-label="{{ t.player_youtube_parsing }}" aria-busy="true">{% include "player/skeleton_tracks.html" %}</div>
+    </template>
+    <template x-if="$store.torrents.youtubePreview">
+        <div class="download-video-preview">
+            <div class="download-preview-title">
+                <h4 x-text="$store.torrents.youtubePreview.title"></h4>
+                <span x-text="$store.torrents.youtubePreviewSelectedCount() + ' / ' + $store.torrents.youtubePreview.items.length"></span>
+            </div>
+            <div class="download-video-picker">
+                <label class="download-video-all">
+                    <input type="checkbox" :disabled="$store.torrents.youtubeSubmitting"
+                           :checked="$store.torrents.youtubePreviewSelectedCount() === $store.torrents.youtubePreview.items.length"
+                           x-effect="$el.indeterminate = $store.torrents.youtubePreviewSelectedCount() > 0 && $store.torrents.youtubePreviewSelectedCount() < $store.torrents.youtubePreview.items.length"
+                           @change="$el.checked ? $store.torrents.selectAllYoutubePreview() : $store.torrents.clearYoutubePreviewSelection()">
+                    <span>{{ t.player_youtube_select_all }}</span>
+                </label>
+                <div class="download-video-list" role="group" aria-label="{{ t.player_youtube_preview_title }}">
+                    <template x-for="item in $store.torrents.youtubePreview.items" :key="item.source_id">
+                        <label class="download-video-row">
+                            <input type="checkbox" :disabled="$store.torrents.youtubeSubmitting"
+                                   :checked="$store.torrents.youtubePreviewIsSelected(item.source_id)"
+                                   @change="$store.torrents.toggleYoutubePreviewItem(item.source_id)">
+                            <span class="download-video-index" x-text="item.playlist_index"></span>
+                            <span x-text="item.title"></span>
+                        </label>
+                    </template>
+                </div>
+            </div>
+            {% let kind = "youtube" %}
+            {% include "player/download_destination.html" %}
+            <div class="download-selection-actions">
+                <button type="button" class="download-button" :disabled="$store.torrents.youtubeSubmitting"
+                        @click="$store.torrents.clearYoutubePreview()">{{ t.player_cancel }}</button>
+                <button type="button" class="download-button primary" @click="$store.torrents.startYoutubeDownload()"
+                        :disabled="$store.torrents.youtubeSubmitting || !$store.torrents.youtubePreviewSelectedCount() || !$store.torrents.youtubeDestinationValid()">{{ t.player_youtube_start_import }}</button>
+            </div>
+        </div>
+    </template>
+    <div class="download-source-history">
+        <div class="download-history-heading">
+            <h4>{{ t.player_youtube_downloads }}</h4>
+            <button type="button" class="download-icon-button" @click="$store.torrents.loadYoutubeJobs()"
+                    :disabled="$store.torrents.youtubeLoading" aria-label="{{ t.player_refresh }}" title="{{ t.player_refresh }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.2 8.4a7.4 7.4 0 0 1 13-2L20 9m-1.2 6.6a7.4 7.4 0 0 1-13 2L4 15"/></svg>
+            </button>
+        </div>
+        <template x-if="$store.torrents.youtubeLoading && !$store.torrents.youtubeJobs.length">
+            <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>{% include "player/skeleton_tracks.html" %}</div>
+        </template>
+        <p class="download-source-empty" x-show="!$store.torrents.youtubeLoading && !$store.torrents.youtubeJobs.length && !$store.torrents.error">{{ t.player_no_youtube_downloads }}</p>
+        <template x-for="job in $store.torrents.youtubeJobs" :key="job.id">
+            <article class="download-job" :id="'download-youtube-job-' + job.id" tabindex="-1"
+                     x-data="{ mounted:false, get opened() { return $store.torrents.youtubeJobExpanded(job.id) } }"
+                     x-effect="if (opened) mounted=true; else if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) mounted=false">
+                <button type="button" class="download-job-summary" :aria-expanded="$store.torrents.youtubeJobExpanded(job.id)"
+                        @click="$store.torrents.toggleYoutubeJob(job.id)">
+                    <svg class="download-job-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+                    <span class="download-job-name">
+                        <strong x-text="job.title" :title="job.title"></strong>
+                        <small x-text="$store.torrents.youtubeJobMeta(job)"></small>
+                    </span>
+                    <span class="download-job-progress-number" x-text="$store.torrents.youtubeJobProgress(job) + '%'"></span>
+                    <span class="torrent-status-badge" :class="$store.torrents.youtubeStatusClass(job.status)" x-text="$store.torrents.youtubeStatusLabel(job.status)"></span>
+                </button>
+                <div class="download-job-disclosure" :class="{opened}" :inert="opened ? null : true"
+                     @transitionend.self="if (!opened) mounted=false">
+                    <div>
+                        <template x-if="mounted">
+                            <div class="download-job-detail">
+                                <div class="download-source-progress">
+                                    <span x-text="$store.torrents.youtubeJobProgressText(job)"></span>
+                                    <progress max="100" :value="$store.torrents.youtubeJobProgress(job)" :aria-label="job.title"></progress>
+                                </div>
+                                <p class="download-source-error" x-show="job.error" x-text="job.error"></p>
+                                <ol class="download-job-items">
+                                    <template x-for="item in job.items" :key="item.id">
+                                        <li>
+                                            <details class="download-track-details">
+                                                <summary title="{{ t.player_download_steps }}">
+                                                    <span class="download-video-index" x-text="item.playlist_index"></span>
+                                                    <span class="download-item-main"><strong x-text="item.title" :title="item.title"></strong>
+                                                        <small x-text="item.status === 'downloading' ? $store.torrents.youtubeDownloadMeta(item) : $store.torrents.youtubeItemMeta(item)"></small>
+                                                    </span>
+                                                    <span class="torrent-status-badge" :class="$store.torrents.youtubeStatusClass(item.status)"
+                                                          x-text="$store.torrents.youtubeStatusLabel(item.status)"></span>
+                                                </summary>
+                                                <ol class="download-steps" aria-label="{{ t.player_download_steps }}">
+                                                    <li :class="$store.torrents.youtubeStepClass(item, 1)">{{ t.player_downloading }}</li>
+                                                    <li :class="$store.torrents.youtubeStepClass(item, 2)">FFmpeg</li>
+                                                    <li :class="$store.torrents.youtubeStepClass(item, 3)">{{ t.player_ai_prefix }}</li>
+                                                    <li :class="$store.torrents.youtubeStepClass(item, 4)" x-text="$store.torrents.youtubeFinalStepLabel(item)"></li>
+                                                </ol>
+                                            </details>
+                                            <p class="download-source-error" x-show="item.error" x-text="item.error"></p>
+                                        </li>
+                                    </template>
+                                </ol>
+                                <div class="download-job-actions">
+                                    <button type="button" class="download-button" x-show="job.review_items > 0 || job.items.some(item => item.status === 'ai_failed')"
+                                            @click="$store.torrents.openYoutubeReviews()">{{ t.player_my_uploads }}</button>
+                                    <button type="button" class="download-button" x-show="$store.torrents.youtubeJobCancellable(job.status)"
+                                            :disabled="$store.torrents.youtubeCancellingIds.has(job.id)" @click="$store.torrents.cancelYoutubeJob(job.id)">{{ t.player_youtube_stop }}</button>
+                                    <button type="button" class="download-button" x-show="job.status !== 'cancelled' && (job.items.some(item => item.status === 'failed') || (job.status === 'failed' && !job.total_items))"
+                                            @click="$store.torrents.retryYoutubeJob(job.id)">{{ t.player_retry_failed }}</button>
+                                    <button type="button" class="download-button" x-show="$store.torrents.youtubeJobTerminal(job.status)"
+                                            @click="$store.torrents.removeYoutubeJob(job.id)">{{ t.player_remove_from_history }}</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </article>
+        </template>
+    </div>
+</section>
+</template>

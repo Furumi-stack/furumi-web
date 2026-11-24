@@ -1,0 +1,204 @@
+<template x-if="$store.torrents.sourceTab === 'uploads'">
+    <section class="upload-manager-panel" role="tabpanel" id="downloads-uploads" aria-labelledby="downloads-tab-uploads">
+        <div class="upload-manager-head">
+            <div>
+                <h4>{{ t.player_my_uploaded_tracks }}</h4>
+                <p x-text="$store.torrents.uploadSummary()"></p>
+            </div>
+            <button class="download-button"
+                    @click="$store.torrents.loadUploads()"
+                    :disabled="$store.torrents.uploadHasEditorOpen()">{{ t.player_refresh }}</button>
+        </div>
+
+        <template x-if="!$store.torrents.uploadLoaded && !manager.error">
+            <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>{% include "player/skeleton_tracks.html" %}</div>
+        </template>
+        <template x-if="$store.torrents.uploadLoaded && $store.torrents.uploadTracks.length === 0 && $store.torrents.uploadPending.length === 0 && $store.torrents.uploadQueued.length === 0">
+            <div class="downloads-empty">
+                <svg aria-hidden="true"><use href="#download-symbol-uploads"/></svg>
+                <p>{{ t.player_no_uploaded_tracks }}</p>
+            </div>
+        </template>
+
+        <div class="upload-manager-grid" :class="{'has-reviews':manager.uploadPendingTotal || manager.uploadQueuedTotal}">
+            <aside class="upload-review-column" x-show="manager.uploadPendingTotal || manager.uploadQueuedTotal">
+                <div class="upload-panel-card" x-show="manager.uploadPendingTotal">
+                    <div class="upload-panel-title">{{ t.player_needs_approval }}</div>
+                    <p class="upload-panel-subtitle" x-text="$store.torrents.uploadPendingTotal + ' {{ t.player_pending_or_failed }}'"></p>
+                    <div class="upload-review-list">
+                        <template x-for="item in $store.torrents.uploadPending" :key="item.id">
+                            <button class="upload-review-row" :class="{ active: $store.torrents.uploadReviewEditId === item.id, failed: item.status === 'failed' }" @click="$store.torrents.editUploadReview(item)">
+                                <span class="torrent-status-badge" :class="'status-' + item.status" x-text="$store.torrents.uploadStatusLabel(item.status)"></span>
+                                <span class="upload-review-name" x-text="item.filename"></span>
+                                <span class="upload-review-error" x-show="item.error_message" x-text="item.error_message"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+                <template x-if="$store.torrents.uploadQueuedTotal > 0">
+                    <div class="upload-panel-card upload-queue-panel">
+                        <div class="upload-panel-title upload-panel-title-row">
+                            <span>{{ t.player_queued_processing }}</span>
+                            <div class="upload-queue-nav" x-show="$store.torrents.uploadQueued.length > $store.torrents.uploadQueuePageSize">
+                                <span class="upload-queue-range" x-text="$store.torrents.uploadQueueRangeText()"></span>
+                                <button type="button"
+                                        class="upload-queue-nav-btn"
+                                        @click="$store.torrents.uploadQueuePrev()"
+                                        :disabled="!$store.torrents.uploadQueueCanPrev()"
+                                        title="{{ t.player_previous }}">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="15 18 9 12 15 6"/></svg>
+                                </button>
+                                <button type="button"
+                                        class="upload-queue-nav-btn"
+                                        @click="$store.torrents.uploadQueueNext()"
+                                        :disabled="!$store.torrents.uploadQueueCanNext()"
+                                        title="{{ t.player_next }}">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <template x-for="item in $store.torrents.compactQueuedUploads()" :key="item.id">
+                            <div class="upload-queue-row" :title="$store.torrents.uploadQueueTooltip(item)">
+                                <span class="torrent-status-badge" :class="'status-' + item.status" x-text="$store.torrents.uploadStatusLabel(item.status)"></span>
+                                <span class="upload-queue-name" x-text="item.filename"></span>
+                            </div>
+                        </template>
+                        <div class="upload-mini-empty" x-show="$store.torrents.uploadQueuedTotal > $store.torrents.uploadQueued.length" x-text="$store.torrents.uploadQueueOverflowText()"></div>
+                    </div>
+                </template>
+            </aside>
+            <section class="upload-library-column">
+                <div class="upload-bulk-bar" x-show="$store.torrents.uploadSelectedCount() > 0">
+                    <div class="upload-bulk-title" x-text="$store.torrents.uploadSelectedCount() + ' {{ t.player_selected }}'"></div>
+                    <input type="text" placeholder="{{ t.player_artists }}" x-model="$store.torrents.uploadBulkDraft.artists">
+                    <input type="text" placeholder="{{ t.player_featured }}" x-model="$store.torrents.uploadBulkDraft.featured_artists">
+                    <input type="text" placeholder="{{ t.player_album }}" x-model="$store.torrents.uploadBulkDraft.release_title">
+                    <input type="number" placeholder="{{ t.player_year }}" x-model="$store.torrents.uploadBulkDraft.release_year">
+                    <select x-model="$store.torrents.uploadBulkDraft.release_type">
+                        <option value="">{{ t.player_type_unchanged }}</option><option value="album">{{ t.player_release_type_album }}</option><option value="single">{{ t.player_release_type_single }}</option><option value="ep">{{ t.player_release_type_ep }}</option><option value="compilation">{{ t.player_release_type_compilation }}</option><option value="mixtape">{{ t.player_release_type_mixtape }}</option><option value="live">{{ t.player_release_type_live }}</option><option value="soundtrack">{{ t.player_release_type_soundtrack }}</option><option value="remix">{{ t.player_release_type_remix }}</option><option value="demo">{{ t.player_release_type_demo }}</option>
+                    </select>
+                    <select x-model="$store.torrents.uploadBulkDraft.hidden">
+                        <option value="">{{ t.player_visibility_unchanged }}</option><option value="false">{{ t.player_visible }}</option><option value="true">{{ t.player_hidden }}</option>
+                    </select>
+                    <button class="modal-btn modal-btn-primary" @click="$store.torrents.saveUploadBulkEdit()" :disabled="$store.torrents.uploadBulkSaving">{{ t.player_apply }}</button>
+                    <button class="modal-btn modal-btn-ghost" @click="$store.torrents.clearUploadSelection()">{{ t.player_clear }}</button>
+                </div>
+                <div class="upload-release-tree">
+                    <template x-for="group in $store.torrents.uploadArtistGroups()" :key="group.key">
+                        <section class="upload-artist-group">
+                            <div class="upload-artist-row">
+                                <div class="upload-artist-name" x-text="group.name"></div>
+                                <div class="upload-artist-meta" x-text="group.releases.length + ' {{ t.player_releases_count }} - ' + group.trackCount + ' {{ t.player_tracks_count }}'"></div>
+                            </div>
+                            <template x-for="release in group.releases" :key="release.id">
+                                <div class="upload-release-node" :class="{ hidden: release.is_hidden }">
+                                    <div class="upload-release-row">
+                                        <button class="torrent-tree-check" :class="$store.torrents.uploadReleaseSelectionState(release)" @click="$store.torrents.toggleUploadReleaseSelection(release)">
+                                            <template x-if="$store.torrents.uploadReleaseSelectionState(release) === 'checked'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></template>
+                                            <template x-if="$store.torrents.uploadReleaseSelectionState(release) === 'partial'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="5" y1="12" x2="19" y2="12"/></svg></template>
+                                        </button>
+                                        <button class="torrent-tree-toggle" :class="{ expanded: $store.torrents.uploadReleaseExpanded(release.id) }" @click="$store.torrents.toggleUploadRelease(release.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
+                                        <div class="upload-release-main">
+                                            <div class="upload-release-title"><span x-text="release.title"></span><span class="upload-hidden-pill" x-show="release.is_hidden">{{ t.player_hidden }}</span></div>
+                                            <div class="upload-track-meta"><span x-text="$store.torrents.uploadReleaseArtistsText(release)"></span><span>-</span><span x-text="release.year || T.noYear"></span><span>-</span><span x-text="release.tracks.length + ' {{ t.player_tracks_count }}'"></span></div>
+                                        </div>
+                                        <button class="modal-btn modal-btn-ghost" @click="$store.torrents.editUploadRelease(release)">{{ t.player_edit_release }}</button>
+                                    </div>
+                                    <div class="upload-track-children" x-show="$store.torrents.uploadReleaseExpanded(release.id)">
+                                        <template x-for="item in release.tracks" :key="item.track.id">
+                                            <div class="upload-tree-track" :class="{ hidden: item.is_hidden, selected: $store.torrents.selectedUploadTracks.has(item.track.id) }">
+                                                <button class="torrent-tree-check" :class="{ checked: $store.torrents.selectedUploadTracks.has(item.track.id) }" @click="$store.torrents.toggleUploadTrackSelection(item.track.id)">
+                                                    <template x-if="$store.torrents.selectedUploadTracks.has(item.track.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></template>
+                                                </button>
+                                                <div class="upload-track-main">
+                                                    <div class="upload-track-title"><span x-text="item.track.track_number ? item.track.track_number + '. ' + item.track.title : item.track.title"></span><span class="upload-hidden-pill" x-show="item.is_hidden">{{ t.player_hidden }}</span></div>
+                                                    <div class="upload-track-meta"><span x-text="$store.torrents.uploadArtistsText(item)"></span><span x-show="$store.torrents.uploadFeaturedArtistsText(item)" x-text="T.featuredShort"></span><span x-show="$store.torrents.uploadFeaturedArtistsText(item)" x-text="$store.torrents.uploadFeaturedArtistsText(item)"></span></div>
+                                                </div>
+                                                <div class="upload-track-actions">
+                                                    <button class="track-action-btn queue-insert-btn queue-next-btn" @click="$store.queue.addNextInQueue([item.track])" title="{{ t.player_play_next }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h10M5 12h7M5 18h10"/><path d="M17 9l4 3-4 3" fill="currentColor" stroke="none"/></svg></button>
+                                                    <button class="track-action-btn queue-insert-btn queue-end-btn" @click="$store.queue.addToEnd([item.track])" title="{{ t.player_add_to_queue }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h14M5 12h14M5 18h7"/><path d="M17 15l4 3-4 3" fill="currentColor" stroke="none"/></svg></button>
+                                                    <button class="modal-btn modal-btn-ghost" @click="$store.torrents.editUpload(item)">{{ t.player_edit }}</button>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </section>
+                    </template>
+                </div>
+            </section>
+        </div>
+
+        <template x-if="$store.torrents.uploadHasEditorOpen()">
+            <div class="upload-editor-backdrop" @click.self="$store.torrents.closeUploadEditor()">
+                <aside class="upload-editor-drawer">
+                    <div class="upload-editor-head">
+                        <div>
+                            <div class="upload-panel-title" x-text="$store.torrents.uploadEditorKicker()"></div>
+                            <h4 x-text="$store.torrents.uploadEditorTitle()"></h4>
+                        </div>
+                        <button class="track-action-btn" @click="$store.torrents.closeUploadEditor()" title="{{ t.player_close }}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <template x-if="$store.torrents.uploadReviewDraft">
+                        <div class="upload-editor-form">
+                            <label class="upload-field upload-field-half"><span>{{ t.player_title }}</span><input type="text" x-model="$store.torrents.uploadReviewDraft.title"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_artist }}</span><input type="text" x-model="$store.torrents.uploadReviewDraft.artist"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_album }}</span><input type="text" x-model="$store.torrents.uploadReviewDraft.album"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_featured }}</span><input type="text" x-model="$store.torrents.uploadReviewDraft.featured_artists" placeholder="{{ t.player_artists_placeholder }}"></label>
+                            <label class="upload-field upload-field-compact"><span>{{ t.player_year }}</span><input type="number" x-model="$store.torrents.uploadReviewDraft.year"></label>
+                            <label class="upload-field upload-field-compact"><span>{{ t.player_track_number }}</span><input type="number" min="1" x-model="$store.torrents.uploadReviewDraft.track_number"></label>
+                            <label class="upload-field upload-field-compact"><span>{{ t.player_genre }}</span><input type="text" x-model="$store.torrents.uploadReviewDraft.genre"></label>
+                            <label class="upload-field upload-field-compact">
+                                <span>{{ t.player_type }}</span>
+                                <select x-model="$store.torrents.uploadReviewDraft.release_type">
+                                    <option value="album">{{ t.player_release_type_album }}</option><option value="single">{{ t.player_release_type_single }}</option><option value="ep">{{ t.player_release_type_ep }}</option><option value="compilation">{{ t.player_release_type_compilation }}</option><option value="mixtape">{{ t.player_release_type_mixtape }}</option><option value="live">{{ t.player_release_type_live }}</option><option value="soundtrack">{{ t.player_release_type_soundtrack }}</option><option value="remix">{{ t.player_release_type_remix }}</option><option value="demo">{{ t.player_release_type_demo }}</option>
+                                </select>
+                            </label>
+                            <label class="upload-field upload-field-wide"><span>{{ t.player_notes }}</span><textarea rows="4" x-model="$store.torrents.uploadReviewDraft.notes"></textarea></label>
+                            <div class="upload-editor-actions">
+                                <button class="modal-btn modal-btn-danger" @click="$store.torrents.deleteUploadReview()" :disabled="$store.torrents.uploadReviewSavingId === $store.torrents.uploadReviewEditId">{{ t.player_delete_review }}</button>
+                                <button class="modal-btn modal-btn-primary" @click="$store.torrents.approveUploadReview()" :disabled="$store.torrents.uploadReviewSavingId === $store.torrents.uploadReviewEditId">{{ t.player_approve }}</button>
+                            </div>
+                        </div>
+                    </template>
+
+                    <template x-if="$store.torrents.uploadReleaseDraft">
+                        <div class="upload-editor-form">
+                            <label class="upload-field upload-field-wide"><span>{{ t.player_album }}</span><input type="text" x-model="$store.torrents.uploadReleaseDraft.title"></label>
+                            <label class="upload-field upload-field-wide"><span>{{ t.player_album_artists }}</span><input type="text" x-model="$store.torrents.uploadReleaseDraft.artists"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_year }}</span><input type="number" x-model="$store.torrents.uploadReleaseDraft.year"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_type }}</span><select x-model="$store.torrents.uploadReleaseDraft.release_type"><option value="album">{{ t.player_release_type_album }}</option><option value="single">{{ t.player_release_type_single }}</option><option value="ep">{{ t.player_release_type_ep }}</option><option value="compilation">{{ t.player_release_type_compilation }}</option><option value="mixtape">{{ t.player_release_type_mixtape }}</option><option value="live">{{ t.player_release_type_live }}</option><option value="soundtrack">{{ t.player_release_type_soundtrack }}</option><option value="remix">{{ t.player_release_type_remix }}</option><option value="demo">{{ t.player_release_type_demo }}</option></select></label>
+                            <label class="upload-field upload-field-toggle"><input type="checkbox" x-model="$store.torrents.uploadReleaseDraft.is_hidden"><span>{{ t.player_hidden }}</span></label>
+                            <div class="upload-editor-actions">
+                                <button class="modal-btn modal-btn-primary" @click="$store.torrents.saveUploadReleaseEdit()" :disabled="$store.torrents.uploadReleaseSavingId === $store.torrents.uploadReleaseEditId">{{ t.player_save_release }}</button>
+                            </div>
+                        </div>
+                    </template>
+
+                    <template x-if="$store.torrents.uploadDraft">
+                        <div class="upload-editor-form">
+                            <label class="upload-field upload-field-wide"><span>{{ t.player_title }}</span><input type="text" x-model="$store.torrents.uploadDraft.title"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_artists }}</span><input type="text" x-model="$store.torrents.uploadDraft.artists"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_featured }}</span><input type="text" x-model="$store.torrents.uploadDraft.featured_artists"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_album }}</span><input type="text" x-model="$store.torrents.uploadDraft.release_title"></label>
+                            <label class="upload-field upload-field-half"><span>{{ t.player_type }}</span><select x-model="$store.torrents.uploadDraft.release_type"><option value="album">{{ t.player_release_type_album }}</option><option value="single">{{ t.player_release_type_single }}</option><option value="ep">{{ t.player_release_type_ep }}</option><option value="compilation">{{ t.player_release_type_compilation }}</option><option value="mixtape">{{ t.player_release_type_mixtape }}</option><option value="live">{{ t.player_release_type_live }}</option><option value="soundtrack">{{ t.player_release_type_soundtrack }}</option><option value="remix">{{ t.player_release_type_remix }}</option><option value="demo">{{ t.player_release_type_demo }}</option></select></label>
+                            <label class="upload-field upload-field-compact"><span>{{ t.player_year }}</span><input type="number" x-model="$store.torrents.uploadDraft.release_year"></label>
+                            <label class="upload-field upload-field-compact"><span>{{ t.player_track_number }}</span><input type="number" min="1" x-model="$store.torrents.uploadDraft.track_number"></label>
+                            <label class="upload-field upload-field-compact"><span>{{ t.player_disc_number }}</span><input type="number" min="1" x-model="$store.torrents.uploadDraft.disc_number"></label>
+                            <label class="upload-field upload-field-toggle"><input type="checkbox" x-model="$store.torrents.uploadDraft.is_hidden"><span>{{ t.player_hidden }}</span></label>
+                            <div class="upload-editor-actions">
+                                <button class="modal-btn modal-btn-primary" @click="$store.torrents.saveUploadEdit()" :disabled="$store.torrents.uploadSavingId === $store.torrents.uploadEditId">{{ t.player_save_track }}</button>
+                            </div>
+                        </div>
+                    </template>
+                </aside>
+            </div>
+        </template>
+    </section>
+</template>

@@ -10,6 +10,14 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.5 — 2026-11-24
+
+- Downloads opens with transfer activity across torrents, YouTube and local
+  files. Filter by status or open a job to see its details.
+- On phones, torrent file selection has a dedicated scrollable view with the
+  download action in reach. Uploads awaiting review remain accessible from
+  the same manager.
+
 ## v0.16.4 — 2026-11-24
 
 - Artist, playlist and release pages immediately show the outline of the artwork

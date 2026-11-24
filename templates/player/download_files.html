@@ -1,0 +1,73 @@
+<input id="direct-audio-file-input" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.m4a,.ogg,.opus,.aac" hidden
+       :disabled="$store.torrents.localFilesUploading" @change="$store.torrents.setLocalFiles($event.target.files); $event.target.value=''">
+<template x-if="manager.sourceTab === 'files'">
+<section id="downloads-files" class="download-source-pane" role="tabpanel" aria-labelledby="downloads-tab-files">
+    <input id="direct-audio-folder-input" type="file" webkitdirectory multiple hidden
+           :disabled="$store.torrents.localFilesUploading" @change="$store.torrents.setLocalFiles($event.target.files); $event.target.value=''">
+    <div class="download-local-drop" :class="{dragging:$store.torrents.localFilesDragging}"
+         @dragenter.prevent="$store.torrents.localFilesDragging=true" @dragover.prevent="$store.torrents.localFilesDragging=true"
+         @dragleave.prevent="$store.torrents.leaveLocalFileDrop($event)" @drop.prevent="$store.torrents.dropLocalFiles($event)">
+        <div class="download-local-lead">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+            <div><strong class="download-local-desktop">{{ t.player_drop_audio_title }}</strong><strong class="download-local-mobile">{{ t.player_local_files }}</strong>
+                <small>{{ t.player_drop_audio_formats }}</small>
+            </div>
+        </div>
+        <div class="download-pick-actions">
+            <button type="button" class="download-button" :disabled="$store.torrents.localFilesUploading"
+                    @click="document.getElementById('direct-audio-file-input').click()">{{ t.player_choose_audio_files }}</button>
+            <button type="button" class="download-button" :disabled="$store.torrents.localFilesUploading" title="{{ t.player_audio_folder_hint }}"
+                    @click="document.getElementById('direct-audio-folder-input').click()">{{ t.player_choose_audio_folder }}</button>
+        </div>
+    </div>
+    <template x-if="$store.torrents.localFiles.length">
+        <div class="download-local-selection">
+            <div class="download-preview-title">
+                <h4 x-text="$store.torrents.localFiles[0]?.name" :title="$store.torrents.localFiles[0]?.name"></h4>
+                <span x-text="$store.torrents.localUploadSummary()"></span>
+            </div>
+            {% let kind = "local" %}
+            {% include "player/download_destination.html" %}
+            <div class="download-selection-actions">
+                <button type="button" class="download-button" :disabled="$store.torrents.localFilesUploading"
+                        @click="$store.torrents.clearLocalFiles()">{{ t.player_cancel }}</button>
+                <button type="button" class="download-button primary" :disabled="$store.torrents.localFilesUploading || !$store.torrents.importDestinationValid('local')"
+                        @click="$store.torrents.uploadLocalFiles()">{{ t.player_upload_selected_files }}</button>
+            </div>
+        </div>
+    </template>
+    <div class="download-source-progress" x-show="$store.torrents.localFilesUploading || $store.torrents.uploadProgress > 0" x-cloak>
+        <div><span x-text="$store.torrents.uploadProgress >= 100 ? T.uploadComplete : T.uploadingFiles"></span>
+             <span x-text="$store.torrents.uploadProgressText"></span></div>
+        <progress max="100" :value="$store.torrents.uploadProgress" aria-label="{{ t.player_file_uploads }}"></progress>
+    </div>
+    <div class="download-source-history">
+        <div class="download-history-heading">
+            <h4>{{ t.player_upload_history }}</h4>
+            <button type="button" class="download-icon-button" @click="$store.torrents.loadLocalUploadHistory()"
+                    :disabled="$store.torrents.localUploadHistoryLoading" aria-label="{{ t.player_refresh }}" title="{{ t.player_refresh }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.2 8.4a7.4 7.4 0 0 1 13-2L20 9m-1.2 6.6a7.4 7.4 0 0 1-13 2L4 15"/></svg>
+            </button>
+        </div>
+        <template x-if="$store.torrents.localUploadHistoryLoading && !$store.torrents.localUploadHistory.length">
+            <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>{% include "player/skeleton_tracks.html" %}</div>
+        </template>
+        <p class="download-source-empty" x-show="!$store.torrents.localUploadHistoryLoading && !$store.torrents.localUploadHistory.length && !$store.torrents.error">{{ t.player_no_file_uploads }}</p>
+        <template x-for="item in $store.torrents.localUploadHistory" :key="item.id">
+            <article class="download-file-job" :id="'download-file-job-' + item.id" tabindex="-1">
+                <svg class="download-file-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16V5l11-2v11M8 8l11-2"/><ellipse cx="5.5" cy="17.5" rx="2.5" ry="2"/><ellipse cx="16.5" cy="15.5" rx="2.5" ry="2"/></svg>
+                <div class="download-job-name"><strong :title="item.filename" x-text="item.filename"></strong>
+                    <small x-text="$store.torrents.bytes(item.size_bytes) + ' · ' + $store.torrents.formatUploadDate(item.created_at)"></small>
+                    <small x-show="item.target_playlist_id" x-text="T.youtubePlaylist + ' · ' + ($store.torrents.youtubePlaylistTitle(item.target_playlist_id) || '#' + item.target_playlist_id)"></small>
+                </div>
+                <span class="torrent-status-badge" :class="$store.torrents.youtubeStatusClass(item.status)" x-text="$store.torrents.youtubeStatusLabel(item.status)"></span>
+                <button type="button" class="download-icon-button download-file-remove" @click="$store.torrents.removeLocalUploadHistory(item.id)"
+                        title="{{ t.player_remove_from_history }}" :aria-label="'{{ t.player_remove_from_history }} · ' + item.filename">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M6 6l1 14h10l1-14m-8 4v6m4-6v6"/></svg>
+                </button>
+                <p class="download-source-error" x-show="item.error" x-text="item.error"></p>
+            </article>
+        </template>
+    </div>
+</section>
+</template>

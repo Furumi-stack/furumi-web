@@ -1,0 +1,146 @@
+.download-source-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    padding: 0 var(--download-gutter, 16px) 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+.download-source-pane > * { flex: none; min-width: 0; }
+.download-link-form { display: grid; gap: 6px; }
+.download-link-form label, .download-destination-label label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.download-link-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.download-link-controls input, .download-destination-fields :is(select,input) { min-width: 0; width: 100%; }
+.download-destination {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
+    column-gap: 10px; min-width: 0;
+}
+.download-destination-label { display: flex; align-items: center; gap: 1px; }
+.download-destination-fields { display: flex; min-width: 0; gap: 6px; }
+.download-destination-fields > :is(select, input) { flex: 1 1 0; }
+.download-playlist-help { position: relative; display: inline-flex; }
+.download-help-button {
+    display: grid; place-items: center; width: 28px; height: 30px;
+    border: 0; background: none; border-radius: 5px; color: var(--text-secondary); cursor: help;
+}
+.download-help-button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.download-playlist-help [role=tooltip] {
+    position: absolute; inset-block-end: calc(100% + 3px); inset-inline-start: -42px;
+    width: min(240px, 65vw); z-index: 4; padding: 8px 10px;
+    background: var(--bg-active); color: var(--text-primary); border: 1px solid var(--border-color);
+    box-shadow: 0 4px 15px #0006; border-radius: 6px; font-size: 12px; line-height: 1.45;
+}
+.download-source-history { min-width: 0; }
+.download-history-heading, .download-preview-title, .download-selection-actions, .download-job-actions, .download-pick-actions {
+    display: flex; align-items: center; gap: 8px;
+}
+.download-history-heading, .download-preview-title { justify-content: space-between; }
+.download-history-heading { padding-bottom: 5px; border-bottom: 1px solid var(--border-color); }
+.download-history-heading h4, .download-preview-title h4 { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 650; line-height: 1.35; }
+.download-source-empty { margin: 0; padding: 15px 0; color: var(--text-secondary); font-size: 13px; }
+.download-preview-title { min-width: 0; }
+.download-preview-title h4 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-preview-title > span { flex: none; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.download-video-preview, .download-local-selection { display: grid; gap: 10px; min-width: 0; }
+.download-video-picker { min-width: 0; border-block: 1px solid var(--border-color); }
+.download-video-all, .download-video-row {
+    display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 35px;
+    padding: 5px 8px; cursor: pointer; font-size: 13px;
+}
+.download-video-all { background: var(--bg-secondary); font-weight: 600; }
+.download-video-row:hover, .download-job-summary:hover { background: var(--bg-hover); }
+.download-video-all input, .download-video-row input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.download-video-list { max-height: min(42dvh, 410px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.download-video-row > :last-child { overflow-wrap: anywhere; }
+.download-video-index, .download-job-progress-number { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.download-selection-actions { justify-content: end; flex-wrap: wrap; }
+.download-local-drop {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px;
+    padding: 12px; border: 1px dashed var(--bg-active); border-radius: 8px; background: var(--bg-primary);
+    transition: border-color 140ms, background 140ms;
+}
+.download-local-drop.dragging { border-color: var(--accent); background: #1db95410; }
+.download-local-lead { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.download-local-lead > svg { width: 21px; height: 21px; color: var(--text-secondary); }
+.download-source-pane svg { fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.download-local-lead strong, .download-local-lead small, .download-job-name strong, .download-job-name small, .download-item-main > :is(strong,small) { display: block; }
+.download-local-lead strong { font-size: 13px; }
+.download-local-lead small, .download-job-name small, .download-item-main > small { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+.download-local-lead .download-local-mobile { display: none; }
+.download-job, .download-file-job { border-bottom: 1px solid var(--border-color); }
+.download-job-summary, .download-file-job, .download-track-details summary {
+    display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    align-items: center; gap: 10px; min-width: 0; padding: 8px 4px;
+}
+.download-job-summary {
+    width: 100%; text-align: start; border: 0; border-radius: 4px;
+    background: transparent; color: var(--text-primary); cursor: pointer; font: inherit;
+}
+.download-job-chevron, .download-file-symbol { width: 16px; height: 16px; color: var(--text-secondary); }
+.download-job-chevron { transition: transform 140ms; }
+.download-job-summary[aria-expanded=true] .download-job-chevron { transform: rotate(90deg); }
+.download-job-summary :is(strong, small), .download-file-job :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-job-name { min-width: 0; }
+.download-job-name strong, .download-item-main > strong { font-size: 13px; font-weight: 600; }
+.download-job-detail { display: grid; gap: 8px; padding: 3px 5px 12px 32px; }
+.download-job-disclosure { display: grid; grid-template-rows: 0fr; opacity: 0; }
+.download-job-disclosure.opened { grid-template-rows: 1fr; opacity: 1; }
+.download-job-disclosure > div { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: no-preference) {
+    .download-job-disclosure { transition: grid-template-rows 140ms ease, opacity 140ms; }
+}
+.download-source-progress { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; }
+.download-source-progress div { display: flex; justify-content: space-between; gap: 8px; }
+.download-source-progress progress { display: block; width: 100%; height: 4px; border: 0; border-radius: 3px; background: var(--bg-active); color: var(--accent); accent-color: var(--accent); }
+.download-source-progress progress::-webkit-progress-bar { background: var(--bg-active); border-radius: 3px; }
+.download-source-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
+.download-source-progress progress::-moz-progress-bar { background: var(--accent); border-radius: 3px; }
+.download-job-items { display: grid; margin: 0; padding: 0; list-style: none; }
+.download-track-details summary { grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; padding-inline: 0; cursor: pointer; list-style: none; }
+.download-track-details summary::-webkit-details-marker { display: none; }
+.download-track-details summary:hover { color: var(--accent-hover); }
+.download-track-details summary .torrent-status-badge::after {
+    content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 1px 2px 6px;
+    border: solid currentColor; border-width: 0 1px 1px 0; transform: rotate(45deg);
+}
+.download-track-details[open] summary .torrent-status-badge::after { transform: rotate(225deg); }
+@media (prefers-reduced-motion: no-preference) {
+    .download-track-details summary .torrent-status-badge::after { transition: transform 140ms; }
+}
+.download-steps { display: flex; flex-wrap: wrap; gap: 5px 14px; padding: 3px 0 8px; list-style: none; }
+.download-steps li { color: var(--text-secondary); font-size: 11px; }
+.download-steps li::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-inline-end: 4px; border: 1px solid var(--text-secondary); border-radius: 50%; }
+.download-steps li.done::before, .download-steps li.active::before { border-color: var(--accent); }
+.download-steps li.done::before { background: var(--accent); }
+.download-steps li:is(.failed,.cancelled)::before { border-color: #eba8a8; background: #eba8a8; }
+.download-item-main { min-width: 0; overflow-wrap: anywhere; }
+.download-job-actions { flex-wrap: wrap; }
+.download-source-error { margin: 4px 0 0; overflow-wrap: anywhere; color: #eba8a8; font-size: 12px; }
+.download-file-job > .download-source-error { grid-column: 2 / -1; }
+.download-file-remove:hover { color: #eba8a8; }
+.download-source-pane .torrent-status-badge { max-width: 30ch; font-weight: 600; text-transform: none; white-space: normal; line-height: 1.25; }
+@media (max-width: 600px) {
+    .download-source-pane { gap: 12px; }
+    .download-link-controls { gap: 5px; }
+    .download-destination { align-items: start; gap: 6px; }
+    .download-destination-label { min-height: 38px; }
+    .download-destination-fields { flex-direction: column; }
+    .download-destination-fields > :is(select,input) { flex: auto; }
+    .download-video-list { max-height: 42dvh; }
+    .download-video-all, .download-video-row { min-height: 40px; }
+    .download-local-lead .download-local-desktop { display: none; }
+    .download-local-lead .download-local-mobile { display: block; }
+    .download-job-summary { grid-template-columns: 14px minmax(0, 1fr) auto; }
+    .download-job-progress-number { display: none; }
+    .download-job-detail { padding-inline: 2px; }
+    .download-job-summary, .download-file-job, .download-track-details summary { gap: 6px; }
+    .download-source-pane .torrent-status-badge { max-width: 13ch; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .download-local-drop, .download-job-chevron { transition: none; }
+    .download-playlist-help [role=tooltip] { transition-duration: 0s !important; }
+}

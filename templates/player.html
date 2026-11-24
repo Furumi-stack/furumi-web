@@ -23,6 +23,13 @@ if ('serviceWorker' in navigator) {
 {% include "player/sidebar_styles.html" %}
 {% include "player/collection_styles.html" %}
 {% include "player/listening_styles.html" %}
+{% if downloads_enabled %}
+<style>
+{% include "player/download_manager.css" %}
+{% include "player/download_sources.css" %}
+{% include "player/download_torrent.css" %}
+</style>
+{% endif %}
 {% endblock head_extra %}
 
 {% block body %}
@@ -41,5 +48,6 @@ if ('serviceWorker' in navigator) {
 {% include "player/playlist_header_scripts.html" %}
 {% include "player/playlist_filter_scripts.html" %}
 {% include "player/scripts.html" %}
+{% if downloads_enabled %}{% include "player/download_manager_scripts.html" %}{% endif %}
 <script>{{ self.alpine()|safe }}</script>
 {% endblock body %}

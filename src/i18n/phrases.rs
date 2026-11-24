@@ -515,6 +515,18 @@ translations! {
 
     // Player download/history UI
     player_torrent_manager:  "Download Manager"                , "Менеджер загрузок";
+    player_download_title: "Downloads", "Загрузки";
+    player_download_overview: "Overview", "Обзор";
+    player_download_add: "Add", "Добавить";
+    player_download_imports: "Imports", "Импорт";
+    player_download_activity: "Recent activity", "Последние загрузки";
+    player_download_filter_all: "All statuses", "Все статусы";
+    player_download_filter_active: "In progress", "В работе";
+    player_download_filter_attention: "Needs attention", "Требуют внимания";
+    player_download_filter_history: "Finished", "Завершённые";
+    player_download_empty: "No downloads yet", "Загрузок пока нет";
+    player_download_empty_filter: "No downloads with this status", "Нет загрузок с таким статусом";
+    player_download_more: "Show more", "Показать ещё";
     player_import_torrent:   "Open Download Manager"           , "Открыть менеджер загрузок";
     player_youtube:          "YouTube"                         , "YouTube";
     player_torrents:         "Torrents"                        , "Торренты";
@@ -531,6 +543,7 @@ translations! {
     player_youtube_clear_selection: "Clear selection"           , "Снять все";
     player_youtube_selected_count: "selected"                  , "выбрано";
     player_import_destination: "Add downloads to a playlist" , "Добавить загруженное в плейлист";
+    player_download_playlist_label: "Playlist"                , "Плейлист";
     player_import_destination_hint: "Selected audio tracks will be added automatically after processing, including tracks already in the library." , "Выбранные аудиотреки будут добавлены автоматически после обработки, включая уже имеющиеся в библиотеке.";
     player_youtube_destination: "Add imported tracks to playlist" , "Добавить импортированные треки в плейлист";
     player_youtube_no_destination: "Do not add to a playlist"   , "Не добавлять в плейлист";
@@ -680,6 +693,7 @@ translations! {
     player_failed:           "Failed"                          , "Ошибка";
     player_paused:           "Paused"                          , "Пауза";
     player_no_torrent_selected: "No torrent selected"          , "Торрент не выбран";
+    player_no_torrent_files: "No files available"              , "Нет доступных файлов";
     player_downloaded:        "Downloaded"                     , "Загружено";
     player_speed:             "Speed"                          , "Скорость";
     player_down:             "down"                            , "вниз";

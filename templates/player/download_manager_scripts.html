@@ -1,0 +1,91 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    Alpine.data('downloadManager', () => ({
+        get manager() { return Alpine.store('torrents'); },
+        sections: [
+            {id:'overview', label:'{{ t.player_download_overview }}'},
+            {% if youtube_downloads_enabled %}{id:'youtube', label:'{{ t.player_youtube }}'},{% endif %}
+            {% if torrent_downloads_enabled %}{id:'torrents', label:'{{ t.player_torrents }}'},{% endif %}
+            {id:'files', label:'{{ t.player_files }}'},
+            {id:'uploads', label:'{{ t.player_download_imports }}'},
+        ],
+        adding: false,
+        closing: false,
+        status: 'all',
+        visibleCount: 30,
+        get sources() { return this.sections.filter(section => !['overview','uploads'].includes(section.id)); },
+        sourceLabel(id) { return this.sections.find(section => section.id === id)?.label || ''; },
+        select(id) {
+            this.adding = false;
+            this.manager.showSourceTab(id);
+            this.$nextTick(() => document.getElementById('downloads-tab-' + id)?.focus({preventScroll:true}));
+        },
+        navigate(event) {
+            const keys = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
+            if (!keys.includes(event.key)) return;
+            event.preventDefault();
+            const current = this.sections.findIndex(section => section.id === this.manager.sourceTab);
+            const count = this.sections.length;
+            let index = (current + (['ArrowLeft','ArrowUp'].includes(event.key) ? -1 : 1) + count) % count;
+            if (event.key === 'Home') index = 0;
+            if (event.key === 'End') index = count - 1;
+            this.select(this.sections[index].id);
+        },
+        add(source) {
+            this.adding = false;
+            this.manager.showSourceTab(source);
+            if (source === 'torrents') this.manager.addNew();
+            if (source === 'files') document.getElementById('direct-audio-file-input')?.click();
+            this.$nextTick(() => {
+                const target = {youtube:'youtube-download-url', torrents:'torrent-magnet-input', files:'downloads-tab-files'}[source];
+                document.getElementById(target)?.focus({preventScroll:true});
+            });
+        },
+        get activity() {
+            const m = this.manager, rows = [];
+            const add = (source, job, title, status, label, progress) => {
+                let group = 'active';
+                if (['preview','paused','failed','ai_failed','needs_review','complete_with_errors'].includes(status)) group = 'attention';
+                if (['complete','completed','cancelled','skipped'].includes(status)) group = 'history';
+                rows.push({source, id:job.id, title, label, status, group, progress,
+                    date:job.updated_at || job.created_at || '', key:source + ':' + job.id});
+            };
+            if (m.torrentDownloadsEnabled) for (const j of m.sessions) {
+                add('torrents', j, j.name, m.normalizedStatus(j), m.statusLabel(j), m.isDownloading(j) ? m.progressValue(j) : null);
+            }
+            if (m.youtubeDownloadsEnabled) for (const j of m.youtubeJobs) {
+                add('youtube', j, j.title || j.source_url, j.status, m.youtubeStatusLabel(j.status),
+                    j.status === 'downloading' ? m.youtubeJobProgress(j) : null);
+            }
+            for (const f of m.localUploadHistory) add('files', f, f.filename, f.status, m.youtubeStatusLabel(f.status), null);
+            const priority = {active:0, attention:1, history:2};
+            return rows.sort((a,b) => priority[a.group] - priority[b.group] || b.date.localeCompare(a.date));
+        },
+        get filteredActivity() { return this.status === 'all' ? this.activity : this.activity.filter(row => row.group === this.status); },
+        async openActivity(row) {
+            this.select(row.source);
+            if (row.source === 'torrents') { await this.manager.openSession(row.id); return; }
+            if (row.source === 'youtube') this.manager.youtubeExpandedJobId = row.id;
+            this.$nextTick(() => {
+                const item = document.getElementById((row.source === 'youtube' ? 'download-youtube-job-' : 'download-file-job-') + row.id);
+                item?.scrollIntoView({block:'nearest'});
+                item?.focus({preventScroll:true});
+            });
+        },
+        cancel() {
+            if (this.adding) { this.adding = false; this.$refs.addButton.focus(); return; }
+            if (this.manager.sourceTab === 'uploads' && this.manager.uploadHasEditorOpen()) { this.manager.closeUploadEditor(); return; }
+            this.dismiss();
+        },
+        async dismiss() {
+            if (this.closing) return;
+            this.closing = true;
+            if (this.$root.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                await this.$root.animate([{opacity:1}, {opacity:0}], {duration:120, fill:'forwards'}).finished.catch(() => {});
+            }
+            this.manager.close();
+            this.$nextTick(() => document.querySelector('.torrent-import-btn')?.focus({preventScroll:true}));
+        },
+    }));
+});
+</script>

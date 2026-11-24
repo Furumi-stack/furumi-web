@@ -1,0 +1,62 @@
+<template x-if="$store.torrents.modal">
+    <dialog class="downloads-dialog" x-data="downloadManager" aria-labelledby="downloads-title"
+            x-init="$nextTick(() => { if ($el.isConnected) { $el.showModal(); $refs.title.focus({preventScroll:true}) } })"
+            x-effect="if ($store.offline.active) manager.close()" @cancel.prevent="cancel()"
+            @click.self="dismiss()" @keydown.stop>
+        <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+            <symbol id="download-symbol-overview" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 9v11"/></symbol>
+            <symbol id="download-symbol-inbox" viewBox="0 0 24 24"><path d="m3 14 3-9h12l3 9v5H3Zm0 0h5l2 3h4l2-3h5"/></symbol>
+            <symbol id="download-symbol-youtube" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="m10 9 5 3-5 3Z"/></symbol>
+            <symbol id="download-symbol-torrents" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="m10.6 7.1-4.2 8.6m7-8.6 4.2 8.6M7.5 18h9"/></symbol>
+            <symbol id="download-symbol-files" viewBox="0 0 24 24"><path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+            <symbol id="download-symbol-uploads" viewBox="0 0 24 24"><path d="M4 5h3v14H4zM10 5h3v14h-3zm6 1 3-1 3 13-3 1z"/></symbol>
+        </svg>
+        <div class="downloads-shell">
+            <header class="downloads-head">
+                <svg class="downloads-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m-4-4 4 4 4-4M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+                <h2 id="downloads-title" tabindex="-1" x-ref="title">{{ t.player_download_title }}</h2>
+                <div class="downloads-add" @click.outside="adding=false" @keydown.escape.stop.prevent="adding=false; $refs.addButton.focus()">
+                    <button class="download-button primary" type="button" x-ref="addButton" @click="adding=!adding" :aria-expanded="adding" aria-controls="download-add-list">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>{{ t.player_download_add }}
+                    </button>
+                    <div class="downloads-add-menu" id="download-add-list" x-show="adding" x-cloak x-transition.opacity.duration.120ms>
+                        <template x-for="section in sources" :key="section.id"><button type="button" @click="add(section.id)">
+                            <svg aria-hidden="true"><use :href="'#download-symbol-' + section.id"/></svg><span x-text="section.label"></span>
+                        </button></template>
+                    </div>
+                </div>
+                <button type="button" class="download-icon-button" @click="dismiss()" aria-label="{{ t.player_close }}" title="{{ t.player_close }}">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                </button>
+            </header>
+            <div class="downloads-layout">
+                <div class="downloads-rail">
+                    <nav class="downloads-nav" role="tablist" aria-label="{{ t.player_download_title }}" @keydown="navigate($event)">
+                        <template x-for="section in sections" :key="section.id">
+                            <button type="button" role="tab" :id="'downloads-tab-' + section.id" :aria-controls="'downloads-' + section.id"
+                                    :aria-selected="manager.sourceTab === section.id" :tabindex="manager.sourceTab === section.id ? 0 : -1" @click="select(section.id)">
+                                <svg aria-hidden="true"><use :href="'#download-symbol-' + section.id"/></svg>
+                                <span x-text="section.label"></span>
+                                <small x-show="section.id === 'uploads' && manager.uploadPendingTotal" x-text="manager.uploadPendingTotal"></small>
+                            </button>
+                        </template>
+                    </nav>
+                    <div class="downloads-worker" :title="manager.agentSummary()"><i :class="{busy:manager.agentBusy()}"></i><span x-text="manager.agentSummary()"></span></div>
+                </div>
+                <div class="downloads-main">
+                    <div class="downloads-notice" role="status" x-show="manager.message" :class="{error:manager.error}" x-cloak>
+                        <span x-text="manager.message"></span>
+                        <button type="button" class="download-icon-button" aria-label="{{ t.player_close }}" @click="manager._setMessage('')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+                    </div>
+                    <div class="downloads-content">
+                        {% include "player/download_overview.html" %}
+                        {% if youtube_downloads_enabled %}{% include "player/download_youtube.html" %}{% endif %}
+                        {% if torrent_downloads_enabled %}{% include "player/download_torrent.html" %}{% endif %}
+                        {% include "player/download_files.html" %}
+                        {% include "player/download_imports.html" %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </dialog>
+</template>
