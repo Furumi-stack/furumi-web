@@ -14,6 +14,7 @@ mod lyrics;
 mod media_paths;
 mod metrics;
 mod music;
+mod offline;
 mod oidc;
 mod player;
 mod podcasts;
@@ -85,18 +86,28 @@ async fn render_player(
     i18n: I18n,
     share_token: String,
 ) -> cot::Result<cot::response::Response> {
-    let guest = auth::get_session_user(&session, &db).await.is_none();
+    let identity = auth::checked_session_identity(&session, &db).await?;
+    let user = identity.as_ref().filter(|user| user.is_active());
+    let guest = user.is_none();
     if guest && share_token.is_empty() {
-        if auth::get_session_identity(&session, &db).await.is_some() {
-            return Html::new(PendingTemplate { t: i18n.t }.render()?).into_response();
+        if identity.is_some() {
+            let mut response = Html::new(PendingTemplate { t: i18n.t }.render()?).into_response()?;
+            offline::identify(&mut response, 0);
+            return Ok(response);
         }
         return Ok(auth::redirect("/login"));
     }
     let (config, _) = AppConfig::load_with_db(&db).await;
-    Html::new(
+    let account_id = user.map_or(0, User::id_val);
+    if !guest {
+        metrics::record_active_user(account_id);
+    }
+    let is_member_shell = !guest && share_token.is_empty();
+    let mut response = Html::new(
         player::PlayerPageTemplate {
             t: i18n.t,
             guest,
+            account_id,
             share_token,
             downloads_enabled: !guest && config.downloads_enabled,
             torrent_downloads_enabled: !guest
@@ -108,7 +119,12 @@ async fn render_player(
         }
         .render()?,
     )
-    .into_response()
+    .into_response()?;
+    response.headers_mut().insert("Cache-Control", "private, no-store".parse().unwrap());
+    if is_member_shell {
+        offline::identify(&mut response, account_id);
+    }
+    Ok(response)
 }
 
 #[derive(Debug, Template)]
@@ -299,6 +315,11 @@ impl App for FuruApp {
             ),
             Route::with_handler_and_name("/share/{token}", get(share_handler), "share"),
             Route::with_handler_and_name("/auth/status", get(access_status), "access_status"),
+            Route::with_handler_and_name("/offline-worker.js", get(offline::worker), "offline_worker"),
+            Route::with_handler_and_name("/offline-catalog.js", get(offline::catalog), "offline_catalog"),
+            Route::with_handler_and_name("/offline-probe", get(offline::probe), "offline_probe"),
+            Route::with_handler_and_name("/player.webmanifest", get(offline::manifest), "player_manifest"),
+            Route::with_handler_and_name("/player-icon.svg", get(offline::icon), "player_icon"),
             Route::with_handler_and_name(
                 "/metrics",
                 get({

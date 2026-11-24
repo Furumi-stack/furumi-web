@@ -113,6 +113,7 @@
 .mobile-account-control { display: none; position: relative; flex: 0 0 auto; }
 .mobile-account-control .mobile-account-chip { width: 42px; padding: 0; justify-content: center; }
 .mobile-account-control .mobile-account-popover { top: calc(100% + 6px); right: 0; width: min(240px, calc(100vw - 24px)); }
+.sidebar-account-popover, .mobile-account-control .mobile-account-popover {max-height:calc(100dvh - var(--player-bar-space) - 72px);overflow-y:auto;overscroll-behavior:contain}
 .mobile-library-backdrop { color: var(--text-primary); padding: 0; border: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
 .mobile-library-backdrop::backdrop { background: transparent; }
 .mobile-library-drawer .music-nav { padding: 4px 2px; overflow: visible; }
@@ -121,4 +122,5 @@
     .mobile-account-control { display: block; }
     .account-action-list > * { min-height: 44px; }
 }
+{% include "player/offline_styles.css" %}
 </style>

@@ -1,8 +1,23 @@
 {% extends "base.html" %}
 
+{% block html_attrs %} data-offline-account="{% if !guest && share_token.is_empty() %}{{ account_id }}{% endif %}" data-offline-mode="online"{% endblock html_attrs %}
 {% block title %}{{ t.site_name }}{% endblock title %}
 
 {% block head_extra %}
+{% if !guest && share_token.is_empty() %}
+<link rel="manifest" href="/player.webmanifest">
+<meta name="theme-color" content="#121212">
+<script>
+if ('serviceWorker' in navigator) {
+    const bindOfflineAccount = () => navigator.serviceWorker.controller?.postMessage({
+        type:'offline-client', account:document.documentElement.dataset.offlineAccount
+    });
+    bindOfflineAccount();
+    navigator.serviceWorker.addEventListener('controllerchange', bindOfflineAccount);
+}
+</script>
+<script>{{ self.offline_catalog()|safe }}</script>
+{% endif %}
 {% include "player/styles.html" %}
 {% include "player/podcast_styles.html" %}
 {% include "player/sidebar_styles.html" %}
@@ -14,6 +29,7 @@
 {% include "player/shell.html" %}
 {% include "player/modals.html" %}
 {% include "player/lyrics_modal.html" %}
+{% include "player/offline_scripts.html" %}
 {% include "player/podcast_scripts.html" %}
 {% include "player/lyrics_scripts.html" %}
 {% include "player/lyrics_search_scripts.html" %}
@@ -23,4 +39,5 @@
 {% include "player/track_actions_scripts.html" %}
 {% include "player/playlist_header_scripts.html" %}
 {% include "player/scripts.html" %}
+<script>{{ self.alpine()|safe }}</script>
 {% endblock body %}

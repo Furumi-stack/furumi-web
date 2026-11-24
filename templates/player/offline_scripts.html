@@ -1,0 +1,365 @@
+<script>
+document.addEventListener('alpine:init', () => {
+    const account = document.documentElement.dataset.offlineAccount || '';
+    const prefKey = 'furumusic.offline.' + account;
+    const stateKey = prefKey + '.playback';
+    const initialMode = document.documentElement.dataset.offlineMode;
+    const minLimit = 100e6, defaultLimit = 3e9, maxLimit = 512e9;
+    const labels = {
+        unavailable:['Offline storage is unavailable in this browser.', 'Офлайн-хранилище недоступно в этом браузере.'],
+        setup:['Connect to the server to finish setting up offline listening.', 'Для подготовки офлайн-режима нужно подключиться к серверу.'],
+        storage:['Could not save to this device.', 'Не удалось сохранить данные на этом устройстве.'],
+        full:['Cache full. Increase the limit or remove saved music.', 'Кеш заполнен. Увеличьте лимит или удалите сохранённую музыку.'],
+        download:['Download paused. The track stays in the download queue.', 'Загрузка приостановлена. Трек остаётся в очереди.'],
+    };
+    const label = key => labels[key][document.documentElement.lang.startsWith('ru') ? 1 : 0];
+    const read = key => { try { return JSON.parse(localStorage.getItem(key)) || {}; } catch { return {}; } };
+    const prefs = read(prefKey);
+    const nativeFetch = window.fetch.bind(window);
+    let repo, probeTimer, probing, transfer, draining, retryTimer;
+    let wakeQueue = false, blocked = false, retryDelay = 5000;
+    let revision = 0, listVersion = 0, lastSuccess = Date.now(), channel;
+    function catalog() { return repo || (repo = new globalThis.OfflineCatalog(account)); }
+    function eligible(track) {
+        return globalThis.OfflineCatalog?.canSave(track) === true;
+    }
+    function sendConfig(worker, mode) {
+        return new Promise((resolve, reject) => {
+            if (!worker) return reject(new Error('No offline worker'));
+            const ports = new MessageChannel();
+            const timeout = setTimeout(() => end(new Error('Offline worker did not respond')), 20000);
+            function end(error, result) {
+                clearTimeout(timeout);
+                ports.port1.close();
+                if (error) reject(error); else resolve(result);
+            }
+            ports.port1.onmessage = event => end(event.data?.ok ? null : new Error(event.data?.error || 'Offline setup failed'), event.data);
+            worker.postMessage({type:'offline-config', account, mode}, [ports.port2]);
+        });
+    }
+    async function getWorker(register) {
+        const sw = navigator.serviceWorker;
+        if (sw.controller) return sw.controller;
+        if (register) await sw.register('/offline-worker.js', {scope:'/'});
+        const registration = await sw.getRegistration('/');
+        if (!registration) throw new Error('Offline worker not installed');
+        const active = registration.active || (await sw.ready).active;
+        return active;
+    }
+    function waitForControl() {
+        const sw = navigator.serviceWorker;
+        if (sw.controller) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            function finish() {
+                clearTimeout(timer);
+                sw.removeEventListener('controllerchange', finish);
+                if (sw.controller) resolve(); else reject(new Error('Offline worker not controlling this page'));
+            }
+            const timer = setTimeout(finish, 8000);
+            sw.addEventListener('controllerchange', finish);
+            if (sw.controller) finish();
+        });
+    }
+
+    Alpine.store('offline', {
+        enabled: !!account && (prefs.enabled === true || ['manual','auto'].includes(initialMode)),
+        manual: !!account && (initialMode === 'manual' || prefs.enabled && prefs.manual === true),
+        active: false, automatic:false, busy:false, saving:false, bytes:0, items:[], error:'',
+        limitBytes: Math.max(minLimit, Math.min(maxLimit, Number(prefs.limitBytes) || defaultLimit)),
+        supported: !!(account && window.isSecureContext && navigator.serviceWorker && navigator.storage?.getDirectory &&
+            navigator.locks?.request && globalThis.FileSystemFileHandle?.prototype.createWritable && window.indexedDB && globalThis.OfflineCatalog),
+
+        init() {
+            if (!this.supported) return;
+            this.active = this.enabled && (this.manual || initialMode === 'auto' || !navigator.onLine);
+            this.automatic = this.active && !this.manual;
+            document.documentElement.classList.toggle('offline-active', this.active);
+            if (this.enabled || prefs.used) this.refresh();
+            if ('BroadcastChannel' in window) {
+                channel = new BroadcastChannel(prefKey);
+                channel.onmessage = ({data}) => {
+                    if (data === 'cache') {
+                        if (this.active) window.dispatchEvent(new CustomEvent('furumusic:offline-catalog'));
+                        else this.refresh();
+                    }
+                    if (data === 'queue') this.drain();
+                };
+            }
+            window.addEventListener('storage', event => {
+                if (event.key !== prefKey) return;
+                const current = read(prefKey);
+                if (current.limitBytes && current.limitBytes !== this.limitBytes) {
+                    this.limitBytes = current.limitBytes;
+                    transfer?.abort();
+                }
+                blocked = false;
+                if (this.enabled && !this.active) this.drain();
+            });
+            navigator.serviceWorker.addEventListener('message', ({data}) => {
+                if (String(data?.account) !== account) return;
+                if (data.type === 'offline-purge') {
+                    localStorage.removeItem(prefKey);
+                    localStorage.removeItem(stateKey);
+                    this.enabled = this.manual = this.active = false;
+                    this.items = []; this.bytes = 0;
+                    this.stopTraffic();
+                    location.replace('/');
+                } else if (data.type === 'offline-mode' && !this.busy) {
+                    this.enabled = data.mode !== 'disabled';
+                    this.manual = data.mode === 'manual';
+                    this.apply(data.mode);
+                    this.persist();
+                }
+            });
+            window.addEventListener('offline', () => this.lost());
+            window.addEventListener('online', () => this.probe());
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) this.probe(); });
+            if (this.enabled) {
+                this.scheduleProbe();
+                if (!this.active) this.drain();
+                else if (!this.manual && navigator.onLine) this.probe();
+            }
+        },
+        persist() {
+            localStorage.setItem(prefKey, JSON.stringify({enabled:this.enabled, manual:this.manual, used:true, limitBytes:this.limitBytes}));
+        },
+        formatBytes(value) {
+            const bytes = Math.max(0, Number(value) || 0);
+            const step = bytes >= 1e9 ? 3 : bytes >= 1e6 ? 2 : bytes >= 1000 ? 1 : 0;
+            return new Intl.NumberFormat(document.documentElement.lang, {style:'unit',unit:['byte','kilobyte','megabyte','gigabyte'][step],maximumFractionDigits:2}).format(bytes / 1000 ** step);
+        },
+        async refresh() {
+            const version = ++listVersion;
+            try {
+                const [stats, records] = await Promise.all([catalog().stats(), catalog().list()]);
+                if (version !== listVersion) return;
+                this.bytes = stats.bytes;
+                this.items = records.map(t => ({...t, artist: t.artist || (t.artists || []).map(a => a.name || a).join(', ')}));
+            } catch { this.error = label('storage'); }
+        },
+        isSaved(track) {
+            const id = globalThis.OfflineCatalog?.trackId(track);
+            return !!track && this.items.some(t => t.id === id || (track.content_id && t.content_id === track.content_id));
+        },
+        async setEnabled(on) {
+            if (this.busy || !!on === this.enabled) return;
+            if (!this.supported) { this.error = label('unavailable'); return; }
+            this.busy = true;
+            this.error = '';
+            ++revision;
+            try {
+                if (on) {
+                    // Keep the permission request within the user's activation. Best-effort storage is usable too.
+                    const persistent = navigator.storage.persist?.().catch(() => false);
+                    const worker = await getWorker(true);
+                    await sendConfig(worker, 'online');
+                    await waitForControl();
+                    await persistent;
+                    this.enabled = true;
+                    this.manual = false;
+                    this.persist();
+                    await this.captureLibrary();
+                    await this.refresh();
+                    this.apply('online');
+                    const player = Alpine.store('player');
+                    if (player?.isPlaying && !player._cachePlayCounted) {
+                        player._cachePlayCounted = true;
+                        this.played(player.currentTrack);
+                    }
+                } else {
+                    this.stopTraffic();
+                    await sendConfig(await getWorker(false), 'disabled');
+                    this.enabled = this.manual = false;
+                    this.persist();
+                    this.apply('disabled');
+                }
+            } catch { this.error = label('setup'); }
+            finally { this.busy = false; this.scheduleProbe(); }
+        },
+        async setManual(manual) {
+            if (!this.enabled || this.busy || !!manual === this.manual) return;
+            this.busy = true; this.error = '';
+            ++revision;
+            this.stopTraffic();
+            try {
+                const mode = manual ? 'manual' : 'auto';
+                await sendConfig(await getWorker(false), mode);
+                this.manual = !!manual;
+                this.persist();
+                this.apply(mode);
+            } catch { this.error = label('setup'); }
+            finally { this.busy = false; this.scheduleProbe(); }
+            if (!this.manual) this.probe();
+        },
+        stopTraffic() {
+            clearTimeout(probeTimer);
+            clearTimeout(retryTimer);
+            probing?.abort();
+            transfer?.abort();
+        },
+        async lost() {
+            if (!this.enabled || this.manual || this.active || this.busy) return;
+            const version = revision;
+            transfer?.abort();
+            try {
+                const worker = await getWorker(false);
+                if (version !== revision || this.manual) return;
+                await sendConfig(worker, 'auto');
+                if (version === revision) this.apply('auto');
+            } catch { if (version === revision) this.apply('auto'); }
+        },
+        scheduleProbe() {
+            clearTimeout(probeTimer);
+            if (!this.enabled || this.manual) return;
+            probeTimer = setTimeout(() => this.probe(), this.active ? 5000 : 15000);
+        },
+        networkResult(ok) {
+            if (!this.enabled || this.active || this.busy) return;
+            if (ok) lastSuccess = Date.now();
+            else this.probe(true);
+        },
+        async probe(force = false) {
+            if (!this.enabled || this.manual || this.busy || probing) return;
+            if (!navigator.onLine) { await this.lost(); this.scheduleProbe(); return; }
+            if (!force && !this.active && Date.now() - lastSuccess < 8000) { this.scheduleProbe(); return; }
+            const version = revision;
+            const abort = probing = new AbortController();
+            const timeout = setTimeout(() => abort.abort(), 4000);
+            try {
+                const res = await nativeFetch('/offline-probe', {cache:'no-store', signal:abort.signal, redirect:'error'});
+                if (version !== revision || this.manual || !this.enabled) return;
+                const identity = res.headers.get('X-Furumusic-Player-Account');
+                if ((res.status === 401 && identity === '0') || (res.status === 204 && identity && identity !== account)) {
+                    location.replace('/'); return;
+                }
+                if (res.status !== 204 || identity !== account) throw new Error('Unreachable');
+                lastSuccess = Date.now();
+                if (this.active) {
+                    await sendConfig(await getWorker(false), 'online');
+                    if (version === revision) this.apply('online');
+                }
+            } catch { if (version === revision) await this.lost(); }
+            finally { clearTimeout(timeout); if (probing === abort) probing = null; this.scheduleProbe(); }
+        },
+        apply(mode) {
+            const active = mode === 'manual' || mode === 'auto';
+            const changed = active !== this.active;
+            this.active = active; this.automatic = mode === 'auto';
+            document.documentElement.classList.toggle('offline-active', active);
+            if (active) { clearTimeout(retryTimer); transfer?.abort(); }
+            this.scheduleProbe();
+            if (changed) {
+                window.dispatchEvent(new CustomEvent('furumusic:offline-mode', {detail:{active}}));
+            }
+            if (!active && this.enabled) this.drain();
+        },
+        async captureLibrary() {
+            const user = Alpine.store('user'), playlists = Alpine.store('playlists'), library = Alpine.store('library');
+            if (user?.profile) await catalog().observe('/api/player/me', user.profile);
+            if (playlists?.list?.length) await catalog().observe('/api/player/playlists', playlists.list);
+            if (library?.currentPlaylist) await catalog().observe('/api/player/playlists/'+library.currentPlaylist.id, library.currentPlaylist);
+            // Fields that may have loaded before the opt-in, including playlist membership.
+            await Promise.allSettled(['/api/player/me','/api/player/playlists','/api/player/likes','/api/player/follows','/api/player/pins'].map(async path => {
+                const response = await playerFetch(path);
+                if (response.ok) await catalog().observe(path, await response.json());
+            }));
+        },
+        observe(url, response) {
+            if (!this.enabled || this.active || !response.ok ||
+                !/^\/api\/player\/(?:me|likes|follows|pins|playlists(?:\/-?\d+)?|artists(?:\/\d+)?)$/.test(url.pathname)) return;
+            response.clone().json().then(value => catalog().observe(url.href, value)).catch(() => {});
+        },
+        localResponse(request) { return catalog().respond(request); },
+        async played(track) {
+            if (!this.enabled || !eligible(track)) return;
+            try {
+                await catalog().touch(track);
+                if (!this.active) await this.saveTrack(track);
+            } catch { this.error = label('storage'); }
+        },
+        async saveTrack(track) {
+            if (!this.enabled || this.active || !eligible(track)) return;
+            try {
+                await catalog().enqueue(track);
+                channel?.postMessage('queue');
+                this.drain();
+            } catch { this.error = label('storage'); }
+        },
+        async drain() {
+            if (blocked || !this.enabled || this.active || !this.supported) return;
+            if (draining) { wakeQueue = true; return; }
+            clearTimeout(retryTimer);
+            draining = true;
+            const run = async () => {
+                while (this.enabled && !this.active && !blocked) {
+                    const [track] = await catalog().pending();
+                    if (!track || this.active || !this.enabled) break;
+                    transfer = new AbortController();
+                    this.saving = true;
+                    try {
+                        await catalog().save(track, {signal:transfer.signal, limitBytes:this.limitBytes,
+                            fetch:window.fetch.bind(window),
+                            playlist:Alpine.store('library')?.currentPlaylist,
+                            release:Alpine.store('library')?.currentRelease});
+                        retryDelay = 5000;
+                        this.error = ''; channel?.postMessage('cache'); await this.refresh();
+                    } catch (err) {
+                        if (!transfer.signal.aborted) {
+                            if (err.name === 'QuotaExceededError') { blocked = true; this.error = label('full'); }
+                            else if (err.name === 'NotFoundError') {
+                                await catalog().dequeue(track.id);
+                                continue;
+                            } else {
+                                this.error = label('download');
+                                retryTimer = setTimeout(() => this.drain(), retryDelay);
+                                retryDelay = Math.min(retryDelay * 2, 300000);
+                            }
+                        }
+                        break;
+                    } finally { transfer = null; this.saving = false; }
+                }
+            };
+            try {
+                if (navigator.locks) await navigator.locks.request(prefKey + '.queue', {ifAvailable:true}, lock => lock && run());
+                else await run();
+            } catch { this.error = label('storage'); }
+            finally {
+                draining = false;
+                if (wakeQueue) { wakeQueue = false; this.drain(); }
+            }
+        },
+        setLimit(bytes) {
+            if (!Number.isFinite(bytes)) return;
+            this.limitBytes = Math.round(Math.max(minLimit, Math.min(maxLimit, bytes)));
+            transfer?.abort(); blocked = false; this.error = '';
+            this.persist();
+            this.drain();
+        },
+        async removeTrack(id) {
+            transfer?.abort();
+            try {
+                await catalog().remove(id);
+                blocked = false; this.error = ''; await this.refresh(); channel?.postMessage('cache');
+                if (this.active) window.dispatchEvent(new CustomEvent('furumusic:offline-catalog'));
+                this.drain();
+            } catch { this.error = label('storage'); }
+        },
+        async clearCache() {
+            transfer?.abort();
+            try {
+                await catalog().clear();
+                const profile = Alpine.store('user')?.profile;
+                if (this.enabled && profile) await catalog().observe('/api/player/me', profile);
+                localStorage.removeItem(stateKey);
+                this.error = ''; blocked = false; await this.refresh(); channel?.postMessage('cache');
+                if (this.enabled && !this.active) await this.captureLibrary();
+                if (this.active) window.dispatchEvent(new CustomEvent('furumusic:offline-catalog'));
+            } catch { this.error = label('storage'); }
+        },
+        saveState(state) {
+            if (this.enabled) { try { localStorage.setItem(stateKey, JSON.stringify(state)); } catch {} }
+        },
+        state() { return read(stateKey); },
+    });
+});
+</script>

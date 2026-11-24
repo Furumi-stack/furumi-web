@@ -10,7 +10,7 @@
         {{ t.player_track_info }}
     </button>
     {% if !guest %}
-    <button type="button" data-action="like" :hidden="!menu.historyItem || !menu.localId" @click="menu.run('like')" :aria-pressed="$store.likes.has(menu.localId)">
+    <button data-online-only type="button" data-action="like" :hidden="!menu.historyItem || !menu.localId" @click="menu.run('like')" :aria-pressed="$store.likes.has(menu.localId)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.7 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.7 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg>
         {{ t.player_like }}
     </button>
@@ -24,20 +24,28 @@
         {{ t.player_add_to_queue }}
     </button>
     {% if !guest %}
-    <button type="button" data-action="playlist" @click="menu.run('playlist')">
+    <button data-online-only type="button" data-action="playlist" @click="menu.run('playlist')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h15M3 11h12M3 17h7m8-3v8m-4-4h8"/></svg>
         {{ t.player_add_to_playlist }}
     </button>
-    <button type="button" data-action="similar" :hidden="!$store.library.similarityTrackId(menu.track)" @click="menu.run('similar')">
+    <button data-online-only type="button" data-action="similar" :hidden="!$store.library.similarityTrackId(menu.track)" @click="menu.run('similar')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h2l1-3 2 6 1-3h2"/></svg>
         {{ t.player_find_similar }}
     </button>
-    <button type="button" data-action="share" :hidden="!menu.localId" @click="menu.run('share')">
+    <button data-online-only type="button" data-action="share" :hidden="!menu.localId" @click="menu.run('share')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m9 10.5 6.5-4m-6.5 7 6.5 4"/></svg>
         {{ t.player_share_track }}
     </button>
+    {% if share_token.is_empty() %}
+    <button type="button" data-online-only data-action="offline"
+            :hidden="!menu.localId || !$store.offline.enabled" :disabled="$store.offline.isSaved(menu.track) || $store.offline.busy"
+            @click="menu.run('offline')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10m-4-4 4 4 4-4M4 14h16l1 6H3z"/></svg>
+        <span x-text="$store.offline.isSaved(menu.track) ? '{{ t.player_offline_available }}' : '{{ t.player_offline_save }}'"></span>
+    </button>
     {% endif %}
-    <button type="button" data-action="download" :hidden="!menu.localId" @click="menu.run('download')">
+    {% endif %}
+    <button data-online-only type="button" data-action="download" :hidden="!menu.localId" @click="menu.run('download')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg>
         {{ t.track_download }}
     </button>

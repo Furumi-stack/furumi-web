@@ -155,9 +155,97 @@ async function checkSidebar(browser, mobile) {
     await panel.getByRole('button', { name: 'Settings' }).click();
     await page.locator('.user-settings-modal').waitFor();
     assert.equal(await panel.isVisible(), false);
+    await checkOfflineControls(page, trigger, panel);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.deepEqual(errors, []);
     await page.close();
+}
+
+async function checkOfflineControls(page, trigger, panel) {
+    const modal = page.locator('.user-settings-modal');
+    const section = modal.locator('.offline-settings');
+    const close = modal.locator('.user-settings-head button');
+    const viewport = page.viewportSize();
+    if (viewport.width < 600) await page.setViewportSize({...viewport, width:320});
+    // Exercise the account/settings UI independently of Service Worker registration on this mock origin.
+    await page.evaluate(() => {
+        Object.assign(Alpine.store('offline'), {
+            supported: true,
+            setEnabled(on) { this.enabled = on; },
+            setLimit(bytes) { this.limitBytes = bytes; },
+            setManual(on) {
+                this.manual = this.active = on;
+                document.documentElement.classList.toggle('offline-active', on);
+            },
+            removeTrack(id) { this.items = this.items.filter(track => track.id !== id); },
+            clearCache() { this.items = []; this.bytes = 0; },
+        });
+    });
+    const enable = section.getByRole('switch');
+    await page.waitForFunction(() => document.activeElement?.id === 'user-settings-title');
+    assert.equal(await enable.getAttribute('aria-checked'), 'false');
+    await close.click();
+    await page.waitForFunction(selector => document.activeElement?.matches(selector),
+        viewport.width < 600 ? '.mobile-account-chip' : '.sidebar-account-trigger');
+    await trigger.click();
+    await panel.getByText('Offline listening is off').waitFor();
+    await panel.getByRole('button', {name:'Manage offline music'}).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'offline-settings-title');
+    await enable.click();
+    await section.getByText('No music saved on this device yet.').waitFor();
+    const range = section.getByRole('slider', {name:'Cache limit'});
+    assert.equal(await range.getAttribute('aria-valuetext'), '3 GB');
+    const marks = await section.locator('.offline-scale-marks span').evaluateAll(list =>
+        list.map(node => ({text:node.textContent, start:node.getBoundingClientRect().left, end:node.getBoundingClientRect().right})));
+    assert.deepEqual(marks.map(m => m.text), ['100 MB','1 GB','10 GB','100 GB','512 GB']);
+    assert.ok(marks.every((mark, i) => i === 0 || marks[i-1].end <= mark.start),
+        'scale labels overlap: ' + JSON.stringify(marks));
+    await range.press('Home');
+    assert.equal(await range.getAttribute('aria-valuetext'), '100 MB');
+    let last = 100e6;
+    for (let i = 0; i < 3; i++) {
+        await range.press('ArrowRight');
+        const next = await page.evaluate(() => Alpine.store('offline').limitBytes);
+        assert.ok(next > last, 'each keyboard step must change the stored limit');
+        last = next;
+    }
+    await range.press('End');
+    assert.equal(await range.getAttribute('aria-valuetext'), '512 GB');
+    await page.evaluate(() => Object.assign(Alpine.store('offline'), {
+        bytes:3e6, items:[{id:7,title:'One',artist:'Artist',bytes:2e6},{id:8,title:'Two',artist:'Artist',bytes:1e6}],
+    }));
+    await section.getByRole('button', {name:'Remove from this device · One'}).click();
+    assert.equal(await section.locator('.offline-saved-list li').count(), 1);
+    page.once('dialog', dialog => dialog.dismiss());
+    await section.getByRole('button', {name:'Clear cache'}).click();
+    assert.equal(await section.locator('.offline-saved-list li').count(), 1);
+    page.once('dialog', dialog => dialog.accept());
+    await section.getByRole('button', {name:'Clear cache'}).click();
+    await section.getByText('No music saved on this device yet.').waitFor();
+    await close.click();
+    await trigger.click();
+    const manual = panel.getByRole('switch', {name:'Use saved music only'});
+    await manual.click();
+    assert.equal(await manual.getAttribute('aria-checked'), 'true');
+    assert.equal(await panel.getByRole('link', {name:'My listening'}).isVisible(), false);
+    assert.equal(await panel.getByRole('link', {name:'Followed'}).isVisible(), true);
+    await panel.getByRole('button', {name:'Settings'}).click();
+    await modal.getByText('Devices are unavailable offline.').waitFor();
+    await page.keyboard.press('Escape');
+    await modal.waitFor({state:'hidden'});
+    await page.locator('.device-toggle-btn:visible').click();
+    assert.equal((await page.locator('.device-popover:visible').innerText()).trim(), 'Devices are unavailable offline.');
+    await page.locator('.device-toggle-btn:visible').click();
+    await page.evaluate(() => { Alpine.store('offline').manual = false; });
+    await trigger.click();
+    await panel.getByText('Offline · automatic').waitFor();
+    assert.equal(await manual.getAttribute('aria-checked'), 'false');
+    await page.evaluate(() => {
+        Alpine.store('user').menuOpen = false;
+        Alpine.store('library').view = 'offline_unavailable';
+    });
+    await page.getByText('This page is unavailable offline.').waitFor();
+    assert.equal(await page.getByRole('link', {name:'Open saved catalog'}).getAttribute('href'), '#artists');
 }
 
 async function dragShortcut(page, nav, source, destination, touch, cancel = false) {
@@ -349,7 +437,7 @@ async function checkPinActions(browser, mobile) {
         await checkCollection(browser);
         await checkPinActions(browser, false);
         await checkPinActions(browser, true);
-        console.log('Desktop and mobile sidebar navigation, account controls, pin reordering and undo passed.');
+        console.log('Desktop and mobile sidebar navigation, offline storage controls, pin reordering and undo passed.');
     } finally {
         await browser.close();
     }

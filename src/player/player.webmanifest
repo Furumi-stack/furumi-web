@@ -1,0 +1,11 @@
+{
+  "id": "/",
+  "name": "Furumusic",
+  "short_name": "Furumusic",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": [{ "src": "/player-icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

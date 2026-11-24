@@ -15,7 +15,7 @@
                         </div>
                     </template>
                 </div>
-                <p class="empty-state" x-show="!$store.follows.artists.length">{{ t.player_no_followed_artists }}</p>
+                <p class="empty-state" x-show="!$store.follows.artists.length" x-text="$store.offline.active ? '{{ t.player_offline_empty_followed }}' : '{{ t.player_no_followed_artists }}'"></p>
             </div>
         </template>
         <template x-if="$store.library.view === 'playlists'">
@@ -34,7 +34,7 @@
                             </a>
                             {% include "player/pin_button.html" %}
                             <template x-if="pl.kind === 'user' && pl.is_own">
-                                <div class="collection-options">
+                                <div data-online-only class="collection-options">
                                     <button type="button" class="collection-more" x-ref="more" @click="menuId = menuId === pl.id ? null : pl.id" :aria-expanded="menuId === pl.id" aria-label="{{ t.player_more_actions }}">⋯</button>
                                     <div class="collection-popup" x-show="menuId === pl.id" x-cloak>
                                         <button @click="menuId = null; $store.playlists.startRename(pl)">{{ t.player_rename }}</button>

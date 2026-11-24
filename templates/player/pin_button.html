@@ -1,4 +1,4 @@
-<button data-member-only type="button" class="release-action-btn secondary collection-pin" x-show="target" x-cloak
+<button data-online-only data-member-only type="button" class="release-action-btn secondary collection-pin" x-show="target" x-cloak
         :aria-pressed="$store.pins.has(target)" :disabled="$store.pins.busy" @click.stop="$store.pins.toggle(target)"
         :aria-label="$store.pins.has(target) ? '{{ t.player_sidebar_unpin }}' : '{{ t.player_sidebar_pin }}'"
         :title="$store.pins.has(target) ? '{{ t.player_sidebar_unpin }}' : '{{ t.player_sidebar_pin }}'">

@@ -1,6 +1,6 @@
 <header class="collection-heading">
     <h1 class="section-title">{{ t.player_global_library }}</h1>
-    <button data-member-only type="button" class="release-action-btn secondary" x-show="$store.library.view === 'playlists'"
+    <button data-online-only data-member-only type="button" class="release-action-btn secondary" x-show="$store.library.view === 'playlists'"
             @click="$store.playlists.showCreate()"><span aria-hidden="true">＋</span> {{ t.player_new_playlist }}</button>
 </header>
 <nav class="collection-tabs" aria-label="{{ t.player_global_library }}">

@@ -426,6 +426,7 @@
                 });
             },
             checkpoint(player, completed = false, unloading = false) {
+                if (Alpine.store('offline')?.active) return;
                 const track = player.currentTrack;
                 if (!track?.podcast) return;
                 const payload = {

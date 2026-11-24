@@ -63,6 +63,7 @@ document.addEventListener('alpine:init', () => {
                         : Alpine.store('playlists').showFederationPicker(track._federationTrack);
                 case 'share': return Alpine.store('sharing').copyTrack(track, anchor);
                 case 'download': return library.downloadTrack(track);
+                case 'offline': return Alpine.store('offline').saveTrack(track);
                 case 'similar': return library.searchSimilar(track);
                 case 'like': return Alpine.store('likes').toggle(localId);
             }

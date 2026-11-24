@@ -43,7 +43,7 @@
         </div>
         <p class="playlist-heading-description" x-show="playlist.description" x-text="playlist.description"></p>
         {% if !guest %}
-        <div class="playlist-heading-edit-actions" x-show="$store.playlists.canEditCurrent()" x-cloak>
+        <div data-online-only class="playlist-heading-edit-actions" x-show="$store.playlists.canEditCurrent()" x-cloak>
             <button type="button" class="release-action-btn secondary playlist-edit-toggle" x-ref="edit"
                     :disabled="editing && (header.busy || !header.canSave)"
                     @click="$store.playlists.toggleEditCurrent()">
@@ -61,7 +61,7 @@
     </div>
     {% if !guest %}
     <div class="playlist-heading-pin" x-show="target">{% include "player/pin_button.html" %}</div>
-    <fieldset class="playlist-cover-editor" id="playlist-cover-editor" x-ref="coverEditor"
+    <fieldset data-online-only class="playlist-cover-editor" id="playlist-cover-editor" x-ref="coverEditor"
               x-show="editing && header.pickerOpen" x-cloak :disabled="header.busy" aria-label="{{ t.player_playlist_cover }}"
               @pointerdown.window.capture="if (header.pickerOpen && !$el.contains($event.target) && !$refs.coverToggle.contains($event.target)) header.pickerOpen = false"
               @focusin.window="if (header.pickerOpen && !$el.contains($event.target) && !$refs.coverToggle.contains($event.target)) header.pickerOpen = false"

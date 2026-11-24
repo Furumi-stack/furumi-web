@@ -1669,10 +1669,21 @@ struct LastfmCallbackQuery {
 pub struct PlayerPageTemplate {
     pub t: &'static Translations,
     pub guest: bool,
+    pub account_id: i64,
     pub share_token: String,
     pub downloads_enabled: bool,
     pub torrent_downloads_enabled: bool,
     pub youtube_downloads_enabled: bool,
+}
+
+impl PlayerPageTemplate {
+    fn alpine(&self) -> &'static str {
+        include_str!("vendor/alpine-3.17.5.min.js")
+    }
+
+    fn offline_catalog(&self) -> &'static str {
+        crate::offline::CATALOG
+    }
 }
 
 #[cfg(test)]
@@ -1685,6 +1696,7 @@ mod page_template_tests {
         let disabled = PlayerPageTemplate {
             t: Translations::for_lang(Lang::En),
             guest: false,
+            account_id: 1,
             share_token: String::new(),
             downloads_enabled: false,
             torrent_downloads_enabled: false,
@@ -1698,6 +1710,7 @@ mod page_template_tests {
         let enabled = PlayerPageTemplate {
             t: Translations::for_lang(Lang::En),
             guest: false,
+            account_id: 1,
             share_token: String::new(),
             downloads_enabled: true,
             torrent_downloads_enabled: true,

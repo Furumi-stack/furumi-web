@@ -4,7 +4,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
             {{ t.player_global_library }}
         </a>
-        <a href="#podcasts" class="podcast-nav" :aria-current="['podcasts','podcast_detail'].includes($store.library.view) ? 'page' : null">
+        <a data-online-only href="#podcasts" class="podcast-nav" :aria-current="['podcasts','podcast_detail'].includes($store.library.view) ? 'page' : null">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
             <span x-text="$store.podcasts.text('podcasts')"></span>
         </a>
@@ -42,7 +42,7 @@
                         <span class="music-shortcut-title" x-text="item.title"></span>
                     </a>
                     <template x-if="$store.pins.items.length">
-                        <div class="shortcut-pin-actions" @keydown.space.stop>
+                        <div data-online-only class="shortcut-pin-actions" @keydown.space.stop>
                             <button type="button" class="shortcut-pin-grip" x-show="$store.pins.items.length > 1"
                                     :aria-label="'{{ t.player_reorder_pin }} · ' + item.title"
                                     title="{{ t.player_reorder_hint }}" aria-description="{{ t.player_reorder_hint }}"

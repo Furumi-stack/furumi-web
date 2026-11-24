@@ -54,7 +54,7 @@
 
     <!-- Create / Rename Playlist Modal -->
     <template x-if="$store.playlists.modal">
-        <div class="modal-overlay" @click.self="$store.playlists.modal = null">
+        <div data-online-only class="modal-overlay" @click.self="$store.playlists.modal = null">
             <div class="modal-box">
                 <h3 x-text="$store.playlists.modal.mode === 'create' ? '{{ t.player_new_playlist }}' : '{{ t.player_rename_playlist }}'"></h3>
                 <input type="text" x-model="$store.playlists.modal.title" placeholder="{{ t.player_playlist_name }}"
@@ -70,7 +70,7 @@
 
     <!-- Add to Playlist Modal -->
     <template x-if="$store.playlists.picker">
-        <div class="modal-overlay" @click.self="$store.playlists.picker = null">
+        <div data-online-only class="modal-overlay" @click.self="$store.playlists.picker = null">
             <div class="modal-box">
                 <h3>{{ t.player_add_to_playlist }}</h3>
                 <div class="modal-playlist-list">
@@ -91,7 +91,7 @@
 
     <!-- Download Manager Modal -->
     <template x-if="$store.torrents.modal">
-        <div class="modal-overlay" @click.self="$store.torrents.close()">
+        <div data-online-only class="modal-overlay" @click.self="$store.torrents.close()">
             <div class="modal-box torrent-modal"
                  :class="{ 'youtube-mode': $store.torrents.sourceTab === 'youtube' }">
                 <div class="torrent-modal-head">
@@ -971,11 +971,13 @@
 
     <!-- User Settings Modal -->
     <template x-if="$store.user.settingsOpen">
-        <div class="modal-overlay" @click.self="$store.user.closeSettings()">
+        <dialog class="modal-overlay user-settings-overlay" aria-labelledby="user-settings-title"
+                x-init="$nextTick(() => { if ($el.isConnected) { $el.showModal(); document.getElementById($store.user.settingsFocus)?.focus() } })"
+                @cancel.prevent="$store.user.closeSettings()" @click.self="$store.user.closeSettings()" @keydown.space.stop>
             <div class="modal-box user-settings-modal">
                 <div class="user-settings-head">
                     <div>
-                        <h3>User settings</h3>
+                        <h3 id="user-settings-title" tabindex="-1">{{ t.nav_settings }}</h3>
                         <p>Personal services, listening history and trusted devices.</p>
                     </div>
                     <button class="mobile-list-action" @click="$store.user.closeSettings()" title="{{ t.player_close }}">
@@ -986,7 +988,8 @@
                     </button>
                 </div>
 
-                <section class="user-settings-section">
+                {% if !guest && share_token.is_empty() %}{% include "player/offline_settings.html" %}{% endif %}
+                <section class="user-settings-section" data-online-only>
                     <div class="user-settings-section-head">
                         <div>
                             <h4>{{ t.player_interface_language }}</h4>
@@ -997,7 +1000,7 @@
                     </div>
                 </section>
 
-                <section class="user-settings-section">
+                <section class="user-settings-section" data-online-only>
                     <div class="user-settings-section-head">
                         <div>
                             <h4>Last.fm</h4>
@@ -1012,6 +1015,7 @@
                 </section>
 
                 <section class="user-settings-section user-settings-devices">
+                    <p data-offline-only>{{ t.player_offline_devices }}</p>
                     <div class="user-settings-section-head">
                         <div>
                             <h4>Connected devices</h4>
@@ -1105,7 +1109,7 @@
                     </div>
                 </section>
             </div>
-        </div>
+        </dialog>
     </template>
 
 </div>

@@ -10,6 +10,16 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.0 — 2026-11-24
+
+- Added opt-in offline listening to the web player. Starting a music track saves
+  the recording on this device with its catalog entries, available artwork and lyrics.
+  Saved music can be searched, played and browsed through artist and release pages.
+- The account menu shows cache usage and switches the player to local playback.
+  Server outages activate offline listening automatically until the instance returns.
+- Cache management includes individual removal and a logarithmic size limit from
+  100 MB to 512 GB, initially 3 GB. Downloads pause when the cache fills.
+
 ## v0.15.3 — 2026-11-24
 
 - Listening by day can display a calendar heatmap shaded by daily play count.

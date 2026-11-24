@@ -1,5 +1,21 @@
+{% if share_token.is_empty() %}
+<section class="offline-account" aria-label="{{ t.player_offline_listening }}" x-data="{get offline() { return $store.offline }}" @keydown.space.stop>
+    <div class="offline-account-summary">
+        <div aria-live="polite">
+            <strong x-text="!offline.enabled ? '{{ t.player_offline_disabled }}' : offline.manual ? '{{ t.player_offline_manual }}' : offline.active ? '{{ t.player_offline_auto }}' : '{{ t.player_offline_online }}'"></strong>
+            <small x-show="offline.enabled || offline.bytes" x-text="'{{ t.player_offline_used }} · ' + offline.formatBytes(offline.bytes)"></small>
+        </div>
+        <button type="button" class="offline-manage" title="{{ t.player_offline_manage_label }}" aria-label="{{ t.player_offline_manage_label }}"
+                @click="$store.user.openSettings('offline-settings-title')">{{ t.player_offline_manage }}</button>
+    </div>
+    <button type="button" role="switch" class="offline-switch-row" x-show="offline.enabled" x-cloak
+            :aria-checked="offline.manual" :disabled="offline.busy" @click="offline.setManual(!offline.manual)">
+        <span>{{ t.player_offline_cache_only }}</span><span class="offline-switch" aria-hidden="true"></span>
+    </button>
+</section>
+{% endif %}
 <div class="account-action-list">
-    <a href="#listening" :aria-current="$store.library.view === 'listening' ? 'page' : null"
+    <a data-online-only href="#listening" :aria-current="$store.library.view === 'listening' ? 'page' : null"
        @click="$store.user.menuOpen = false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V12M9 20V6M14 20V3M19 20V9"/></svg>
         {{ t.player_my_listening }}
@@ -13,11 +29,11 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9m4 0h3M4 12h2m4 0h10M4 18h8m4 0h4"/><circle cx="15" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg>
         {{ t.nav_settings }}
     </button>
-    <a href="/admin/" x-show="$store.user.profile?.role === 'admin'" x-cloak>
+    <a data-online-only href="/admin/" x-show="$store.user.profile?.role === 'admin'" x-cloak>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v5c0 4.5 3.2 8 7.5 10 4.3-2 7.5-5.5 7.5-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
         {{ t.player_admin_panel }}
     </a>
-    <a href="/logout">
+    <a data-online-only href="/logout">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H5v16h4m5-4 4-4-4-4m-5 4h9"/></svg>
         {{ t.player_log_out }}
     </a>

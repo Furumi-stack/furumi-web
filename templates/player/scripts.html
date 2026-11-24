@@ -1,4 +1,3 @@
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 <script>
 const GUEST = {{ guest }};
 const SHARE_TOKEN = "{{ share_token }}";
@@ -11,11 +10,30 @@ function redirectOnUnauthorized(status) {
 }
 
 const playerFetch = window.fetch.bind(window);
+function playerOffline() { return window.Alpine?.store('offline')?.active === true; }
+function playbackSource(track) {
+    const offline = Alpine.store('offline');
+    if (!offline?.enabled || !offline.isSaved(track)) return track.stream_url;
+    const remoteToken = track.federated_cache && track.content_id?.match(/^b3:([a-f0-9]{64})$/)?.[1];
+    return track.stream_url === '/api/player/stream/' + track.id ||
+        (remoteToken && track.stream_url === '/api/player/federation/cache/' + remoteToken)
+        ? track.stream_url + '?saved=1' : track.stream_url;
+}
 window.fetch = async (input, init) => {
-    const response = await playerFetch(input, init);
     const url = new URL(input instanceof Request ? input.url : input, window.location.href);
+    const offline = window.Alpine?.store('offline');
+    if (offline?.active && !(offline.automatic && url.origin === location.origin && url.pathname === '/offline-probe')) {
+        if (url.origin === location.origin && url.pathname.startsWith('/api/player/')) {
+            const request = new Request(input instanceof Request ? input : url.href, init);
+            const local = await offline.localResponse(request);
+            if (local) return local;
+        }
+        return new Response(null, {status:503});
+    }
+    const response = await playerFetch(input, init);
     if (url.origin === window.location.origin && url.pathname.startsWith('/api/')) {
         redirectOnUnauthorized(response.status);
+        if ((init?.method || input?.method || 'GET').toUpperCase() === 'GET') offline?.observe(url, response);
     }
     return response;
 };
@@ -549,6 +567,7 @@ document.addEventListener('alpine:init', () => {
         accessStatus: "anonymous",
         menuOpen: false,
         settingsOpen: false,
+        settingsFocus: 'user-settings-title',
         lastfm: { configured: false, connected: false, username: null, reauth_required: false, last_error: null },
         lastfmBusy: false,
 
@@ -592,6 +611,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async loadLastfm() {
+            if (playerOffline()) return;
             try {
                 const res = await fetch('/api/player/lastfm/status');
                 if (!res.ok) throw new Error('failed');
@@ -651,15 +671,22 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        openSettings() {
+        openSettings(heading = 'user-settings-title') {
+            this.settingsFocus = heading;
             this.menuOpen = false;
             this.settingsOpen = true;
-            this.loadLastfm();
-            Alpine.store('devices')?.loadFedDevices();
+            if (!playerOffline()) {
+                this.loadLastfm();
+                Alpine.store('devices')?.loadFedDevices();
+            }
         },
 
         closeSettings() {
             this.settingsOpen = false;
+            Alpine.nextTick(() => {
+                const triggers = document.querySelectorAll('.sidebar-account-trigger, .mobile-account-chip');
+                Array.from(triggers).find(button => button.getClientRects().length)?.focus({preventScroll:true});
+            });
         },
 
         initials() {
@@ -761,6 +788,12 @@ document.addEventListener('alpine:init', () => {
                 this.next();
             });
 
+            audio.addEventListener('playing', () => {
+                if (!this._cachePlayCounted && Alpine.store('offline')?.enabled) {
+                    this._cachePlayCounted = true;
+                    Alpine.store('offline').played(this.currentTrack);
+                }
+            });
             audio.addEventListener('play', () => {
                 this.isPlaying = true;
                 if (!this._playbackStartedAt) this._playbackStartedAt = Math.floor(Date.now() / 1000);
@@ -857,6 +890,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _maybePrefetchNext() {
+            if (playerOffline()) return;
             if (this.currentTrack?.podcast) return;
             if (this.progress < 90 || !this.isPlaying) return;
             const queue = Alpine.store('queue');
@@ -876,6 +910,8 @@ document.addEventListener('alpine:init', () => {
         _playLocal(track, options = {}) {
             if (this.currentTrack?.podcast) Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed);
             this._recordHistory('replaced');
+            this._cachePlayCounted = false;
+            this._offlineSession = playerOffline() || !!track.offline_remote;
             this.currentTrack = track;
             this._historyTrack = track;
             this._prefetchedQueueKey = null;
@@ -883,19 +919,12 @@ document.addEventListener('alpine:init', () => {
             this._localSourceTrackId = track.id;
             this._historyRecorded = false;
             this._resetPlaybackTracking();
-            audio.src = track.stream_url;
+            audio.src = playbackSource(track);
             const seekSeconds = Number(options.position_seconds || 0);
             this.currentTime = seekSeconds;
             this.duration = Number(track.duration_seconds || 0);
             this.progress = this.duration > 0 ? seekSeconds / this.duration * 100 : 0;
-            if (seekSeconds > 0) {
-                const onLoaded = () => {
-                    audio.currentTime = seekSeconds;
-                    this._lastAudioTime = audio.currentTime || 0;
-                    audio.removeEventListener('loadedmetadata', onLoaded);
-                };
-                audio.addEventListener('loadedmetadata', onLoaded);
-            }
+            this._seekOnLoad(seekSeconds);
             if (options.paused) {
                 audio.pause();
                 this.isPlaying = false;
@@ -905,9 +934,50 @@ document.addEventListener('alpine:init', () => {
             this._updateMediaSession();
         },
 
+        _seekOnLoad(seconds) {
+            if (this._pendingSeek) audio.removeEventListener('loadedmetadata', this._pendingSeek);
+            this._pendingSeek = null;
+            if (seconds <= 0) return;
+            this._pendingSeek = () => {
+                audio.currentTime = seconds;
+                this._lastAudioTime = audio.currentTime || 0;
+                this._pendingSeek = null;
+            };
+            audio.addEventListener('loadedmetadata', this._pendingSeek, {once:true});
+        },
+
         _pauseLocal() {
             audio.pause();
             this.isPlaying = false;
+        },
+
+        useOfflineCatalog(saved) {
+            const byId = new Map(saved.map(t => [Number(t.id), t]));
+            const byContent = new Map(saved.filter(t => t.content_id).map(t => [t.content_id, t]));
+            const lookup = t => t && (byId.get(OfflineCatalog.trackId(t)) || byContent.get(t.content_id));
+            const queue = Alpine.store('queue');
+            queue.tracks = queue.tracks.map(lookup).filter(Boolean);
+            const previous = this.currentTrack;
+            const cached = lookup(previous);
+            if (cached) {
+                queue.syncCurrentIndexToTrack(cached);
+                if (!this._offlineSession || this._localSourceTrackId !== cached.id) {
+                    const counted = this._cachePlayCounted;
+                    this._playLocal(cached, {paused:!this.isPlaying, position_seconds:this.currentTime});
+                    this._cachePlayCounted = counted;
+                }
+            } else if (previous) {
+                this._offlineSession = true;
+                this._seekOnLoad(0);
+                this._pauseLocal();
+                audio.removeAttribute('src');
+                audio.load();
+                this.currentTrack = this._historyTrack = this._localSourceTrackId = null;
+                this.currentTime = this.progress = this.duration = 0;
+                if ('mediaSession' in navigator) navigator.mediaSession.metadata = null;
+            }
+            if (!cached) queue.currentIndex = -1;
+            Alpine.store('offline').saveState(this._buildStatePayload(true));
         },
 
         pause() {
@@ -1186,7 +1256,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _devicePlaybackStatePayload() {
-            if (this.currentTrack?.podcast) return null;
+            if (this.currentTrack?.podcast || this._offlineSession) return null;
             const queue = Alpine.store('queue');
             const track = this.currentTrack || queue?.tracks?.[queue.currentIndex] || null;
             if (!track && (!queue || queue.tracks.length === 0)) return null;
@@ -1365,19 +1435,23 @@ document.addEventListener('alpine:init', () => {
             navigator.mediaSession.setActionHandler('seekto', (d) => { if (d.seekTime != null) this.seek(d.seekTime); });
         },
 
-        _buildStatePayload() {
+        _buildStatePayload(forDeviceCache = false) {
             const queue = Alpine.store('queue');
-            const localQueue = queue.tracks.filter(track => Number.isInteger(Number(track.id)));
-            const currentLocalId = this.currentTrack && Number.isInteger(Number(this.currentTrack.id))
-                ? Number(this.currentTrack.id)
-                : null;
+            const idFor = track => {
+                if (!track) return null;
+                if (forDeviceCache && globalThis.OfflineCatalog) return OfflineCatalog.trackId(track);
+                return !track.offline_remote && Number.isInteger(Number(track.id)) ? Number(track.id) : null;
+            };
+            const ids = queue.tracks.map(idFor).filter(id => id !== null);
+            const currentLocalId = idFor(this.currentTrack);
+            if (forDeviceCache && currentLocalId !== null && !ids.includes(currentLocalId)) ids.unshift(currentLocalId);
             return {
                 current_track_id: currentLocalId,
                 position_ms: Math.floor(this.currentTime * 1000),
-                queue: localQueue.map(track => Number(track.id)),
+                queue: ids,
                 queue_position: currentLocalId == null
                     ? 0
-                    : Math.max(0, localQueue.findIndex(track => Number(track.id) === currentLocalId)),
+                    : Math.max(0, ids.indexOf(currentLocalId)),
                 shuffle: this.shuffle,
                 repeat_mode: this.repeatMode,
                 volume: this.volume,
@@ -1385,6 +1459,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         _saveState() {
+            if (!GUEST && this.currentTrack && Alpine.store('offline')?.enabled) Alpine.store('offline').saveState(this._buildStatePayload(true));
+            if (playerOffline() || this._offlineSession) return;
             if (this.currentTrack?.podcast) { Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed); return; }
             if (GUEST) return;
             const queue = Alpine.store('queue');
@@ -1398,6 +1474,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         _saveStateSync() {
+            if (!GUEST && this.currentTrack && Alpine.store('offline')?.enabled) Alpine.store('offline').saveState(this._buildStatePayload(true));
+            if (playerOffline() || this._offlineSession) return;
             if (this.currentTrack?.podcast) { Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed, true); return; }
             if (GUEST) return;
             const queue = Alpine.store('queue');
@@ -1410,9 +1488,15 @@ document.addEventListener('alpine:init', () => {
         async _restoreState() {
             if (GUEST) return;
             try {
-                const res = await fetch('/api/player/state');
-                if (!res.ok) return;
-                const state = await res.json();
+                const offline = playerOffline();
+                const initialTrack = this.currentTrack;
+                let state;
+                if (offline) state = Alpine.store('offline').state();
+                else {
+                    const res = await fetch('/api/player/state');
+                    if (!res.ok || playerOffline()) return;
+                    state = await res.json();
+                }
                 this.shuffle = state.shuffle || false;
                 this.repeatMode = state.repeat_mode || 'off';
                 this._setVolumeLocal(typeof state.volume === 'number' ? state.volume : 0.7);
@@ -1427,6 +1511,7 @@ document.addEventListener('alpine:init', () => {
                         });
                         if (tracksRes.ok) {
                             const tracks = await tracksRes.json();
+                            if (playerOffline() !== offline || this.currentTrack !== initialTrack) return;
                             if (tracks.length > 0) {
                                 const queue = Alpine.store('queue');
                                 queue.tracks = tracks;
@@ -1440,20 +1525,15 @@ document.addEventListener('alpine:init', () => {
                                 if (currentTrack) {
                                     this.currentTrack = currentTrack;
                                     this._historyTrack = currentTrack;
+                                    this._offlineSession = offline;
+                                    this._cachePlayCounted = false;
                                     queue.syncCurrentIndexToTrack(currentTrack);
                                     this._localSourceTrackId = currentTrack.id;
                                     this._historyRecorded = false;
                                     this._resetPlaybackTracking();
-                                    audio.src = currentTrack.stream_url;
+                                    audio.src = playbackSource(currentTrack);
                                     // Seek to saved position once metadata is loaded
-                                    const seekMs = state.position_ms || 0;
-                                    if (seekMs > 0) {
-                                        const onLoaded = () => {
-                                            audio.currentTime = seekMs / 1000;
-                                            audio.removeEventListener('loadedmetadata', onLoaded);
-                                        };
-                                        audio.addEventListener('loadedmetadata', onLoaded);
-                                    }
+                                    this._seekOnLoad((state.position_ms || 0) / 1000);
                                     this._updateMediaSession();
                                 }
                             }
@@ -1464,7 +1544,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _recordHistory(endedReason, unloading = false) {
-            if (GUEST) return;
+            if (GUEST || playerOffline() || this._offlineSession) return;
             const track = this._historyTrack;
             if (this._historyRecorded || !track || !this._playbackStartedAt) return;
             if (!Number.isInteger(Number(track.id)) || track.federated_cache) return;
@@ -1486,6 +1566,7 @@ document.addEventListener('alpine:init', () => {
             // Retry the captured event, never the next track. The server deduplicates by listen_id.
             const send = async () => {
                 for (let attempt = 0; attempt < 3; attempt++) {
+                    if (playerOffline()) return;
                     try {
                         const response = await fetch('/api/player/history', {
                             method: 'POST', headers: {'Content-Type':'application/json'}, body, keepalive: true,
@@ -1547,6 +1628,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _sendNowPlaying() {
+            if (playerOffline() || this._offlineSession) return;
             if (GUEST) return;
             if (this._nowPlayingSent || !this.currentTrack) return;
             if (!Number.isInteger(Number(this.currentTrack.id)) || this.currentTrack.federated_cache) {
@@ -1635,6 +1717,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async heartbeat() {
+            if (playerOffline()) return;
             try {
                 const res = await fetch('/api/player/devices/heartbeat', {
                     method: 'POST',
@@ -1647,6 +1730,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async poll() {
+            if (playerOffline()) return;
             try {
                 const res = await fetch('/api/player/devices/poll', {
                     method: 'POST',
@@ -1655,6 +1739,7 @@ document.addEventListener('alpine:init', () => {
                 });
                 if (!res.ok) return;
                 const data = await res.json();
+                if (playerOffline()) return;
                 if (data.playback_state) this._lastPlaybackState = data.playback_state;
                 this._apply(data);
                 if (this.open || (++this._fedRefreshTick % 10 === 0)) {
@@ -1680,6 +1765,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _apply(data) {
+            if (playerOffline()) return;
             const previousJamId = this.currentJamId;
             this.activeDeviceId = data.active_device_id || null;
             this.devices = Array.isArray(data.devices) ? data.devices : [];
@@ -1748,6 +1834,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         hasJoinedJam() {
+            if (playerOffline()) return false;
             return this.jams.some(jam => jam.is_member);
         },
 
@@ -1784,6 +1871,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         shouldPlayJamLocally() {
+            if (playerOffline()) return false;
             return this.jamLocalPlayback && this.canPlayJamLocally();
         },
 
@@ -1814,7 +1902,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         isActive() {
-            if (GUEST) return true;
+            if (GUEST || playerOffline()) return true;
             if (this.isControllingRemoteJam()) return false;
             return !this.activeDeviceId || this.activeDeviceId === this.id;
         },
@@ -1859,6 +1947,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async loadFedDevices() {
+            if (playerOffline()) return;
             try {
                 const res = await fetch('/api/player/fed-devices');
                 if (!res.ok) {
@@ -2658,6 +2747,10 @@ document.addEventListener('alpine:init', () => {
             if (GUEST) return;
             if (this._hashNav) return;
             const hash = location.hash || '#artists';
+            if (playerOffline() && (/^#(?:listening|podcasts?|artistfed|releasefed|similar|share)(?:[/?]|$)/.test(hash) ||
+                (hash.startsWith('#search?') && new URLSearchParams(hash.slice(8)).get('mode') === 'lyrics'))) {
+                return this.openCollectionView('offline_unavailable', hash, options);
+            }
             const listening = hash.match(/^#listening(?:\/(history))?(?:\?(.*))?$/);
             if (listening) {
                 return this.openListening(listening[1] || 'overview', {
@@ -2903,7 +2996,9 @@ document.addEventListener('alpine:init', () => {
                 if (version !== this._navigationVersion) return;
                 this.currentArtist = artist;
                 this.startArtistFederation(this.currentArtist.name);
-            } catch {}
+            } catch {
+                if (playerOffline() && version === this._navigationVersion) this.view = 'offline_unavailable';
+            }
             if (version === this._navigationVersion) this._afterNavigation(options);
         },
 
@@ -2984,6 +3079,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         startArtistFederation(name) {
+            if (playerOffline()) return;
             this.artistFederation = { loading: true, error: '', releases: [], tracks: [] };
             const source = new EventSource(
                 `/api/player/federation/artists/events?name=${encodeURIComponent(name)}`
@@ -3359,7 +3455,10 @@ document.addEventListener('alpine:init', () => {
                 }
                 this.startReleaseFederation(this.currentRelease);
             } catch {
-                if (version === this._navigationVersion) this.releaseUnavailable = true;
+                if (version === this._navigationVersion) {
+                    this.releaseUnavailable = true;
+                    if (playerOffline()) this.view = 'offline_unavailable';
+                }
             }
             if (version === this._navigationVersion) this._afterNavigation(options);
         },
@@ -3396,6 +3495,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         startReleaseFederation(release) {
+            if (playerOffline()) return;
             const artistName = release?.artists?.[0]?.name;
             const artists = (release?.artists || []).map(artist => artist.name);
             const key = release?.federationRelease?.key ||
@@ -3516,6 +3616,7 @@ document.addEventListener('alpine:init', () => {
                 }
                 this.currentPlaylist = playlist;
                 if (navigation) this._afterNavigation(navigation);
+                if (playerOffline()) return;
                 const federationResponse = await fetch(`/api/player/playlists/${id}/federation-tracks`);
                 if (federationResponse.ok) {
                     const references = await federationResponse.json();
@@ -3537,7 +3638,10 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
             } catch {
-                if (current() && navigation && !this.currentPlaylist) this._afterNavigation(navigation);
+                if (current() && navigation && !this.currentPlaylist) {
+                    if (playerOffline()) this.view = 'offline_unavailable';
+                    this._afterNavigation(navigation);
+                }
             }
         },
 
@@ -3824,6 +3928,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         startFederationSearch(query) {
+            if (playerOffline()) { this.stopFederationSearch(); return; }
             this._cancelFederationSearch?.();
             this.unifiedSearch = { artists: [], releases: [], tracks: [], podcasts: [] };
             this.failedFederationArtwork = new Set();
@@ -6932,6 +7037,34 @@ document.addEventListener('alpine:init', () => {
             this.picker = null;
         },
     });
+
+    let catalogRevision = 0;
+    async function refreshCatalog() {
+        const version = ++catalogRevision;
+        const library = Alpine.store('library'), offline = Alpine.store('offline');
+        library.cancelPendingSearch();
+        library.stopFederationSearch();
+        library.stopArtistFederation();
+        library.stopReleaseFederation();
+        library._resetArtistList('all');
+        library._hashNav = false;
+        if (offline.active) {
+            library.searchMode = 'normal';
+            Alpine.store('playlists').stopEdit();
+        }
+        library._navigateFromHash({fromHash:true});
+        for (const name of ['playlists','likes','follows','pins']) Alpine.store(name)?.reload();
+        if (offline.active) {
+            await offline.refresh();
+            if (offline.active && catalogRevision === version) Alpine.store('player').useOfflineCatalog(offline.items);
+        } else {
+            Alpine.store('devices').heartbeat();
+            Alpine.store('devices').poll();
+            Alpine.store('user').loadLastfm();
+        }
+    }
+    window.addEventListener('furumusic:offline-mode', refreshCatalog);
+    window.addEventListener('furumusic:offline-catalog', refreshCatalog);
 });
 
 function installConnectionFetchMonitor() {
@@ -6943,7 +7076,8 @@ function installConnectionFetchMonitor() {
         const tracked = isTrackedPlayerRequest(args[0]);
         try {
             const response = await nativeFetch(...args);
-            if (tracked) {
+            if (tracked && !playerOffline()) {
+                Alpine.store('offline')?.networkResult(response.status < 500);
                 if (response.status >= 500) {
                     Alpine.store('connection')?.recordFailure();
                 } else {
@@ -6952,7 +7086,10 @@ function installConnectionFetchMonitor() {
             }
             return response;
         } catch (error) {
-            if (tracked) Alpine.store('connection')?.recordFailure();
+            if (tracked && !playerOffline() && error?.name !== 'AbortError') {
+                Alpine.store('connection')?.recordFailure();
+                Alpine.store('offline')?.networkResult(false);
+            }
             throw error;
         }
     };

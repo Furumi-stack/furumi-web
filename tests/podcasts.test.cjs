@@ -113,7 +113,7 @@ test('hash routing restores both the podcast list and a selected podcast',()=>{
     const script=readFileSync(`${__dirname}/../templates/player/scripts.html`,'utf8');
     const start=script.indexOf('        _navigateFromHash(options = {}) {');const end=script.indexOf('        _scrollElement()',start);
     const calls=[],location={hash:'#podcasts'};
-    const context=vm.createContext({GUEST:false,location,URLSearchParams,Alpine:{store(){return {enter(options){calls.push(['list',options]);},open(id,options){calls.push(['detail',id,options]);}};}}});
+    const context=vm.createContext({GUEST:false,playerOffline:()=>false,location,URLSearchParams,Alpine:{store(){return {enter(options){calls.push(['list',options]);},open(id,options){calls.push(['detail',id,options]);}};}}});
     const library=vm.runInContext('({'+script.slice(start,end)+'})',context);library.goArtists=()=>{throw Error('unexpected artist navigation');};
     library._navigateFromHash({fromHash:true});assert.equal(calls[0][0],'list');assert.equal(calls[0][1].fromHash,true);
     location.hash='#podcast?id='+encodeURIComponent('pod1:fixture');library._navigateFromHash({fromHash:true});

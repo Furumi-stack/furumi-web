@@ -74,15 +74,29 @@ fn authenticated_user_from_user(user: User) -> Option<AuthenticatedUser> {
 
 /// Return the signed-in identity, including an account awaiting approval.
 pub async fn get_session_identity(session: &Session, db: &Database) -> Option<User> {
-    let user_id: i64 = session.get(SESSION_USER_ID).await.ok()??;
-    User::get_by_id(db, user_id).await.ok()?
+    checked_session_identity(session, db).await.ok().flatten()
+}
+
+/// Offline-capable routes must distinguish an expired login from a storage outage.
+pub(crate) async fn checked_session_identity(
+    session: &Session,
+    db: &Database,
+) -> cot::Result<Option<User>> {
+    let Some(user_id) = session
+        .get::<i64>(SESSION_USER_ID)
+        .await
+        .map_err(cot::Error::internal)?
+    else {
+        return Ok(None);
+    };
+    Ok(User::get_by_id(db, user_id).await?)
 }
 
 /// Return a session user only when access to the instance has been granted.
 pub async fn get_session_user(session: &Session, db: &Database) -> Option<AuthenticatedUser> {
-    let user_id: i64 = session.get(SESSION_USER_ID).await.ok()??;
-    let user = User::get_by_id(db, user_id).await.ok()??;
-    authenticated_user_from_user(user)
+    get_session_identity(session, db)
+        .await
+        .and_then(authenticated_user_from_user)
 }
 
 // ---------------------------------------------------------------------------

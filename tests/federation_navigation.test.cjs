@@ -21,7 +21,7 @@ function setup(hash, fetch) {
         close() { this.closed = true; }
     }
     vm.runInNewContext(librarySource, {
-        location, fetch, EventSource, GUEST: false, URLSearchParams, clearTimeout, setTimeout,
+        location, fetch, EventSource, GUEST: false, playerOffline: () => false, URLSearchParams, clearTimeout, setTimeout,
         Alpine: { store(_name, value) { library = value; } },
         history: { replaceState(_state, _title, url) { location.hash = url; replacements.push(url); } },
     });

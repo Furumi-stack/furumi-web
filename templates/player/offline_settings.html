@@ -1,0 +1,64 @@
+<section class="user-settings-section offline-settings" aria-labelledby="offline-settings-title" @keydown.space.stop
+         x-data="{
+             get offline() { return $store.offline }, min: 100000000, max: 512000000000, draft: null, visibleTracks: 30,
+             marks: [100000000,1000000000,10000000000,100000000000,512000000000],
+             position(bytes) { return 100 * Math.log(Math.max(this.min, bytes) / this.min) / Math.log(this.max / this.min) },
+             bytesAt(position) {
+                 const bytes = this.min * Math.pow(this.max / this.min, Number(position) / 100);
+                 return Math.min(this.max, Math.max(this.min, Math.round(bytes)));
+             }
+         }">
+    <div class="user-settings-section-head">
+        <h4 id="offline-settings-title" tabindex="-1">{{ t.player_offline_listening }}</h4>
+        <button type="button" class="offline-switch-row" role="switch" aria-label="{{ t.player_offline_enable }}"
+                :aria-checked="offline.enabled" :disabled="offline.busy || (!offline.supported && !offline.enabled)"
+                @click="offline.setEnabled(!offline.enabled)">
+            <span class="offline-switch" aria-hidden="true"></span>
+        </button>
+    </div>
+    <p role="status" x-text="offline.busy && !offline.enabled ? '{{ t.player_offline_preparing }}' : offline.supported ? '{{ t.player_offline_hint }}' : '{{ t.player_offline_unsupported }}'"></p>
+    <div class="offline-limit" x-show="offline.enabled" x-cloak>
+        <div class="offline-limit-label">
+            <label for="offline-limit">{{ t.player_offline_limit }}</label>
+            <output for="offline-limit" x-text="offline.formatBytes(draft ?? offline.limitBytes)"></output>
+        </div>
+        <div class="offline-scale">
+            <div class="offline-scale-marks" aria-hidden="true">
+                <template x-for="mark in marks" :key="mark">
+                    <span :style="{left: position(mark) + '%'}" x-text="offline.formatBytes(mark)"></span>
+                </template>
+            </div>
+            <input id="offline-limit" type="range" min="0" max="100" step="0.5"
+                   :value="position(offline.limitBytes)" :aria-valuetext="offline.formatBytes(draft ?? offline.limitBytes)"
+                   @input="draft = bytesAt($el.value)" @change="offline.setLimit(bytesAt($el.value)); draft = null">
+        </div>
+    </div>
+    <p role="status" x-show="offline.saving" x-cloak>{{ t.player_offline_saving }}</p>
+    <p class="offline-error" role="alert" x-show="offline.error" x-text="offline.error"></p>
+    <template x-if="offline.enabled || offline.items.length">
+        <div class="offline-saved">
+            <div class="offline-saved-summary">
+                <div><strong>{{ t.player_offline_saved }}</strong>
+                    <small x-text="formatArtistCount(offline.items.length, 'tracks') + ' · ' + offline.formatBytes(offline.bytes)"></small>
+                </div>
+                <button type="button" class="offline-manage" x-show="offline.items.length" :disabled="offline.busy"
+                        @click="if (window.confirm('{{ t.player_offline_confirm_clear }}')) offline.clearCache()">{{ t.player_offline_clear }}</button>
+            </div>
+            <p x-show="!offline.items.length">{{ t.player_offline_empty }}</p>
+            <ul class="offline-saved-list" x-show="offline.items.length" aria-label="{{ t.player_offline_saved }}">
+                <template x-for="track in offline.items.slice(0, visibleTracks)" :key="track.id">
+                    <li><div><strong x-text="track.title"></strong><small x-text="track.artist"></small></div>
+                        <span class="offline-track-size" x-text="offline.formatBytes(track.bytes)"></span>
+                        <button type="button" :disabled="offline.busy"
+                                :aria-label="'{{ t.player_offline_remove }} · ' + track.title" title="{{ t.player_offline_remove }}"
+                                @click="offline.removeTrack(track.id)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>
+                        </button>
+                    </li>
+                </template>
+            </ul>
+            <button type="button" class="offline-manage" x-show="offline.items.length > visibleTracks"
+                    @click="visibleTracks += 30">{{ t.player_offline_show_more }}</button>
+        </div>
+    </template>
+</section>

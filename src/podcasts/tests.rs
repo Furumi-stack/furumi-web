@@ -21,6 +21,7 @@ fn renders_podcast_navigation_and_views() {
     let html = crate::player::PlayerPageTemplate {
         t: crate::i18n::Translations::for_lang(crate::i18n::Lang::En),
         guest: false,
+        account_id: 1,
         share_token: String::new(),
         downloads_enabled: true,
         torrent_downloads_enabled: true,

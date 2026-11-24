@@ -7,7 +7,7 @@ function player(fetchImpl = async () => ({ok:true}), beacon = () => true, guest 
     // Exercise the production methods with audio and network stubs.
     const methods = template.slice(template.indexOf('        _recordHistory(endedReason'), template.indexOf('        _sendNowPlaying()'));
     const audio = {currentTime:60};
-    const context = vm.createContext({GUEST:guest, audio, fetch:fetchImpl, navigator:{sendBeacon:beacon}, Blob,
+    const context = vm.createContext({GUEST:guest, playerOffline:() => false, audio, fetch:fetchImpl, navigator:{sendBeacon:beacon}, Blob,
         globalThis:{crypto:{randomUUID:()=> 'uuid'}}, setTimeout: fn => { fn(); }, console});
     vm.runInContext('this.methods = {' + methods + '};', context);
     return Object.assign(context.methods, {
@@ -17,6 +17,18 @@ function player(fetchImpl = async () => ({ok:true}), beacon = () => true, guest 
     });
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('an offline listening session stays local after the server returns', async () => {
+    const calls = [];
+    const p = player(async (_, request) => { calls.push(request); return {ok:true}; });
+    p._offlineSession = true;
+    p._recordHistory('finished');
+    await flush();
+    assert.equal(calls.length, 0);
+    p._offlineSession = false;
+    p._recordHistory('finished');
+    await flush();
+    assert.equal(calls.length, 1);
+});
 test('switching tracks records short sessions, and completion is not counted twice', async () => {
     const calls=[]; const p=player(async (_url, options)=> {calls.push(JSON.parse(options.body)); return {ok:true};});
     p._listenedSeconds=8; p._recordHistory('replaced'); await flush();
