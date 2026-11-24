@@ -8,14 +8,20 @@
 
     {% if !guest && share_token.is_empty() %}
     <div class="offline-status-banner" role="status" aria-atomic="true"
-         :title="$store.offline.manual ? '{{ t.player_offline_mode }}' : '{{ t.player_offline_auto }}'">
+         title="{{ t.player_offline_saved_only }}">
         <div class="offline-status-clip">
             <div class="offline-status-content">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m3 3 18 18M7.1 7.1A7 7 0 0 0 5 12a4 4 0 0 0 0 8h12M10.2 5.2A7 7 0 0 1 19 11a4.5 4.5 0 0 1 2.5 7.4"/>
+                    <g x-show="$store.offline.manual">
+                        <rect x="2" y="6" width="20" height="12" rx="6"/><circle cx="15.5" cy="12" r="3" fill="currentColor" stroke="none"/>
+                    </g>
+                    <g x-show="!$store.offline.manual" transform="rotate(-35 12 12)">
+                        <path d="M1 12h2m3-3h2v6H6a3 3 0 0 1 0-6ZM8 10.5h3m-3 3h3M15 9h3a3 3 0 0 1 0 6h-3ZM21 12h2"/>
+                    </g>
                 </svg>
                 <strong>{{ t.player_offline_manual }}</strong>
-                <span>{{ t.player_offline_saved_only }}</span>
+                <span class="offline-status-reason" x-text="$store.offline.manual ? '{{ t.player_offline_manual_reason }}' : '{{ t.player_offline_auto_reason }}'"></span>
+                <span class="offline-status-note">{{ t.player_offline_saved_only }}</span>
             </div>
         </div>
     </div>

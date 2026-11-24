@@ -257,12 +257,17 @@ async function checkOfflineControls(page, trigger, panel) {
     assert.ok(await panel.isVisible());
     const banner = page.locator('.offline-status-banner');
     assert.equal(await banner.isVisible(), false);
+    assert.equal(await banner.evaluate(el => el.getBoundingClientRect().height), 0);
     await manual.click();
     assert.equal(await manual.getAttribute('aria-checked'), 'true');
     await banner.getByText('Offline', {exact:true}).waitFor();
+    await banner.getByText('Enabled manually', {exact:true}).waitFor();
+    await banner.evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
     const bounds = await banner.boundingBox();
     assert.equal(bounds.x, 0);
     assert.equal(bounds.width, page.viewportSize().width, 'offline banner spans the player on desktop and mobile');
+    assert.equal(bounds.y, 0);
+    assert.ok(bounds.height >= 28 && bounds.height <= 36, 'the open banner occupies one compact row');
     assert.ok(await panel.isVisible(), 'toggling saved music keeps the menu open');
     assert.equal(await panel.getByRole('link', {name:'My listening'}).isVisible(), false);
     assert.equal(await panel.getByRole('link', {name:'Followed'}).isVisible(), true);
@@ -273,9 +278,11 @@ async function checkOfflineControls(page, trigger, panel) {
     await page.locator('.device-toggle-btn:visible').click();
     assert.equal((await page.locator('.device-popover:visible').innerText()).trim(), 'Devices are unavailable offline.');
     await page.locator('.device-toggle-btn:visible').click();
-    await page.evaluate(() => { Alpine.store('offline').manual = false; });
+    await page.evaluate(() => Object.assign(Alpine.store('offline'), {manual:false, automatic:true}));
     await trigger.click();
     await panel.getByText('Offline · automatic').waitFor();
+    await banner.getByText('Server unreachable', {exact:true}).waitFor();
+    assert.equal(await banner.getByText('Enabled manually', {exact:true}).isVisible(), false);
     assert.ok(await banner.isVisible());
     assert.equal(await manual.getAttribute('aria-checked'), 'false');
     await page.evaluate(() => {

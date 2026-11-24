@@ -86,7 +86,9 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 }
 .offline-status-content svg {width:16px; height:16px; flex:none}
 .offline-status-content strong {font-size:13px; font-weight:650}
-.offline-status-content span {padding-inline-start:9px; border-inline-start:1px solid #d8c79440; color:var(--text-secondary)}
+.offline-status-reason {color:#cec5b1}
+.offline-status-note {padding-inline-start:9px; border-inline-start:1px solid #d8c79440; color:var(--text-secondary)}
+@media (max-width:480px) { .offline-status-note {display:none} }
 .offline-devices-note {padding:9px; color:var(--text-secondary); font-size:13px}
 @media (min-width:601px) {
     .offline-preferences.cache-disabled .offline-preferences-main {grid-area:1 / 1 / 2 / -1}
