@@ -3,6 +3,7 @@ use anyhow::Result;
 use music_dht::lyrics::{LyricsVersion, MAX_LYRICS_VERSIONS};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+mod model_files;
 pub mod search;
 
 #[derive(Debug, Serialize)]

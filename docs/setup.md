@@ -32,7 +32,9 @@ cargo run --locked
 
 The repository also contains a multi-stage `Dockerfile` for building a small
 runtime image. A deployment must provide PostgreSQL plus persistent, writable
-volumes for the inbox and music library.
+volumes for the inbox and music library. Mount a writable volume at
+`/data/similarity-models` to reuse downloaded audio and lyrics models when
+replacing the container.
 
 ## Configuration
 

@@ -1045,7 +1045,7 @@
                             </div>
                             <div class="setting-toggle">
                                 <label class="setting-toggle-row"><span>Index lyrics for local semantic search</span><input type="checkbox" x-model="settingsDraft.lyrics_indexing_enabled" /></label>
-                                <div class="setting-help">All saved versions and translations are indexed locally. Disabling pauses new embeddings; saved vectors and text search remain available. No lyrics or queries leave this instance.</div>
+                                <div class="setting-help">Enabling indexing downloads the model once (487 MB) from Hugging Face. All lyrics versions and queries are processed locally. Turning indexing off keeps the model and existing index.</div>
                                 <span class="source-pill" :class="sourceClass('lyrics_indexing_enabled')" x-text="settingSource('lyrics_indexing_enabled')"></span>
                             </div>
                             <div class="lyrics-search-status" aria-live="polite">

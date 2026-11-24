@@ -2,7 +2,7 @@ use super::*;
 use sqlx::Connection;
 
 #[test]
-#[ignore = "requires bundled E5 and the fixture prepared by tests/lyrics_rank_corpus.py"]
+#[ignore = "requires cached E5 and the fixture prepared by tests/lyrics_rank_corpus.py"]
 fn lyrics_ranking_quality() {
     use std::collections::BTreeMap;
     #[derive(serde::Deserialize)]
@@ -43,7 +43,7 @@ fn lyrics_ranking_quality() {
         );
     }
 
-    let mut model = load_model().unwrap();
+    let mut model = load_model(&crate::lyrics::model_files::directory()).unwrap();
     let (hashes, inputs): (Vec<_>, Vec<_>) = passages.into_iter().unzip();
     println!(
         "{} documents, {} chunks, {} queries",
@@ -86,20 +86,29 @@ fn lyrics_ranking_quality() {
 }
 
 fn manager() -> Arc<Manager> {
-    Arc::new(Manager {
-        enabled: AtomicBool::new(true),
-        corpus: RwLock::new(Arc::new(Corpus::default())),
-        refresh_lock: AsyncMutex::new(()),
-        model: Mutex::new(None),
-        model_retry: Mutex::new(None),
-        status: RwLock::new(Status::default()),
-        query_slots: Semaphore::new(2),
-        pending: Mutex::new(VecDeque::new()),
-    })
+    Arc::new(Manager::default())
 }
 
 #[tokio::test]
-#[ignore = "requires disposable PostgreSQL and bundled E5 model"]
+async fn search_during_model_preparation_falls_back_without_opening_a_model() {
+    let manager = manager();
+    let error = manager.embed(vec!["query: snow".into()]).await.unwrap_err();
+    assert!(error.to_string().contains("not ready"));
+    assert!(manager.model_dir.get().is_none());
+}
+
+#[test]
+fn delayed_database_setting_cannot_restart_an_index_disabled_by_the_admin() {
+    let manager = manager();
+    let snapshot = manager.enabled.subscribe();
+    manager.set_enabled(false, None);
+    assert!(!manager.set_enabled(true, Some(&snapshot)));
+    assert!(!manager.status().enabled);
+    assert_eq!(manager.status().phase, "paused");
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and cached E5 model"]
 async fn postgres_index_restart_edits_visibility_and_translations() {
     let url = std::env::var("FURU_LYRICS_TEST_DATABASE_URL").unwrap();
     let mut admin = sqlx::PgConnection::connect(&url).await.unwrap();
@@ -125,7 +134,9 @@ async fn postgres_index_restart_edits_visibility_and_translations() {
         .connect(&url)
         .await
         .unwrap();
-    sqlx::raw_sql("CREATE TABLE furumusic__release(id BIGINT PRIMARY KEY,is_hidden BOOLEAN NOT NULL DEFAULT false);
+    sqlx::raw_sql("CREATE TABLE furumusic__config_entry(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO furumusic__config_entry VALUES ('lyrics_indexing_enabled', 'false');
+        CREATE TABLE furumusic__release(id BIGINT PRIMARY KEY,is_hidden BOOLEAN NOT NULL DEFAULT false);
         CREATE TABLE furumusic__media_file(id BIGINT PRIMARY KEY,sha256_hash TEXT NOT NULL);
         CREATE TABLE furumusic__track(id BIGINT PRIMARY KEY,release_id BIGINT,audio_file_id BIGINT,is_hidden BOOLEAN NOT NULL DEFAULT false);
         INSERT INTO furumusic__release(id) VALUES(1);
@@ -139,6 +150,31 @@ async fn postgres_index_restart_edits_visibility_and_translations() {
         .execute(&pool)
         .await
         .unwrap();
+    let first = manager();
+    let mut settings = first.enabled.subscribe();
+    let config = crate::config::AppConfig::default();
+    first
+        .worker_step(&pool, &config, &mut settings)
+        .await
+        .unwrap();
+    assert!(
+        first.model_dir.get().is_none(),
+        "honour a persisted pause at startup"
+    );
+    sqlx::query(
+        "UPDATE furumusic__config_entry SET value='true' WHERE key='lyrics_indexing_enabled'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    first
+        .worker_step(&pool, &config, &mut settings)
+        .await
+        .unwrap();
+    assert!(
+        first.model_dir.get().is_some(),
+        "prepare the model even with no lyrics yet"
+    );
     for (hash, id, plain, lrc) in [
         (
             "first",
@@ -167,7 +203,7 @@ async fn postgres_index_restart_edits_visibility_and_translations() {
     ] {
         sqlx::query("INSERT INTO furumusic__lyrics(audio_sha256,id,label,source,plain_text,synced_lrc) VALUES($1,$2,$2,'manual',$3,$4)").bind(hash).bind(id).bind(plain).bind(lrc).execute(&pool).await.unwrap();
     }
-    let first = manager();
+    first.refresh(&pool, true).await.unwrap();
     let lexical = first
         .search(&pool, "просыпется снег на могилы", 10)
         .await
@@ -202,7 +238,7 @@ async fn postgres_index_restart_edits_visibility_and_translations() {
         restarted.pending.lock().unwrap().is_empty(),
         "restart does not schedule cached fragments"
     );
-    restarted.enabled.store(false, Ordering::Release);
+    restarted.enabled.send_replace(false);
     let semantic = restarted
         .search(&pool, "snow covering a cemetery, spring never comes", 10)
         .await

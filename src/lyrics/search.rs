@@ -8,13 +8,11 @@ use serde::Serialize;
 use sqlx::{PgPool, Row};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio::sync::{Mutex as AsyncMutex, OnceCell, Semaphore, watch};
 use unicode_normalization::UnicodeNormalization;
 
 #[cfg(test)]
@@ -81,10 +79,11 @@ struct Corpus {
     refreshed: Option<Instant>,
 }
 pub struct Manager {
-    enabled: AtomicBool,
+    enabled: watch::Sender<bool>,
     corpus: RwLock<Arc<Corpus>>,
     refresh_lock: AsyncMutex<()>,
     model: Mutex<Option<TextEmbedding>>,
+    model_dir: OnceCell<PathBuf>,
     model_retry: Mutex<Option<Instant>>,
     status: RwLock<Status>,
     query_slots: Semaphore,
@@ -92,18 +91,22 @@ pub struct Manager {
 }
 pub fn handle() -> &'static Arc<Manager> {
     static HANDLE: OnceLock<Arc<Manager>> = OnceLock::new();
-    HANDLE.get_or_init(|| {
-        Arc::new(Manager {
-            enabled: AtomicBool::new(true),
+    HANDLE.get_or_init(|| Arc::new(Manager::default()))
+}
+impl Default for Manager {
+    fn default() -> Self {
+        Self {
+            enabled: watch::channel(true).0,
             corpus: RwLock::new(Arc::new(Corpus::default())),
             refresh_lock: AsyncMutex::new(()),
             model: Mutex::new(None),
+            model_dir: OnceCell::new(),
             model_retry: Mutex::new(None),
             status: RwLock::new(Status::default()),
             query_slots: Semaphore::new(2),
             pending: Mutex::new(VecDeque::new()),
-        })
-    })
+        }
+    }
 }
 impl Manager {
     pub fn status(&self) -> Status {
@@ -113,18 +116,29 @@ impl Manager {
             .clone()
     }
     pub fn apply(&self, config: &crate::config::AppConfig) {
-        self.enabled
-            .store(config.lyrics_indexing_enabled, Ordering::Release);
+        self.set_enabled(config.lyrics_indexing_enabled, None);
+    }
+    fn set_enabled(&self, enabled: bool, snapshot: Option<&watch::Receiver<bool>>) -> bool {
         let mut status = self.status.write().unwrap_or_else(|e| e.into_inner());
-        status.enabled = config.lyrics_indexing_enabled;
+        // A DB read started before an admin update must not undo that update.
+        if snapshot.is_some_and(|s| s.has_changed().unwrap_or(false)) {
+            return false;
+        }
+        self.enabled.send_if_modified(|old| {
+            let changed = *old != enabled;
+            *old = enabled;
+            changed
+        });
+        status.enabled = enabled;
         if !status.enabled {
             status.phase = "paused".into();
+            status.last_error = None;
         } else if status.phase == "paused" {
             status.phase = "indexing".into();
         }
+        true
     }
     pub async fn boot(self: &Arc<Self>, config: &crate::config::AppConfig) {
-        self.apply(config);
         if config.database_url.trim().is_empty() {
             return;
         }
@@ -141,42 +155,74 @@ impl Manager {
                 }
             }
         };
+        let mut settings = self.enabled.subscribe();
         loop {
-            // Database overrides also apply on restart. Environment always wins.
-            if let Ok(Some(value)) = sqlx::query_scalar::<_, String>(
-                "SELECT value FROM furumusic__config_entry WHERE key='lyrics_indexing_enabled'",
-            )
-            .fetch_optional(&pool)
-            .await
-            {
-                let mut effective = config.clone();
-                if let Ok(value) = value.parse() {
-                    effective.lyrics_indexing_enabled = value;
+            let delay = match self.worker_step(&pool, config, &mut settings).await {
+                Ok(delay) => delay,
+                Err(error) => {
+                    self.error(format!("{error:#}"));
+                    Duration::from_secs(30)
                 }
-                effective.apply_env_overrides();
-                self.apply(&effective);
+            };
+            tokio::select! {
+                _ = settings.changed() => (),
+                _ = tokio::time::sleep(delay) => (),
             }
-            match self.refresh(&pool, false).await {
-                Ok(()) => {
-                    if self.enabled.load(Ordering::Acquire) {
-                        if let Err(error) = self.index_batch(&pool).await {
-                            self.error(format!("{error:#}"));
-                            tokio::time::sleep(Duration::from_secs(30)).await;
-                        } else if !self
-                            .pending
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .is_empty()
-                        {
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            continue;
-                        }
-                    }
-                }
-                Err(error) => self.error(format!("{error:#}")),
-            }
-            tokio::time::sleep(Duration::from_secs(30)).await;
         }
+    }
+
+    async fn worker_step(
+        self: &Arc<Self>,
+        pool: &PgPool,
+        config: &crate::config::AppConfig,
+        settings: &mut watch::Receiver<bool>,
+    ) -> Result<Duration> {
+        // Read the persisted switch before attempting the first download.
+        settings.borrow_and_update();
+        let value = sqlx::query_scalar::<_, String>(
+            "SELECT value FROM furumusic__config_entry WHERE key='lyrics_indexing_enabled'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        let mut effective = config.clone();
+        if let Some(value) = value.and_then(|v| v.parse().ok()) {
+            effective.lyrics_indexing_enabled = value;
+        }
+        effective.apply_env_overrides();
+        if !self.set_enabled(effective.lyrics_indexing_enabled, Some(settings)) {
+            return Ok(Duration::ZERO);
+        }
+        let enabled = *settings.borrow_and_update();
+        if enabled && self.model_dir.get().is_none() {
+            self.status.write().unwrap_or_else(|e| e.into_inner()).phase = "downloading".into();
+            tokio::select! {
+                biased;
+                _ = settings.changed() => return Ok(Duration::ZERO),
+                result = self.model_dir.get_or_try_init(|| super::model_files::prepare(true)) => { result?; }
+            }
+            *self.model_retry.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            let mut status = self.status.write().unwrap_or_else(|e| e.into_inner());
+            status.last_error = None;
+            status.phase = if status.ready_chunks == status.chunks {
+                "ready"
+            } else {
+                "indexing"
+            }
+            .into();
+        }
+        self.refresh(pool, false).await?;
+        if *self.enabled.borrow() {
+            self.index_batch(pool).await?;
+            if !self
+                .pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+            {
+                return Ok(Duration::from_millis(100));
+            }
+        }
+        Ok(Duration::from_secs(30))
     }
     fn error(&self, error: String) {
         tracing::warn!(%error,"lyrics search");
@@ -286,7 +332,10 @@ impl Manager {
             .len();
         status.ready_chunks = vectors.len();
         status.stored_bytes = status.ready_chunks * DIMENSIONS * 4;
-        status.phase = if !self.enabled.load(Ordering::Acquire) {
+        if status.enabled && self.model_dir.get().is_none() {
+            return;
+        }
+        status.phase = if !status.enabled {
             "paused"
         } else if status.ready_chunks == status.chunks {
             "ready"
@@ -295,22 +344,43 @@ impl Manager {
         }
         .into();
     }
+    fn start_model_attempt(&self) -> Result<()> {
+        let mut retry = self.model_retry.lock().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(
+            !retry.is_some_and(|t| t.elapsed() < Duration::from_secs(60)),
+            "model unavailable; retry in one minute"
+        );
+        *retry = Some(Instant::now());
+        Ok(())
+    }
     async fn embed(self: &Arc<Self>, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        // Search may use an earlier index while indexing is paused. Only the
+        // background worker downloads files; queries never wait for the download.
+        let dir = if let Some(dir) = self.model_dir.get() {
+            dir
+        } else if !*self.enabled.borrow() {
+            self.model_dir
+                .get_or_try_init(|| async {
+                    self.start_model_attempt()?;
+                    let dir = super::model_files::prepare(false).await?;
+                    *self.model_retry.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    Ok::<_, anyhow::Error>(dir)
+                })
+                .await?
+        } else {
+            anyhow::bail!("lyrics model is not ready");
+        }
+        .clone();
         let manager = self.clone();
         tokio::task::spawn_blocking(move || {
             let mut model = manager.model.lock().unwrap_or_else(|e| e.into_inner());
             if model.is_none() {
-                let mut retry = manager
+                manager.start_model_attempt()?;
+                *model = Some(load_model(&dir)?);
+                *manager
                     .model_retry
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                anyhow::ensure!(
-                    !retry.is_some_and(|t| t.elapsed() < Duration::from_secs(60)),
-                    "model unavailable; retry in one minute"
-                );
-                *retry = Some(Instant::now());
-                *model = Some(load_model()?);
-                *retry = None;
+                    .unwrap_or_else(|e| e.into_inner()) = None;
             }
             let output = model
                 .as_mut()
@@ -485,17 +555,10 @@ impl Manager {
     }
 }
 
-fn load_model() -> Result<TextEmbedding> {
-    let dir = std::env::var_os("FURU_LYRICS_MODEL_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "/opt/furumusic/models/multilingual-e5-small".into());
+fn load_model(dir: &Path) -> Result<TextEmbedding> {
     let read = |file: &str| {
-        std::fs::read(dir.join(file)).with_context(|| {
-            format!(
-                "missing bundled model file {} (set FURU_LYRICS_MODEL_DIR for development)",
-                dir.join(file).display()
-            )
-        })
+        std::fs::read(dir.join(file))
+            .with_context(|| format!("reading {}", dir.join(file).display()))
     };
     let files = TokenizerFiles {
         tokenizer_file: read("tokenizer.json")?,
@@ -981,10 +1044,11 @@ mod tests {
         assert!(decode_vector(&[0; 4]).is_none());
         assert!(decode_vector(&vec![0; DIMENSIONS * 4]).is_none());
     }
-    #[test]
-    #[ignore = "requires bundled model; FURU_LYRICS_MODEL_DIR"]
-    fn real_e5_multilingual_retrieval() {
-        let mut model = load_model().unwrap();
+    #[tokio::test]
+    #[ignore = "requires cached E5 model; FURU_LYRICS_MODEL_DIR"]
+    async fn real_e5_multilingual_retrieval() {
+        let dir = crate::lyrics::model_files::prepare(false).await.unwrap();
+        let mut model = load_model(&dir).unwrap();
         let v = model
             .embed(
                 vec![

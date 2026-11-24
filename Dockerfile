@@ -1,7 +1,3 @@
-FROM python:3.13-slim-bookworm AS lyrics-model
-COPY scripts/fetch-lyrics-model.py /fetch-lyrics-model.py
-RUN python /fetch-lyrics-model.py /model
-
 # The prebuilt Linux ONNX Runtime needs Trixie's glibc and libstdc++ at link time and at runtime.
 FROM rust:1.97.0-trixie AS chef
 
@@ -53,7 +49,6 @@ RUN apt-get update \
 WORKDIR /data
 COPY --from=builder /app/target/release/furumusic /usr/local/bin/furumusic
 COPY --from=deno /deno /usr/local/bin/deno
-COPY --from=lyrics-model /model /opt/furumusic/models/multilingual-e5-small
 
 RUN FURU_LOG_LEVEL=error furumusic --version
 

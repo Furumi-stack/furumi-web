@@ -3,7 +3,7 @@
 Download https://raw.githubusercontent.com/IlyaGusev/PoetryCorpus/58a3836e44d243274b41aa956a6b100a9cebf782/datasets/corpus/all.xml
 Run: python tests/lyrics_rank_corpus.py path/to/all.xml target/lyrics-rank-eval.json
 Add --holdout to prepare the independent validation queries instead.
-Set FURU_LYRICS_RANK_EVAL to the output and FURU_LYRICS_MODEL_DIR to the bundled
+Set FURU_LYRICS_RANK_EVAL to the output and FURU_LYRICS_MODEL_DIR to the cached
 model directory, then run: cargo test lyrics_ranking_quality -- --ignored --nocapture
 """
 

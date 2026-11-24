@@ -40,6 +40,7 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3","aac"
 id3 = "1"
 encoding_rs = "0.8"
 sha2 = "0.10"
+tempfile = "3"
 md-5 = "0.10"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }

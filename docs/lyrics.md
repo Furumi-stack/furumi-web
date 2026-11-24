@@ -127,19 +127,21 @@ Source version timestamps and visibility are rechecked before returning tracks,
 so removed or edited text cannot be returned from an older memory snapshot.
 Rolling replicas serialize indexing batches with a PostgreSQL advisory lock.
 
-Inference uses Rust `fastembed`/ONNX Runtime on CPU (two inference threads).
-The official `intfloat/multilingual-e5-small` FP32 ONNX model and tokenizer are
-pinned to revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`, downloaded and
-checksum-verified **during Docker build**, and copied to
-`/opt/furumusic/models/multilingual-e5-small`. Native ONNX Runtime is linked into
-the executable. There are no runtime model downloads or external inference
-services. The model adds about 487 MB of uncompressed artifacts to the image.
-For development:
+When indexing is enabled, Furumusic downloads the official
+`intfloat/multilingual-e5-small` FP32 ONNX model and tokenizer from Hugging Face
+if they are missing (about 487 MB in total). It checks file integrity against
+the pinned revision `614241f622f53c4eeff9890bdc4f31cfecc418b3` and reuses the
+cached files on restart.
+Rust `fastembed` and ONNX Runtime run inference locally on two CPU threads.
+Lyrics and search queries stay on the instance.
 
-```sh
-python scripts/fetch-lyrics-model.py target/lyrics-model
-export FURU_LYRICS_MODEL_DIR="$PWD/target/lyrics-model"
-```
+The default model directory is `similarity-models/multilingual-e5-small` under
+the server's working directory. In Docker, mount a writable volume at
+`/data/similarity-models` to keep both the lyrics and audio models across
+container replacements. Set `FURU_LYRICS_MODEL_DIR` to use another directory
+for the lyrics model. To prepare an instance without internet access, run
+`python scripts/fetch-lyrics-model.py ./multilingual-e5-small` on a connected
+machine and copy that directory into the model cache.
 
 The encoder uses attention-mask mean pooling, L2 normalization and E5's
 `query:` / `passage:` prefixes. Ranking combines inverse-frequency weighted

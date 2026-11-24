@@ -2,5 +2,6 @@
 **/target
 **/.claude
 **/media
+**/similarity-models
 **/NUL
 **/nul

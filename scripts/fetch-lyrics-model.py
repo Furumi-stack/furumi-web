@@ -1,4 +1,4 @@
-"""Build-time only. Pin official E5 artifacts; never fetch models at runtime."""
+"""Pre-populate Furumi's lyrics model directory for installations without internet access."""
 import hashlib
 import pathlib
 import sys
