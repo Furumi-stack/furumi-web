@@ -230,6 +230,7 @@
             if (!url.pathname.startsWith(BASE)) return;
             if (route === 'me' && Number(value.id) === this.account) data = value;
             else if (['likes','follows','pins','state'].includes(route)) data = value;
+            else if (route === 'tracks/content/like' && Array.isArray(value)) data = value;
             else if (route === 'playlists' && Array.isArray(value)) data = value.map(summarizePlaylist);
             else if (/^playlists\/-?\d+$/.test(route) && Array.isArray(value.tracks)) {
                 data = {...summarizePlaylist(value), members:value.tracks.map(t => ({id:t.id, content_id:t.content_id,
@@ -556,24 +557,46 @@
             this._catalog = {tracks, artists, artistCards, releases, releaseCards:[...releases.values()].map(card)};
             return this._catalog;
         }
+        async likedTracks(tracks, members = []) {
+            const [local, federated] = await Promise.all([
+                this.read('meta','likes'), this.read('meta','tracks/content/like'),
+            ]);
+            const byId = new Map(tracks.map(t => [t.id,t]));
+            const trackIds = new Set(local?.track_ids || []);
+            const contentIds = new Set(federated || []);
+            const ordered = new Map();
+            for (const member of members) {
+                const track = byId.get(member.id);
+                if (track && (!local || trackIds.has(track.id) || contentIds.has(track.content_id))) ordered.set(track.id, track);
+                if (member.content_id && (!local || trackIds.has(member.id))) contentIds.add(member.content_id);
+            }
+            for (const id of trackIds) {
+                const track = byId.get(id);
+                if (track) {
+                    ordered.set(track.id, track);
+                    if (track.content_id) contentIds.add(track.content_id);
+                }
+            }
+            // A saved federated recording has a browser-only numeric ID. Its like follows the content.
+            for (const track of tracks) {
+                if (contentIds.has(track.content_id)) ordered.set(track.id, track);
+            }
+            return [...ordered.values()];
+        }
         async playlist(id, tracks) {
-            const byId = new Map(tracks.map(t => [t.id,t])), byContent = new Map(tracks.map(t => [contentKey(t),t]));
             const saved = await this.read('meta','playlists/'+id);
             if (!saved && id !== -1) return null;
             let items;
             if (id === -1) {
-                const likes = await this.read('meta','likes');
-                const ids = likes?.track_ids;
-                const allowed = new Set(ids || []);
                 const seen = new Set();
-                const ordered = [...(saved?.members || []).map(m => m.id), ...(ids || [])];
-                items = [];
-                for (const id of ordered) {
-                    const t = byId.get(id);
-                    if (!t || (ids && !allowed.has(id)) || seen.has(contentKey(t))) continue;
-                    seen.add(contentKey(t)); items.push(t);
-                }
+                items = (await this.likedTracks(tracks, saved?.members)).filter(track => {
+                    const key = contentKey(track);
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
             } else {
+                const byId = new Map(tracks.map(t => [t.id,t])), byContent = new Map(tracks.map(t => [contentKey(t),t]));
                 items = saved.members.flatMap(m => {
                     const track = byId.get(m.id) || byContent.get(m.content_id);
                     return track ? [{...track, playlist_track_id:m.playlist_track_id ?? null, sort_key:m.sort_key}] : [];
@@ -621,16 +644,16 @@
                 return json(id && await this.read('lyrics',id) || {versions:[]});
             }
             if (/^playlists\/-?\d+\/federation-tracks$/.test(path)) return json([]);
-            if (['me','likes','pins','follows','state','tracks/content/like'].includes(path)) {
+            if (path === 'likes' || path === 'tracks/content/like') {
+                const rows = await this.likedTracks((await this.catalog()).tracks);
+                return path === 'likes' ? json({track_ids:rows.map(t => t.id)}) :
+                    json([...new Set(rows.map(t => t.content_id).filter(Boolean))]);
+            }
+            if (['me','pins','follows','state'].includes(path)) {
                 const data = await this.read('meta', path);
                 if (path === 'me') return data ? json(data) : json({id:this.account,name:'',role:'user',stats:{}});
                 if (path === 'state') return json(data || {queue:[],current_track_id:null,position_ms:0,volume:0.7});
-                if (path === 'tracks/content/like') return json({content_ids:[]});
                 const catalog = await this.catalog();
-                if (path === 'likes') {
-                    const ids = new Set(catalog.tracks.map(t => t.id));
-                    return json({track_ids:(data?.track_ids || []).filter(id => ids.has(id))});
-                }
                 if (path === 'follows') {
                     const artists = (data?.artist_ids || []).map(id => catalog.artistCards.get(id)).filter(Boolean);
                     return json({artist_ids:artists.map(a => a.id),artists});

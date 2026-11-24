@@ -100,6 +100,13 @@ const catalog = fs.readFileSync(path.join(player, 'offline-catalog.js'), 'utf8')
         await other.goto(base+'/#artists');
         assert.equal(await other.evaluate(() => document.documentElement.dataset.offlineMode),'manual');
         assert.equal(await other.evaluate(() => fetch('/api/player/me').then(r=>r.json()).then(p=>p.name)), 'Saved');
+        for (const path of ['artists/events?name=Band', 'search/events?q=Band']) {
+            const status = await page.evaluate(async path => {
+                const response = await fetch('/api/player/federation/'+path, {headers:{Accept:'text/event-stream'}});
+                return response.status;
+            }, path);
+            assert.equal(status, 204, 'a late EventSource handshake is answered locally without a reconnect');
+        }
         for (const [url,method] of [['/offline-probe','GET'],['/api/player/history','POST'],['/logout','GET']]) {
             assert.equal(await page.evaluate(([u,m]) => fetch(u,{method:m}).then(r=>r.status),[url, method]),503);
         }

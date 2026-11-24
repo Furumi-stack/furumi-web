@@ -13,6 +13,7 @@ function setup(hash, fetch) {
     const location = { hash };
     const replacements = [];
     const streams = [];
+    const offline = {active: false, manual: false};
     let library;
     class EventSource {
         constructor(url) { this.url = url; this.events = {}; streams.push(this); }
@@ -21,18 +22,60 @@ function setup(hash, fetch) {
         close() { this.closed = true; }
     }
     vm.runInNewContext(librarySource, {
-        location, fetch, EventSource, GUEST: false, playerOffline: () => false, URLSearchParams, clearTimeout, setTimeout,
-        Alpine: { store(_name, value) { library = value; } },
+        location, fetch, EventSource, GUEST: false, playerOffline: () => offline.active, URLSearchParams, clearTimeout, setTimeout,
+        window: {setTimeout, clearTimeout},
+        Alpine: { store(name, value) {
+            if (value) library = value;
+            if (name === 'offline') return offline;
+            if (name === 'library') return library;
+        } },
         history: { replaceState(_state, _title, url) { location.hash = url; replacements.push(url); } },
     });
     library._afterNavigation = () => {};
-    return { library, location, replacements, streams };
+    return { library, location, replacements, streams, offline };
 }
 
 function key(title, artist, year) {
     return { normalized_title: title, primary_artists: [artist], release_type: null, year };
 }
 const link = releaseKey => '#releasefed?key=' + encodeURIComponent(JSON.stringify(releaseKey));
+
+test('federation closes subscriptions and pending search batches when switching offline', async () => {
+    const {library, streams, offline} = setup('#artist/1', () => assert.fail('no HTTP request expected'));
+    const release = {title:'Album', artists:[{name:'Band'}], tracks:[]};
+    const startStreams = () => {
+        library.startArtistFederation('Band');
+        library.startReleaseFederation(release);
+        library.startFederationSearch('Band');
+    };
+    startStreams();
+    const [artist, edition, search] = streams;
+    const match = {entity:{key:{normalized_name:'band'}, name:'Band'}, score:1};
+    search.emit('federation.artist', match);
+    offline.manual = offline.busy = true; // The page closes these before awaiting the worker acknowledgement.
+    library.stopFederation();
+    startStreams();
+    assert.equal(streams.length, 3);
+    assert.ok(streams.every(stream => stream.closed));
+    offline.active = true;
+    offline.manual = offline.busy = false;
+    startStreams();
+    assert.equal(streams.length, 3);
+    offline.active = false;
+    startStreams();
+    assert.equal(streams.length, 6);
+    // Queued events from the previous subscription must not affect the recovered page.
+    artist.emit('federation.artist.catalog', {entity:{name:'Old'}});
+    edition.emit('artist.completed', {});
+    search.emit('federation.artist', match);
+    search.onerror();
+    await new Promise(resolve => setTimeout(resolve, 65));
+    assert.equal(library.currentArtist, null);
+    assert.equal(library.releaseFederationLoading, true);
+    assert.equal(library.federationSearch.artists.length, 0);
+    assert.equal(library.federationSearch.loading, true);
+    library.stopFederation();
+});
 
 test('guest appearances add recordings, not owned releases, even across several catalogues', () => {
     const { library, streams } = setup('#artist/333', () => assert.fail('no request expected'));

@@ -1,0 +1,106 @@
+/*
+Space Mono Bold, subset for the #furumi wordmark.
+Source: https://github.com/google/fonts/tree/main/ofl/spacemono
+
+Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+*/
+@font-face {
+    font-family: "Furumi Wordmark";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("data:font/woff2;base64,d09GMgABAAAAAA1MABEAAAAAGWwAAAzwAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGhYbHhwoBmAAZAiBEAmcDBEIColEiGkLEgABNgIkAxIEIAWEKAcgDIFWG9YXEUV9iEwjZeH8/fz/VF97MwR+zDYcHjwCLRMDKiRYohKGIC0rQRnjOPjk//bGUO3ZGptjUV5wYyi36EOufVxuov/0bvbnTmaSkFAJtF2hoiukLqkJrNVYq4ixTp+Z0ifuX6Jaq9+vtPNemB2x8KkIF+du+++/5MHR/8cAwoRI8u6FdkPssjKnYhywi5TxIsKqgIBsc2BEkeekpwQrSpMgoiXqRkkSLeWvsogW6Amqi/7gxn2aI8/Vnk5lnGPR1pWk5Ma7qw+/l1baTWRu7cmx/CX5RPKXskZ/erOX+COdpH/vLYU/35Iy2PskZd4gonfS9Jlv3b6V0/eJ6SOe+//XiDwn3sEkvkSSeEv+UvdDSWWjiFqa2GorwRqPipg1WnNyz6TokN5B76EP0kcUas7iZfqv6T+m35p+Y/rV6Rennw/eQVO917LEWwo6dHFLoxeSW3fFtzsh9Ano41Ddkr8UPmKayj9M35Z/E/+fvj1NZetROU3ptelJox8I+k8rfy++2roL0gx6UOaW+fpPaeXOdczce6nE6QBHrTvk+kEJGVU/m6M5Go3UfhCGIAsyqj8hQcZlCYQGu8MEUqtQhQlamsc/aG1tU2awadi5rJFbJmuiloE09z/OWFKQxlRjeMXHJ1JK4zKEB0+EkMZMVrZF9gRDGpVNNsWmcZkCFeWBnewIaVyWwNNoxdg2pQpViB1jFKgoD2zAY8ZvC3jtlyZHxbLJRzlm8jJEK7J3Xy5DFQZ1ySiKMsQVGzDSogyRWsuNWDb5KK/GOFqUYRMsmnFcih+n396SD7muK8ZCUTo4y4UdP0tnn8VZawPICEtmBLpbgq57zAyxZAL4U8Wful79dI1Gwof81Kd9a8eVhYitVZ6sL7FjVGYT+JpzhhdVY8asKUrMqgxzKgvC0EK4BDM6r12gFfO4md3P2AVp1UFKsKoK3+Uj+J1Qf3vDNdcQcXPcj+C175SuCKq7tlQ2tIwr98qmDIrEPI3ZEsxqzJt4QrKMae6d5lWmGKSyCnL/EGIE4TDbSTCvWdFqK2b0U4/2OXAyrjjrbru+drcFPZlfIZNnnbDSDLOoK5FeisCTiBXIwIsc57WqStTIaYuC0igAB7iSW6XQilTVD783y36TcaQo2z1e8WGv6NT47AfLS9TKizIMVGg7YYJV3UiZY1z1E6xpCMeMVfOi72qMVZVZrBnYXbV2rmjdxlqOPBn/1KNRrSqsG8e1Y6yrTPHiG/r6/bLxxn17BMsH6uMJNvX1O+X1ezYhQdibt7n3lm5owzxwsbFhIKoM6/HlVgwyyprVJVtzBbGjGK2oKJu8Kw4vyuqa4yy/1gkVRHXQgQjebRlZbmKxaoZYM0PXaKakWlN+XhuiTdWHMKBLEyHEwGfbmhqS+f0SGyrjHCsqw7KC7zJ2P9nbE7ROm5RlWeZp610gqmZrLsan4uAZm2BHN7QdJ9jVjdjQHpf0GG/R49yjgPv0BJ+hJ/ksPcXn6Gk+Hx9rVfQuMeOu3y8VdyFevVImJ9Aui3bmf+DwZFF7/gevGGvCapzFVIjqRz3QJGssZMyewUYogDgCEBFAtAHiWYA4ChDPAUQHkNLV3KusdMyFw55joyBcfRCVZqFbX7+Z4xrHYhzrJDihmYd8JpNVlaqbeuuFMsh44MnyTW5WZvLa5g4nOo0vtvPyuM1g51N50ypxymnNZ5SOO6OJHvLkZoaI1YBTDO388PlZrX9Jpc1psZ3NK3JWc4+Hqn9PIFOlCc7p7m4vQertGSDMKE3wvG4k7UTc5eHtwBNkdK2uh2qoKi73gzvuU6hskgqxvdVJcF6DdrDbzfEieJGXezdLlGHRxAd1VzH36rRxhAs2dzv5jBmVSUYz3P3E45U75Q889jn4gdf2H7fZXTZnwXCtpC9RDRxmzKUq3Z3O+UR6Ns+4sYJvqnFRwjNVAN+4u1yz8p4rxQyvrQZVGigsmMHTyl4wCYzouCkV2QozxpXEqf2ogh9hNLz2CfAorRW58V20UTLpNkGvGA5hZvjtCqqXJrhob2NBdHwAYsQZDLqUf0iJs5Brgu6XXe6p8Flr2khWySyHi2Emgh9de29xlmCLNd08U1JV986XlQg0ZXVKB3aH6fUv3+wrWnG3AH/zALumLIK7tuSe7TbHxVac4Krg6LtB0XMWrNXSZ2w0zsexVe9rXIhr5l79GmWdeiuCGdPFcV3l6UXd1O1Cz62wpLJ0o3KWVdzjrkqjLj/QzYIXZd7bszr/FcMajOzgHnZiT6VBWFfCQqsiDePpfFwgdV7QDV2IQ9UxM3Is/eya3r7krQld3Vdls4uznQQvOj3Tdd2Q2NrEuU6CGxrPdxLcLMD6ueIuD2pVFZR1S1fmm+JmnOC2nhAN4kZ2oScktnRHCYu4i4G8J2ZDfh+afACQDwGRj/QPCCHTWl3qHxg7slpYxUs4kS/LcMFfMTT5KgbyNQzk68mxnDv0ZQWQ+wA5ErOHGng/kAMAOQhQQyqxmnnDGKgRgBoFqDGAGgeoCYCaBBRMpa6gtPTUtCEkaHXnz7BKOZvjxoRVpc2lrpBYz4/BvIUFRIsRKItQLRkMtH8M9D7glfYHkKs+oAF9EECHIlAelTpsMNBHxkAHAGzZdNVHaUAfDaBjIlARlTrWYKCPGwN9PICdYLrqEzWgTwKknJx6h/5W++pB2XUHZ1JtZ1KCK8HnqzKD6kBQSt7qf1DLtG/0lNVVhD1nlbpi4UJvs3sC3vyGJW6zS7+Nnd/2+L71PeM83GnXUlyR0VwXIbw3RNh9HdSut+kdeivatHatVZc00mn5TV2HdlKY2RobO+kNU/GTX0fgtWFy/cMhTIcu6dAvflQ/+eF1+sWv6ie/DaZJyzdpJ92wVbpXR9u6/F3hVrTS8hPysShdt530zjsk6Szwun7yu9tiGmlvdVDCWCzTsQzaYo1gO9eND73x0OU5k62TGb/tetTWek9u/WVa/WW5rffYdj2a57lB89yw913/qf5TB82LzBf857li85/0P+nPKE3auLhp0+LG0fuzJ/lvwCX+9f4z/CPJPx7OdOy8IzHh41HH/uyU7JKqksDh3ZE1hnNpbXtvTX+44yPodfsHsdP/RoPjverU9Cbf7q6oZT108xlu91/5V8z6r/kvJGuLO72zJv9wdK6ZVZTbUMEP/3i4wRHftuty3+zg+GDLcMvs+GxLE0P2+y0tLXUl9Y7WLoeh2bgqqEUmLgmJi4BuY4rKVIUF/nT8L+WQhiCgKkIdAiNiHWCMujQiRltUFVDXqGuiIiOc4WGhIXZdkQWHBMmwy2tMKxWSxLrAmNsjCKAuTkRpHoVk2ZS9ABxwGI6EJMNQbdFmczBya6eVqBBAPSDK9kCSeBc4T/MIYkzuUkmWTdnrsuJBCoETRiBJvAvc3ZPPWme3E+yR9sgIp8M4MUsRZ/VJbbYoszlobO204lSSSZAsApwx1qR5pE8Q3ZpNkYQwhddlJQkvixjL8UDiQ/gsB4BkJCc5k5yJjkTD0G1x5j3hYQxELc3BsK2dVgIkRkyigCAi1hPSA9M8MgFKt0qKYipe1+nc0YTEBJNEAELI9AreB1ubJUvwHnCe00RRN9eP9vmsy/T267HeuTHRMAzDZospgOouCAYmEMjSq6d5wBh6uMyALHhdVhwE40xwQSznpjvCrpUFr89yEoq2qm6TBSIoQmnNiVUdamNk1xh0wpBMPDyE6VzvC1MZY1KXIpgkpTEvEBcbEw0XXOvXra1AQcY0xhZn3jY8EZ4+I7z61K6w0t/UMOnLCpv88XfnmxuvnwTj9q6++/9t7Cy+EwT51xykNX7h1WL9q+/+n8jOCtB4ej9i/WhEEzqQDDe88OKngIpOyOiGAEM69uDURtzpofYffdEqBnch3NbZECTHLkIE/t/FoOL3XRKy8dQujlhct0ugFdt3yYhGvgjlaYBhzGMe05hDMTKQgSmyBjCJQWpOYh7jGEGfxfscBpCOKcxiCDswjR4n5ZHJmkIaqvSscfSjnZxZzGHE0Vs8spCOTGQiByWITyhrED1Y0HOmMIyRBHLisQmLUr+2EOnIRToKkIY89CMPvdicVFB8Z1F8k8ivvhdb4EUtStTz37QYparOfsl9mMUIhorGWzyykYks5CMerRiWbIUyUVsx28kZxQD6gqjKLKrhAlNzw2aLOmYII0J3C+hFOvowhQkHMaUXDGEcA2ehYA4ZmEswYKKtNv8CdvTSVu9G8W/rZqazN9+H57Z3rhCd5gvSd4eH6RUoVfcAOYgWcB89xLJbopBvUuP5Wi40s5taqZRlysksmjXub696JNwKtTRLtWQLAnqLjAhYMyDvPxlXNSvJdMK2zqB1QqeR+vmm2PtUtIqhxuda2di5wwNqAMStE/pabTF9d8teJRUzt5zI1jMR6r6PVo8N8lNXGGruFP0yamoAAAA=") format("woff2");
+    unicode-range: U+0023, U+0066, U+0069, U+006D, U+0072, U+0075;
+}

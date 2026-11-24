@@ -9,6 +9,9 @@
     <div class="main-content">
         {% if !guest %}
         <aside class="sidebar-left">
+            <h2 class="sidebar-brand">
+                <button class="sidebar-wordmark" type="button" @click="nudgeWordmark($el)" @keydown.space.stop><span>#</span>furumi</button>
+            </h2>
             {% include "player/sidebar_nav.html" %}
             <div class="sidebar-account" data-account-menu x-show="$store.user.profile" x-cloak
                  @keydown.escape="if ($store.user.menuOpen) { $store.user.menuOpen = false; $refs.accountTrigger.focus() }">
@@ -78,7 +81,7 @@
                 </div>
                 {% if !guest %}
                 <span class="offline-topbar-state" data-offline-only role="status"
-                      :title="$store.offline.manual ? '{{ t.player_offline_cache_only }}' : '{{ t.player_offline_auto }}'">
+                      :title="$store.offline.manual ? '{{ t.player_offline_mode }}' : '{{ t.player_offline_auto }}'">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 12V4h16v8m-5-4-4 4-2-2M4 15h16l1 5H3z"/></svg>
                     <span>{{ t.player_offline_manual }}</span>
                 </span>
@@ -1136,8 +1139,8 @@
                     </button>
                 </template>
                 <button data-member-only class="queue-toggle-btn device-toggle-btn"
-                        :class="{ active: !$store.offline.active && $store.devices.isActive() }"
-                        @click="$store.offline?.active ? $store.devices.open = !$store.devices.open : $store.devices.toggle()"
+                        :class="{ active: $store.devices.isActive() }"
+                        @click="$store.devices.toggle()"
                         :title="$store.offline.active ? '{{ t.player_offline_devices }}' : $store.devices.activeLabel()"
                         aria-label="Devices">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

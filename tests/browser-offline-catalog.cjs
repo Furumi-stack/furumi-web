@@ -29,6 +29,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             }
             const read = (path, init) => repo.respond(new Request(location.origin+api+path,init));
             const get = async (path,init) => (await read(path,init)).json();
+            const emptyContentLikes = await get('tracks/content/like');
             await repo.observe(api+'me',{id:1,name:'One'});
             await repo.observe(api+'likes',{track_ids:[21,22,23]});
             await repo.observe(api+'artists?mine=true',{items:[{id:12,image_url:api+'cover/14/medium'}]});
@@ -45,6 +46,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
             const featured = await get('artists/11');
             const release = await get('releases/37');
             const unlikedCopy = (await get('playlists/-1')).tracks;
+            const legacyContentLikes = await get('tracks/content/like');
             const playlist = (await get('playlists/9')).tracks;
             const search = await get('search?q=song+band');
             const lyrics = await get('lyrics/21');
@@ -81,6 +83,13 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
                 throw new Error('Unexpected remote path '+path);
             }});
             const [local] = await repo.list();
+            await repo.observe(api+'tracks/content/like',[content,'b3:'+'c'.repeat(64)]);
+            const remoteLikes = {
+                contents:await get('tracks/content/like'),
+                ids:(await get('likes')).track_ids,
+                playlist:(await get('playlists/-1')).tracks.map(t=>t.id),
+                track:local.id,
+            };
             const savedView = await get('releases/'+local.release_id);
             const remoteDetails = {
                 rejected,identity:OfflineCatalog.trackId(federated.id) === local.id,
@@ -129,7 +138,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
                 range:[range.status,range.headers.get('Content-Range'),rangeBytes],suffix:suffixBytes,
                 invalidRange:invalidRange.status,head:[head.status,head.headers.get('Content-Length'),(await head.arrayBuffer()).byteLength],
                 error,truncated,files:files.length,afterRemove,remainingBytes,cleared:await repo.stats(),
-                mediaRequests,remoteDetails,notFound,cleanup};
+                mediaRequests,remoteDetails,notFound,cleanup,emptyContentLikes,legacyContentLikes,remoteLikes};
         });
         assert.equal(results.queueBefore,1);
         assert.equal(results.queueAfter,0);
@@ -141,6 +150,12 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         assert.deepEqual(results.guests,[21,22]);
         assert.deepEqual(results.albumTracks,[21]);
         assert.equal(results.unlikedCopy,1);
+        assert.deepEqual(results.emptyContentLikes,[]);
+        assert.deepEqual(results.legacyContentLikes,['b3:'+'1'.repeat(64)]);
+        const liked = results.remoteLikes;
+        assert.deepEqual(liked.contents,['b3:'+'f'.repeat(64)]);
+        assert.deepEqual(liked.ids,[liked.track]);
+        assert.deepEqual(liked.playlist,[liked.track]);
         assert.deepEqual(results.playlist,[22,21]);
         assert.equal(results.results,2);
         assert.equal(results.lyrics.versions[0].plain_text,'First line');

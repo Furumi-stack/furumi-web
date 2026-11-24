@@ -184,6 +184,10 @@ async function local(request, state, rootNavigation) {
     }
     if (ASSETS.includes(url.pathname)) return await cache.match(url.pathname) || unavailable();
     if (request.mode === 'navigate') return unavailable();
+    if (request.method === 'GET' && ['/api/player/federation/artists/events', '/api/player/federation/search/events'].includes(url.pathname)) {
+        // A stream opened just before disconnection must stop without reconnecting.
+        return new Response(null, {status:204, headers:{'Cache-Control':'no-store'}});
+    }
     const read = ['GET','HEAD'].includes(request.method) ||
         (request.method === 'POST' && url.pathname === '/api/player/tracks-by-ids');
     if (read && url.pathname.startsWith('/api/')) {

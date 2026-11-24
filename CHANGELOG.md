@@ -10,6 +10,18 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.2 — 2026-11-24
+
+- Saved tracks and their likes load when the browser loses its connection.
+  Federation streams close while offline and reconnect when the server returns.
+- Only the device already playing a saved track automatically continues offline.
+  Remote controller tabs stay paused. The account menu explains offline mode,
+  and a soft yellow label beside search shows when it is active.
+- Collapsing popular tracks on an artist page returns the list to the position
+  where it was expanded.
+- The desktop sidebar now has a `#furumi` wordmark with an embedded monospace
+  font and a subtle click animation that respects reduced motion.
+
 ## v0.16.1 — 2026-11-24
 
 - Artist pages show five distinct popular titles at first. Matching titles are

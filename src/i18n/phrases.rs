@@ -295,7 +295,8 @@ translations! {
     player_offline_auto:     "Offline · automatic"             , "Офлайн · автоматически";
     player_offline_manage:   "Manage"                          , "Управление";
     player_offline_manage_label: "Manage offline music"        , "Управление офлайн-музыкой";
-    player_offline_cache_only: "Use saved music only"          , "Только сохранённая музыка";
+    player_offline_mode:     "Offline mode"                    , "Офлайн-режим";
+    player_offline_mode_hint: "Uses only the local cache. No network requests." , "Плеер работает только с локальным кешем, без сетевых запросов.";
     player_offline_enable:   "Save music on this device"       , "Сохранять музыку на устройстве";
     player_offline_preparing: "Preparing offline listening…"   , "Готовим плеер для офлайн-прослушивания…";
     player_offline_hint:     "Played tracks are saved automatically. You can also save a track from its menu." , "Прослушанные треки сохраняются автоматически. Трек также можно сохранить через его меню.";

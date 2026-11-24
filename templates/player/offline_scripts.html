@@ -63,7 +63,7 @@ document.addEventListener('alpine:init', () => {
 
     Alpine.store('offline', {
         enabled: !!account && (prefs.enabled === true || ['manual','auto'].includes(initialMode)),
-        manual: !!account && (initialMode === 'manual' || prefs.enabled && prefs.manual === true),
+        manual: !!account && (initialMode === 'manual' || (prefs.enabled === true && prefs.manual === true)),
         active: false, automatic:false, busy:false, saving:false, bytes:0, items:[], error:'',
         limitBytes: Math.max(minLimit, Math.min(maxLimit, Number(prefs.limitBytes) || defaultLimit)),
         supported: !!(account && window.isSecureContext && navigator.serviceWorker && navigator.storage?.getDirectory &&
@@ -112,7 +112,7 @@ document.addEventListener('alpine:init', () => {
                     this.persist();
                 }
             });
-            window.addEventListener('offline', () => this.lost());
+            window.addEventListener('offline', () => this.lost(true));
             window.addEventListener('online', () => this.probe());
             document.addEventListener('visibilitychange', () => { if (!document.hidden) this.probe(); });
             if (this.enabled) {
@@ -182,13 +182,23 @@ document.addEventListener('alpine:init', () => {
             this.busy = true; this.error = '';
             ++revision;
             this.stopTraffic();
+            const wasManual = this.manual;
+            if (manual) {
+                // Close live subscriptions before the worker aborts its network requests.
+                this.manual = true;
+                if (!this.active) Alpine.store('library')?.stopFederation();
+            }
             try {
                 const mode = manual ? 'manual' : 'auto';
                 await sendConfig(await getWorker(false), mode);
                 this.manual = !!manual;
                 this.persist();
                 this.apply(mode);
-            } catch { this.error = label('setup'); }
+            } catch {
+                this.manual = wasManual;
+                this.error = label('setup');
+                if (manual && !this.active) window.dispatchEvent(new CustomEvent('furumusic:offline-mode', {detail:{active:false}}));
+            }
             finally { this.busy = false; this.scheduleProbe(); }
             if (!this.manual) this.probe();
         },
@@ -198,16 +208,23 @@ document.addEventListener('alpine:init', () => {
             probing?.abort();
             transfer?.abort();
         },
-        async lost() {
-            if (!this.enabled || this.manual || this.active || this.busy) return;
-            const version = revision;
-            transfer?.abort();
+        async lost(browserEvent = false) {
+            // An offline event can interrupt an online recovery that has already reached the worker.
+            if (!this.enabled || this.manual || this.busy || (this.active && !browserEvent)) return;
+            ++revision;
+            const browserDisconnected = !navigator.onLine;
+            this.busy = true;
+            this.stopTraffic();
+            this.apply('auto');
             try {
-                const worker = await getWorker(false);
-                if (version !== revision || this.manual) return;
-                await sendConfig(worker, 'auto');
-                if (version === revision) this.apply('auto');
-            } catch { if (version === revision) this.apply('auto'); }
+                await sendConfig(await getWorker(false), 'auto');
+            } catch {
+                // The active page can still read its catalog while the worker is unavailable.
+            } finally {
+                this.busy = false;
+                this.scheduleProbe();
+                if (browserDisconnected && navigator.onLine) this.probe();
+            }
         },
         scheduleProbe() {
             clearTimeout(probeTimer);
@@ -236,7 +253,9 @@ document.addEventListener('alpine:init', () => {
                 if (res.status !== 204 || identity !== account) throw new Error('Unreachable');
                 lastSuccess = Date.now();
                 if (this.active) {
-                    await sendConfig(await getWorker(false), 'online');
+                    const worker = await getWorker(false);
+                    if (version !== revision || !navigator.onLine) return;
+                    await sendConfig(worker, 'online');
                     if (version === revision) this.apply('online');
                 }
             } catch { if (version === revision) await this.lost(); }
@@ -245,6 +264,7 @@ document.addEventListener('alpine:init', () => {
         apply(mode) {
             const active = mode === 'manual' || mode === 'auto';
             const changed = active !== this.active;
+            if (changed && active) Alpine.store('player')?.prepareForOffline();
             this.active = active; this.automatic = mode === 'auto';
             document.documentElement.classList.toggle('offline-active', active);
             if (active) { clearTimeout(retryTimer); transfer?.abort(); }
@@ -260,15 +280,23 @@ document.addEventListener('alpine:init', () => {
             if (playlists?.list?.length) await catalog().observe('/api/player/playlists', playlists.list);
             if (library?.currentPlaylist) await catalog().observe('/api/player/playlists/'+library.currentPlaylist.id, library.currentPlaylist);
             // Fields that may have loaded before the opt-in, including playlist membership.
-            await Promise.allSettled(['/api/player/me','/api/player/playlists','/api/player/likes','/api/player/follows','/api/player/pins'].map(async path => {
+            await Promise.allSettled(['/api/player/me','/api/player/playlists','/api/player/likes','/api/player/tracks/content/like','/api/player/follows','/api/player/pins'].map(async path => {
                 const response = await playerFetch(path);
                 if (response.ok) await catalog().observe(path, await response.json());
             }));
         },
         observe(url, response) {
             if (!this.enabled || this.active || !response.ok ||
-                !/^\/api\/player\/(?:me|likes|follows|pins|playlists(?:\/-?\d+)?|artists(?:\/\d+)?)$/.test(url.pathname)) return;
+                !/^\/api\/player\/(?:me|likes|tracks\/content\/like|follows|pins|playlists(?:\/-?\d+)?|artists(?:\/\d+)?)$/.test(url.pathname)) return;
             response.clone().json().then(value => catalog().observe(url.href, value)).catch(() => {});
+        },
+        rememberLikes(trackIds, contentIds) {
+            if (!this.enabled || this.active) return;
+            const local = [...trackIds], federated = [...contentIds];
+            catalog().write(['meta'], get => {
+                get('meta').put({track_ids:local}, 'likes');
+                get('meta').put(federated, 'tracks/content/like');
+            }).catch(() => { this.error = label('storage'); });
         },
         localResponse(request) { return catalog().respond(request); },
         async played(track) {

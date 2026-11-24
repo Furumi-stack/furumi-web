@@ -12,7 +12,7 @@
         <template x-for="track in previewRows" :key="track.id">
             {% include "player/artist_popular_track_row.html" %}
         </template>
-        <div class="artist-popular-overflow" :class="{'is-open':expanded}" :aria-hidden="!expanded" :inert="expanded ? null : true"
+        <div class="artist-popular-overflow" x-ref="overflow" :class="{'is-open':expanded}" :aria-hidden="!expanded" :inert="expanded ? null : true"
              @transitionend.self="if (folding && $event.propertyName === 'grid-template-rows' && !$el.offsetHeight) finishFold()">
             <div class="artist-popular-overflow-clip">
                 <template x-for="track in overflowRows" :key="track.id">
@@ -22,7 +22,7 @@
         </div>
     </div>
     <button class="artist-top-tracks-toggle" type="button" x-show="groups.length > 5" x-cloak
-            @click="toggleList()" :aria-expanded="expanded" aria-controls="artist-popular-tracks">
+            @click="anchorListScroll($el); toggleList()" :aria-expanded="expanded" aria-controls="artist-popular-tracks">
         <span x-text="expanded ? '{{ t.player_collapse }}' : '{{ t.player_expand_all }}'"></span>
         <svg viewBox="0 0 36 8" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="m1 1 17 5 17-5" stroke-linecap="round" stroke-linejoin="round"/>

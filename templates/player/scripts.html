@@ -245,6 +245,19 @@ function coverVariantUrl(url, variant) {
     return url.replace(/^(\/api\/player\/cover\/\d+\/)(?:small|medium|large)(?=[?#]|$)/, '$1' + variant);
 }
 
+function nudgeWordmark(button) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    button.getAnimations().find(motion => motion.id === 'wordmark-nudge')?.cancel();
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    const angle = direction * (1 + Math.random());
+    button.animate([
+        {transform:'none'},
+        {transform:`translateX(${direction * 1.5}px) rotate(${angle}deg) scaleX(1.02)`, offset:0.32},
+        {transform:`rotate(${-angle * 0.45}deg) scaleX(0.995)`, offset:0.68},
+        {transform:'none'},
+    ], {id:'wordmark-nudge', duration:360, easing:'ease-in-out'});
+}
+
 // A row uses double-click for playback. Keep the first press native so dragging still selects text.
 document.addEventListener('mousedown', event => {
     if (event.button !== 0 || event.detail !== 2 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -730,6 +743,12 @@ document.addEventListener('alpine:init', () => {
     // -----------------------------------------------------------------------
     // Player store
     // -----------------------------------------------------------------------
+    let playbackConnection = new AbortController();
+    window.addEventListener('furumusic:offline-mode', () => {
+        playbackConnection.abort();
+        playbackConnection = new AbortController();
+    });
+
     Alpine.store('player', {
         currentTrack: null,
         isPlaying: false,
@@ -750,6 +769,7 @@ document.addEventListener('alpine:init', () => {
         _listenedSeconds: 0,
         _lastAudioTime: 0,
         _localSourceTrackId: null,
+        _offlinePlaybackHeld: false,
         _remoteExecuting: false,
         _remoteStateBaseTime: 0,
         _remoteStateReceivedAt: 0,
@@ -776,6 +796,7 @@ document.addEventListener('alpine:init', () => {
             });
 
             audio.addEventListener('ended', () => {
+                if (playerOffline() && this._offlinePlaybackHeld) return;
                 if (this.currentTrack?.podcast) {
                     this.isPlaying = false;
                     this.currentTrack.podcast_completed = true;
@@ -792,12 +813,14 @@ document.addEventListener('alpine:init', () => {
             });
 
             audio.addEventListener('playing', () => {
+                if (audio.paused || (playerOffline() && this._offlinePlaybackHeld)) return;
                 if (!this._cachePlayCounted && Alpine.store('offline')?.enabled) {
                     this._cachePlayCounted = true;
                     Alpine.store('offline').played(this.currentTrack);
                 }
             });
             audio.addEventListener('play', () => {
+                if (audio.paused || (playerOffline() && this._offlinePlaybackHeld)) return;
                 this.isPlaying = true;
                 if (!this._playbackStartedAt) this._playbackStartedAt = Math.floor(Date.now() / 1000);
                 this._lastAudioTime = audio.currentTime || 0;
@@ -911,6 +934,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _playLocal(track, options = {}) {
+            if (!options.paused) this._offlinePlaybackHeld = false;
             if (this.currentTrack?.podcast) Alpine.store('podcasts')?.checkpoint(this, !!this.currentTrack.podcast_completed);
             this._recordHistory('replaced');
             this._cachePlayCounted = false;
@@ -954,6 +978,16 @@ document.addEventListener('alpine:init', () => {
             this.isPlaying = false;
         },
 
+        prepareForOffline() {
+            // Read the online owner before offline mode makes this tab the active device.
+            // Jam monitoring can play real local audio on a tab that only controls the owner.
+            const ownedPlayback = this._isLocalPlaybackDevice();
+            this._offlinePlaybackHeld = !ownedPlayback || !this.isPlaying || audio.paused || audio.ended ||
+                !this.currentTrack || this.currentTrack.id !== this._localSourceTrackId;
+            if (this._offlinePlaybackHeld) this._pauseLocal();
+            if (!ownedPlayback) this._cachePlayCounted = false;
+        },
+
         useOfflineCatalog(saved) {
             const byId = new Map(saved.map(t => [Number(t.id), t]));
             const byContent = new Map(saved.filter(t => t.content_id).map(t => [t.content_id, t]));
@@ -964,9 +998,10 @@ document.addEventListener('alpine:init', () => {
             const cached = lookup(previous);
             if (cached) {
                 queue.syncCurrentIndexToTrack(cached);
-                if (!this._offlineSession || this._localSourceTrackId !== cached.id) {
+                const playingHere = !this._offlinePlaybackHeld && !audio.paused && !audio.ended;
+                if (!this._offlineSession || this._localSourceTrackId !== cached.id || this.isPlaying !== playingHere) {
                     const counted = this._cachePlayCounted;
-                    this._playLocal(cached, {paused:!this.isPlaying, position_seconds:this.currentTime});
+                    this._playLocal(cached, {paused:!playingHere, position_seconds:this.currentTime});
                     this._cachePlayCounted = counted;
                 }
             } else if (previous) {
@@ -1006,6 +1041,11 @@ document.addEventListener('alpine:init', () => {
                     audio.play().catch(() => {});
                 }
                 this._sendRemote('resume');
+                return;
+            }
+            this._offlinePlaybackHeld = false;
+            if (playerOffline() && this.currentTrack && (!this._offlineSession || this._localSourceTrackId !== this.currentTrack.id)) {
+                this._playLocal(this.currentTrack, {position_seconds:this.currentTime});
                 return;
             }
             audio.play().catch(() => {});
@@ -1431,16 +1471,18 @@ document.addEventListener('alpine:init', () => {
 
         async _restoreState() {
             if (GUEST) return;
+            const {signal} = playbackConnection;
             try {
                 const offline = playerOffline();
                 const initialTrack = this.currentTrack;
                 let state;
                 if (offline) state = Alpine.store('offline').state();
                 else {
-                    const res = await fetch('/api/player/state');
+                    const res = await fetch('/api/player/state', { signal });
                     if (!res.ok || playerOffline()) return;
                     state = await res.json();
                 }
+                if (signal.aborted || playerOffline() !== offline || this.currentTrack !== initialTrack) return;
                 this.shuffle = state.shuffle || false;
                 this.repeatMode = state.repeat_mode || 'off';
                 this._setVolumeLocal(typeof state.volume === 'number' ? state.volume : 0.7);
@@ -1452,10 +1494,11 @@ document.addEventListener('alpine:init', () => {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ ids: state.queue }),
+                            signal,
                         });
                         if (tracksRes.ok) {
                             const tracks = await tracksRes.json();
-                            if (playerOffline() !== offline || this.currentTrack !== initialTrack) return;
+                            if (signal.aborted || playerOffline() !== offline || this.currentTrack !== initialTrack) return;
                             if (tracks.length > 0) {
                                 const queue = Alpine.store('queue');
                                 queue.tracks = tracks;
@@ -1626,6 +1669,12 @@ document.addEventListener('alpine:init', () => {
             if (GUEST) return;
             this.id = this._ensureId();
             this.currentJamId = sessionStorage.getItem('furu_player_jam_id') || null;
+            window.addEventListener('furumusic:offline-mode', ({detail}) => {
+                if (detail.active) {
+                    if (this.remoteHintVisible) this.dismissRemoteHint();
+                    this._lastPlaybackState = null;
+                }
+            });
             this.heartbeat();
             this.loadFedDevices();
             this._pollTimer = setInterval(() => this.poll(), 500);
@@ -1660,31 +1709,31 @@ document.addEventListener('alpine:init', () => {
             };
         },
 
+        async _requestState(path, payload) {
+            if (playerOffline()) return null;
+            const {signal} = playbackConnection;
+            const res = await fetch(path, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload), signal,
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            return signal.aborted || playerOffline() ? null : data;
+        },
+
         async heartbeat() {
             if (playerOffline()) return;
             try {
-                const res = await fetch('/api/player/devices/heartbeat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.requestPayload()),
-                });
-                if (!res.ok) return;
-                this._apply(await res.json());
+                const data = await this._requestState('/api/player/devices/heartbeat', this.requestPayload());
+                if (data) this._apply(data);
             } catch {}
         },
 
         async poll() {
             if (playerOffline()) return;
             try {
-                const res = await fetch('/api/player/devices/poll', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.requestPayload()),
-                });
-                if (!res.ok) return;
-                const data = await res.json();
-                if (playerOffline()) return;
-                if (data.playback_state) this._lastPlaybackState = data.playback_state;
+                const data = await this._requestState('/api/player/devices/poll', this.requestPayload());
+                if (!data) return;
                 this._apply(data);
                 if (this.open || (++this._fedRefreshTick % 10 === 0)) {
                     this.loadFedDevices();
@@ -1759,7 +1808,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         selectedJam() {
-            return this.currentJamId ? this.jams.find(jam => jam.id === this.currentJamId) : null;
+            return !playerOffline() && this.currentJamId ? this.jams.find(jam => jam.id === this.currentJamId) : null;
         },
 
         currentJamUser(jam = this.selectedJam()) {
@@ -1861,7 +1910,7 @@ document.addEventListener('alpine:init', () => {
         toggle() {
             this.dismissRemoteHint();
             this.open = !this.open;
-            if (this.open) {
+            if (this.open && !playerOffline()) {
                 this.poll();
                 this.loadFedDevices();
             }
@@ -1892,16 +1941,20 @@ document.addEventListener('alpine:init', () => {
 
         async loadFedDevices() {
             if (playerOffline()) return;
+            const {signal} = playbackConnection;
             try {
-                const res = await fetch('/api/player/fed-devices');
+                const res = await fetch('/api/player/fed-devices', {signal});
                 if (!res.ok) {
-                    this.fedError = await this._errorText(res);
+                    const message = await this._errorText(res);
+                    if (!signal.aborted) this.fedError = message;
                     return;
                 }
-                this.fed = await res.json();
+                const devices = await res.json();
+                if (signal.aborted) return;
+                this.fed = devices;
                 this.fedError = '';
             } catch (err) {
-                this.fedError = String(err?.message || err || 'Fed sync unavailable');
+                if (!signal.aborted) this.fedError = String(err?.message || err || 'Fed sync unavailable');
             }
         },
 
@@ -2009,21 +2062,15 @@ document.addEventListener('alpine:init', () => {
         },
 
         async select(deviceId) {
-            if (!deviceId) return;
+            if (!deviceId || playerOffline()) return;
             const player = Alpine.store('player');
 
             try {
                 this.clearJamSelection();
-                const res = await fetch('/api/player/devices/active', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        current_device_id: this.id,
-                    }),
+                const data = await this._requestState('/api/player/devices/active', {
+                    device_id: deviceId, current_device_id: this.id,
                 });
-                if (!res.ok) return;
-                const data = await res.json();
+                if (!data) return;
                 this._apply(data);
                 this.open = false;
 
@@ -2039,6 +2086,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async sendCommand(command, payload = {}, targetDeviceId = null) {
+            if (playerOffline()) return false;
             const jamId = this.isControllingRemoteJam() ? this.currentJamId : null;
             const target = jamId ? null : (targetDeviceId || this.activeDeviceId);
             if (!jamId && (!target || target === this.id)) return false;
@@ -2136,16 +2184,11 @@ document.addEventListener('alpine:init', () => {
         async createJam() {
             if (this.hasJoinedJam()) return;
             try {
-                const res = await fetch('/api/player/jams', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        device_id: this.id,
-                        invitee_user_ids: this.jamSelectedUsers.map(user => user.id),
-                    }),
+                const data = await this._requestState('/api/player/jams', {
+                    device_id: this.id,
+                    invitee_user_ids: this.jamSelectedUsers.map(user => user.id),
                 });
-                if (!res.ok) return;
-                const data = await res.json();
+                if (!data) return;
                 this._apply(data);
                 Alpine.store('queue')?._ensureCurrentJamAttribution();
                 this.jamPanelOpen = false;
@@ -2159,17 +2202,12 @@ document.addEventListener('alpine:init', () => {
         async inviteToJam() {
             if (!this.jamPanelJamId || this.jamSelectedUsers.length === 0) return;
             try {
-                const res = await fetch('/api/player/jams/invite', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jam_id: this.jamPanelJamId,
-                        device_id: this.id,
-                        invitee_user_ids: this.jamSelectedUsers.map(user => user.id),
-                    }),
+                const data = await this._requestState('/api/player/jams/invite', {
+                    jam_id: this.jamPanelJamId, device_id: this.id,
+                    invitee_user_ids: this.jamSelectedUsers.map(user => user.id),
                 });
-                if (!res.ok) return;
-                this._apply(await res.json());
+                if (!data) return;
+                this._apply(data);
                 this.jamQuery = '';
                 this.jamUsers = [];
                 this.jamSelectedUsers = [];
@@ -2183,16 +2221,10 @@ document.addEventListener('alpine:init', () => {
                     const ok = window.confirm('Join this Jam and control the shared queue?');
                     if (!ok) return;
                 }
-                const res = await fetch('/api/player/jams/join', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jam_id: jam.id,
-                        device_id: this.id,
-                    }),
+                const data = await this._requestState('/api/player/jams/join', {
+                    jam_id: jam.id, device_id: this.id,
                 });
-                if (!res.ok) return;
-                const data = await res.json();
+                if (!data) return;
                 this.currentJamId = jam.id;
                 sessionStorage.setItem('furu_player_jam_id', jam.id);
                 if (data.playback_state) this._lastPlaybackState = data.playback_state;
@@ -2208,20 +2240,16 @@ document.addEventListener('alpine:init', () => {
 
         async leaveJam(jamId = null) {
             const id = jamId || this.currentJamId;
-            if (!id) return;
+            if (!id || playerOffline()) return;
+            const {signal} = playbackConnection;
             try {
-                const res = await fetch('/api/player/jams/leave', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jam_id: id,
-                        device_id: this.id,
-                    }),
+                const data = await this._requestState('/api/player/jams/leave', {
+                    jam_id: id, device_id: this.id,
                 });
-                if (res.ok) this._apply(await res.json());
+                if (data) this._apply(data);
             } catch {
             } finally {
-                this.clearJamSelection();
+                if (!signal.aborted) this.clearJamSelection();
             }
         },
 
@@ -2954,6 +2982,17 @@ document.addEventListener('alpine:init', () => {
             this.artistFederation = { loading: false, error: '', releases: [], tracks: [] };
         },
 
+        stopFederation() {
+            this.stopFederationSearch();
+            this.stopArtistFederation();
+            this.stopReleaseFederation();
+        },
+
+        get federationPaused() {
+            const offline = Alpine.store('offline');
+            return offline?.active || (offline?.manual && offline.busy);
+        },
+
         async openFederatedArtist(artist, options = {}) {
             const name = typeof artist === 'string' ? artist : artist?.name;
             if (!name || GUEST) return;
@@ -3023,7 +3062,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         startArtistFederation(name) {
-            if (playerOffline()) return;
+            this.stopArtistFederation();
+            if (this.federationPaused) return;
             this.artistFederation = { loading: true, error: '', releases: [], tracks: [] };
             const source = new EventSource(
                 `/api/player/federation/artists/events?name=${encodeURIComponent(name)}`
@@ -3439,7 +3479,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         startReleaseFederation(release) {
-            if (playerOffline()) return;
+            this.stopReleaseFederation();
+            if (this.federationPaused) return;
             const artistName = release?.artists?.[0]?.name;
             const artists = (release?.artists || []).map(artist => artist.name);
             const key = release?.federationRelease?.key ||
@@ -3448,7 +3489,6 @@ document.addEventListener('alpine:init', () => {
                 this.releaseUnavailable = !this.currentRelease;
                 return;
             }
-            this.stopReleaseFederation();
             this.releaseFederationLoading = true;
             const source = new EventSource(
                 `/api/player/federation/artists/events?name=${encodeURIComponent(artistName)}`
@@ -3872,7 +3912,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         startFederationSearch(query) {
-            if (playerOffline()) { this.stopFederationSearch(); return; }
+            if (this.federationPaused) { this.stopFederationSearch(); return; }
             this._cancelFederationSearch?.();
             this.unifiedSearch = { artists: [], releases: [], tracks: [], podcasts: [] };
             this.failedFederationArtwork = new Set();
@@ -4005,7 +4045,9 @@ document.addEventListener('alpine:init', () => {
         async loadFederationLikes() {
             try {
                 const response = await fetch('/api/player/tracks/content/like');
-                if (response.ok) this.federationLiked = await response.json();
+                if (!response.ok) return;
+                const ids = await response.json();
+                if (Array.isArray(ids)) this.federationLiked = ids;
             } catch {}
         },
 
@@ -4670,6 +4712,7 @@ document.addEventListener('alpine:init', () => {
                 this._set = new Set(this._set);
                 const library = Alpine.store('library');
                 library.updateLikeStatus(data.content_id, data.liked, ids);
+                Alpine.store('offline')?.rememberLikes(this._set, library.federationLiked);
                 if (refresh) await Promise.all([Alpine.store('playlists').reload(), library.refreshLikedPlaylist()]);
             } catch {
                 if (wasLiked) this._set.add(trackId);
@@ -6985,9 +7028,7 @@ document.addEventListener('alpine:init', () => {
         const version = ++catalogRevision;
         const library = Alpine.store('library'), offline = Alpine.store('offline');
         library.cancelPendingSearch();
-        library.stopFederationSearch();
-        library.stopArtistFederation();
-        library.stopReleaseFederation();
+        library.stopFederation();
         library._resetArtistList('all');
         library._hashNav = false;
         if (offline.active) {
@@ -6996,6 +7037,7 @@ document.addEventListener('alpine:init', () => {
         }
         library._navigateFromHash({fromHash:true});
         for (const name of ['playlists','likes','follows','pins']) Alpine.store(name)?.reload();
+        library.loadFederationLikes();
         if (offline.active) {
             await offline.refresh();
             if (offline.active && catalogRevision === version) Alpine.store('player').useOfflineCatalog(offline.items);

@@ -13,7 +13,13 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 .offline-manage {flex:none; padding:6px; font-size:12px; text-decoration:underline; text-underline-offset:3px}
 .offline-manage:is(:hover,:focus-visible) {background:var(--bg-active); color:var(--text-primary)}
 .offline-switch-row {display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:30px; padding:0; text-align:left}
-.offline-account .offline-switch-row {width:100%; margin-top:3px; font-size:12px}
+.offline-mode-control {position:relative; display:flex; align-items:center; gap:3px; margin-top:3px; color:var(--text-secondary); font-size:12px}
+.offline-mode-control label {cursor:pointer}
+.offline-mode-control .offline-switch-row {flex:1; justify-content:flex-end}
+.offline-mode-info {display:grid; place-items:center; width:24px; height:26px; padding:0; background:none; border:0; border-radius:4px; color:var(--text-subdued); cursor:help}
+.offline-mode-info svg {width:16px; height:16px}
+.offline-mode-info:is(:hover,:focus-visible) {color:var(--text-primary)}
+.offline-mode-hint {position:absolute; z-index:1; inset-inline:0; bottom:100%; margin:0; padding:7px 9px; background:var(--bg-active); color:var(--text-primary); border:1px solid var(--border-color); border-radius:6px; font-size:12px; line-height:1.4; box-shadow:0 3px 12px #0005}
 .offline-switch-row:focus-visible,.offline-manage:focus-visible,.offline-scale input:focus-visible {outline:2px solid var(--accent); outline-offset:2px}
 .offline-switch-row:disabled,.offline-saved button:disabled {opacity:.5; cursor:default}
 .offline-switch {position:relative; display:block; flex:none; width:32px; height:18px; border-radius:99px; background:var(--bg-active); border:1px solid var(--text-subdued)}
@@ -37,13 +43,13 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 .offline-scale-marks span:last-of-type {transform:translateX(-100%)}
 .offline-scale input {display:block; width:100%; height:20px; margin:0; accent-color:var(--accent)}
 .offline-saved {margin-top:16px}
-.offline-topbar-state svg {width:17px; height:17px; flex:none}
+.offline-topbar-state svg {width:15px; height:15px; flex:none}
 .offline-settings .offline-error {color:var(--error, #edadaa)}
-.offline-topbar-state {display:inline-flex; align-items:center; gap:5px; flex:none; color:var(--text-secondary); font-size:12px; font-weight:600}
+.offline-topbar-state {display:inline-flex; align-items:center; gap:5px; flex:none; padding:3px 7px; border:1px solid #d8c79430; border-radius:6px; background:#d8c7940d; color:#d8c794; font-size:12px; font-weight:600; line-height:1.4}
 .offline-devices-note {padding:9px; color:var(--text-secondary); font-size:13px}
 @media(max-width:600px) {
     .offline-account .offline-switch-row,.offline-manage {min-height:40px}
-    .offline-topbar-state span {position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%)}
+    .offline-topbar-state {gap:3px; padding-inline:5px}
 }
 @media(max-width:360px) {
     .offline-scale-marks span:nth-last-of-type(2) {transform:translateX(-100%)}

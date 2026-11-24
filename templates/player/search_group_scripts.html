@@ -109,6 +109,8 @@ document.addEventListener('alpine:init',()=>{
         expanded: false,
         folding: false,
         foldTimer: null,
+        expandOffset: 0,
+        scrollFrame: null,
         setTracks(tracks) {
             this.groups = [...groupTracks(tracks, track => JSON.stringify(normalizedName(track.title)))];
         },
@@ -118,6 +120,28 @@ document.addEventListener('alpine:init',()=>{
         get overflowRows() {
             return this.expanded || this.folding
                 ? this.versionGroups.groupRows(this.groups.slice(5), 'artist', 5, this.folding) : [];
+        },
+        anchorListScroll(button) {
+            cancelAnimationFrame(this.scrollFrame);
+            const pane = button.closest('#center-scroll');
+            const buttonOffset = () => button.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+            if (!this.expanded) {
+                if (!this.folding) this.expandOffset = buttonOffset();
+                return;
+            }
+
+            const overflow = this.$refs.overflow;
+            const startHeight = overflow.offsetHeight;
+            const startOffset = buttonOffset();
+            const endOffset = Math.max(0, Math.min(this.expandOffset, pane.clientHeight - button.offsetHeight));
+            // Follow the actual fold so the button returns to its old place as the rows disappear.
+            const align = () => {
+                const remaining = startHeight ? Math.min(1, overflow.offsetHeight / startHeight) : 0;
+                const target = endOffset + (startOffset - endOffset) * remaining;
+                pane.scrollTop += buttonOffset() - target;
+                if (this.folding) this.scrollFrame = requestAnimationFrame(align);
+            };
+            this.scrollFrame = requestAnimationFrame(align);
         },
         toggleList() {
             clearTimeout(this.foldTimer);
@@ -139,7 +163,11 @@ document.addEventListener('alpine:init',()=>{
             const rows = this.versionGroups.groupRows(this.groups, 'artist', 0, this.folding);
             this.versionGroups.playRows(rows, Alpine.store('library').currentArtist.top_tracks, track._searchSourceIndex);
         },
-        destroy() { clearTimeout(this.foldTimer); this.versionGroups.reset(); },
+        destroy() {
+            cancelAnimationFrame(this.scrollFrame);
+            clearTimeout(this.foldTimer);
+            this.versionGroups.reset();
+        },
     }));
 });
 </script>

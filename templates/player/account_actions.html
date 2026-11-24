@@ -11,10 +11,22 @@
     <progress class="offline-account-meter" x-show="offline.enabled || offline.bytes" x-cloak
               :max="offline.limitBytes" :value="offline.bytes" aria-label="{{ t.player_offline_used }}"
               :aria-valuetext="offline.formatBytes(offline.bytes) + ' / ' + offline.formatBytes(offline.limitBytes)"></progress>
-    <button type="button" role="switch" class="offline-switch-row" x-show="offline.enabled" x-cloak
-            :aria-checked="offline.manual" :disabled="offline.busy" @click="offline.setManual(!offline.manual)">
-        <span>{{ t.player_offline_cache_only }}</span><span class="offline-switch" aria-hidden="true"></span>
-    </button>
+    <div class="offline-mode-control" x-show="offline.enabled" x-cloak x-data="{ helpOpen:false }" x-id="['offline-mode', 'offline-hint']"
+         @click.outside="helpOpen = false" @keydown.escape="if (helpOpen) { $event.stopPropagation(); helpOpen = false }">
+        <label :for="$id('offline-mode')">{{ t.player_offline_mode }}</label>
+        <button type="button" class="offline-mode-info" aria-label="{{ t.player_info }}"
+                :aria-describedby="$id('offline-hint')" @mouseenter="helpOpen = true" @mouseleave="helpOpen = false"
+                @focus="helpOpen = true" @blur="helpOpen = false" @click="helpOpen = true">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <circle cx="10" cy="10" r="7.25"/><path d="M10 9v4.25"/><circle cx="10" cy="6.5" r=".9" fill="currentColor" stroke="none"/>
+            </svg>
+        </button>
+        <span role="tooltip" class="offline-mode-hint" :id="$id('offline-hint')" x-show="helpOpen" x-cloak>{{ t.player_offline_mode_hint }}</span>
+        <button type="button" role="switch" class="offline-switch-row" :id="$id('offline-mode')" :aria-describedby="$id('offline-hint')"
+                :aria-checked="offline.manual" :disabled="offline.busy" @click="helpOpen = false; offline.setManual(!offline.manual)">
+            <span class="offline-switch" aria-hidden="true"></span>
+        </button>
+    </div>
 </section>
 {% endif %}
 <div class="account-action-list" @click="if ($event.target.closest('a[href]')) $store.user.menuOpen = false">

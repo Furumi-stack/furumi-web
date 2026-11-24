@@ -1,4 +1,21 @@
 <style>
+{% if !guest %}{% include "player/wordmark_font.css" %}{% endif %}
+.sidebar-brand { flex: none; margin: 0; padding: 18px 22px 0; line-height: 1; }
+.sidebar-wordmark {
+    display: inline-block; padding: 0; border: 0; border-radius: 3px; background: transparent;
+    color: #e7e7e7; font: 700 23px/1.2 "Furumi Wordmark", ui-monospace, monospace;
+    letter-spacing: -.055em; transform-origin: 50% 60%; cursor: pointer; user-select: none;
+}
+.sidebar-wordmark span { color: var(--accent); }
+.sidebar-wordmark, .sidebar-wordmark span { transition: color 115ms ease-out; }
+.sidebar-wordmark:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (hover: hover) {
+    .sidebar-wordmark:hover { color: #f1f1f1; }
+    .sidebar-wordmark:hover span { color: color-mix(in srgb, var(--accent), var(--accent-hover) 65%); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .sidebar-wordmark, .sidebar-wordmark span { transition: none; }
+}
 .music-nav {
     flex: 1;
     min-height: 0;

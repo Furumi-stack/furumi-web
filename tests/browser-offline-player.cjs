@@ -28,7 +28,7 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
 
 (async () => {
     assert.ok(html.includes('data-offline-account="1"'),'render the current member player fixture first');
-    let down = false;
+    let down = false, remoteOwner = null;
     const log = [];
     const server = http.createServer(async (req,res) => {
         const p = new URL(req.url,'http://localhost').pathname;
@@ -46,6 +46,11 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
             if (range) {res.statusCode=206; res.setHeader('Content-Range',`bytes ${first}-${last}/${wav.length}`);}
             return res.end(wav.subarray(first,last+1));
         }
+        if (p === '/api/player/federation/artists/events') {
+            res.writeHead(200, {'Content-Type':'text/event-stream'});
+            res.write(': connected\n\n');
+            return;
+        }
         if (p.endsWith('/events')) {res.writeHead(204); return res.end();}
         const results = {
             '/api/player/me':{id:1,name:'Member',role:'user',stats:{}},
@@ -55,8 +60,9 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
             '/api/player/follows':{artist_ids:[],artists:[]}, '/api/player/playlists':[], '/api/player/pins':[],
             '/api/player/state':{queue:[],repeat_mode:'off',volume:.5},'/api/player/lyrics/1':text,
             '/api/player/federation/tracks/lyrics':text,
-            '/api/player/devices/heartbeat':{active_device_id:null,devices:[],jams:[]},
-            '/api/player/devices/poll':{active_device_id:null,devices:[],commands:[]},
+            '/api/player/devices/heartbeat':{active_device_id:remoteOwner,devices:[],jams:[]},
+            '/api/player/devices/poll':{active_device_id:remoteOwner,devices:[],commands:[],
+                playback_state:remoteOwner ? {track:tracks[0],tracks:[tracks[0]],index:0,position_seconds:6,paused:false} : null},
         };
         res.setHeader('Content-Type','application/json');
         if (p === '/api/player/tracks-by-ids') {
@@ -69,7 +75,16 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
     await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
     const base = 'http://127.0.0.1:'+server.address().port;
     const browser = await chromium.launch({headless:true,...(process.env.CHROME_PATH ? {executablePath:process.env.CHROME_PATH} : {})});
-    const page = await browser.newPage({viewport:{width:1280,height:860}});
+    const context = await browser.newContext({viewport:{width:1280,height:860}});
+    const page = await context.newPage();
+    await context.addInitScript(() => {
+        const play = HTMLMediaElement.prototype.play;
+        window.audioPlayCalls = 0;
+        HTMLMediaElement.prototype.play = function(...args) {
+            if (this instanceof HTMLAudioElement) window.audioPlayCalls++;
+            return play.apply(this,args);
+        };
+    });
     const errors = [];
     page.on('pageerror',e=>errors.push(e.message));
     try {
@@ -90,9 +105,26 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
         await page.waitForFunction(() => Alpine.store('player').isPlaying && Alpine.store('player').currentTime > .1);
         await page.waitForFunction(() => Alpine.store('offline').items.some(t=>t.id===1));
         assert.equal(await page.evaluate(() => Alpine.store('offline').bytes),wav.length);
+        // A second, forgotten tab sees the playing track through device sync.
+        remoteOwner = await page.evaluate(() => Alpine.store('devices').id);
+        const controller = await context.newPage();
+        controller.on('pageerror',e=>errors.push(e.message));
+        await controller.goto(base+'/#artist/7');
+        await controller.waitForFunction(() => !Alpine.store('devices').isActive() &&
+            Alpine.store('player').currentTrack?.id === 1 && Alpine.store('player').isPlaying);
         await account.click();
         await block.getByRole('switch').click();
         await page.waitForFunction(() => Alpine.store('offline').manual && Alpine.store('offline').active);
+        await page.waitForFunction(() => {
+            const player = Alpine.store('player');
+            return player._offlineSession && player.isPlaying && player.currentTime > .3;
+        });
+        await controller.waitForFunction(() => Alpine.store('offline').active && Alpine.store('player')._offlineSession &&
+            !Alpine.store('player').isPlaying);
+        assert.equal(await controller.evaluate(() => window.audioPlayCalls),0,'only the original playback tab may continue');
+        await controller.close();
+        remoteOwner = null;
+        await page.locator('.device-toggle-btn.active:visible').waitFor();
         const baseline = log.length;
         down = true;
         await page.goto(base+'/#artist/7');
@@ -124,6 +156,35 @@ const assets = {'/offline-worker.js':'text/javascript','/offline-catalog.js':'te
         assert.equal(await page.locator('.track-row[data-shared-track-id]').count(),1);
         down = false;
         await page.waitForFunction(() => !Alpine.store('offline').active,null,{timeout:15000});
+        // Lose the browser connection while viewing a live artist and controlling another device.
+        remoteOwner = 'other-browser';
+        await page.goto(base+'/#artist/7');
+        await page.waitForFunction(() => !Alpine.store('devices').isActive() && Alpine.store('player').isPlaying &&
+            Alpine.store('player').currentTrack?.id === 1 &&
+            Alpine.store('library')._artistFederationSource?.readyState === EventSource.OPEN);
+        const controllerPlayCalls = await page.evaluate(() => window.audioPlayCalls);
+        await page.context().setOffline(true);
+        await page.waitForFunction(() => Alpine.store('offline').automatic &&
+            !Alpine.store('library')._artistFederationSource && Alpine.store('library').currentArtist?.top_tracks?.length === 1);
+        await page.locator('.device-toggle-btn.active:visible').waitFor();
+        await page.waitForFunction(() => Alpine.store('player')._offlineSession && !Alpine.store('player').isPlaying);
+        assert.equal(await page.evaluate(() => window.audioPlayCalls),controllerPlayCalls,'a former controller must not start audio on disconnection');
+        const disconnected = log.length;
+        const savedRow = page.locator('.artist-appearance-row:visible').filter({hasText:'Recording 1'}).first();
+        await savedRow.press('Enter');
+        await page.waitForFunction(() => Alpine.store('player').currentTrack?.id === 1 &&
+            Alpine.store('player').isPlaying && Alpine.store('player').currentTime > .3);
+        assert.equal(await page.evaluate(() => Alpine.store('library').federationIsLiked({key:{content_id:'unknown'}})),false);
+        const artistEvents = log.filter(r => r.p === '/api/player/federation/artists/events').length;
+        await page.reload();
+        await page.waitForFunction(() => Alpine.store('offline').automatic && Alpine.store('library').currentArtist?.id === 7);
+        assert.equal(await page.evaluate(() => window.audioPlayCalls),0,'reloading offline must not autoplay');
+        assert.deepEqual(log.slice(disconnected).filter(r => !['/offline-worker.js','/offline-catalog.js'].includes(r.p)),[]);
+        remoteOwner = null;
+        await page.context().setOffline(false);
+        await page.waitForFunction(() => !Alpine.store('offline').active &&
+            Alpine.store('library')._artistFederationSource?.readyState === EventSource.OPEN,null,{timeout:15000});
+        assert.equal(log.filter(r => r.p === '/api/player/federation/artists/events').length,artistEvents+1);
         await page.evaluate(track => Alpine.store('player').play(track),prepared);
         await page.waitForFunction(() => Alpine.store('offline').items.some(t=>t.offline_remote));
         await page.evaluate(() => Alpine.store('offline').setManual(true));

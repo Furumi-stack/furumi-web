@@ -81,6 +81,43 @@ async function checkArtistPopularTracks(page) {
  await rows.nth(5).waitFor({state:'detached'});
  assert.equal(await section.locator('.artist-popular-overflow').evaluate(el=>el.getAnimations().length),0);
 }
+
+async function checkArtistScrollReturn(page) {
+ const tracks = Array.from({length:35}, (_, i) => local(i+1, 'Track '+i));
+ const releases = Array.from({length:48}, (_, i) => ({id:i+1,title:'Album '+i,release_type:'album',track_count:8}));
+ await page.route('**/api/player/artists/398', route => route.fulfill({json:{
+  id:398,name:'Scorpions',top_tracks:tracks,featured_tracks:[],releases,total_track_count:tracks.length,
+ }}));
+ await page.evaluate(() => { location.hash = 'artist/398'; });
+ const section = page.locator('.artist-top-tracks');
+ const toggle = section.getByRole('button', {name:'Expand all',exact:true});
+ const collapse = section.getByRole('button', {name:'Collapse',exact:true});
+ await page.getByText('Album 47',{exact:true}).waitFor({state:'attached'});
+ const scroller = page.locator('#center-scroll');
+ for (const reducedMotion of ['no-preference','reduce']) {
+  await page.emulateMedia({reducedMotion});
+  // Expand midway down the viewport, then scroll the distant Collapse button into a different position.
+  const offset = await scroller.evaluate(el => {
+   const button = el.querySelector('.artist-top-tracks-toggle');
+   el.scrollTop += button.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight * .5;
+   return el.scrollTop;
+  });
+  const expandY = (await toggle.boundingBox()).y;
+  await toggle.click();
+  await section.locator('.artist-appearance-row').last().getByText('Track 34',{exact:true}).waitFor({state:'attached'});
+  await section.locator('.artist-popular-overflow').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
+  const expandedOffset = await scroller.evaluate(el => {
+   const button = el.querySelector('.artist-top-tracks-toggle');
+   el.scrollTop += button.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight * .25;
+   return el.scrollTop;
+  });
+  assert.ok(expandedOffset > offset + 1000, 'the listener has scrolled through the expanded tracks');
+  await collapse.click();
+  await section.locator('.artist-appearance-row').nth(5).waitFor({state:'detached'});
+  await page.waitForFunction(y => Math.abs(document.querySelector('.artist-top-tracks-toggle').getBoundingClientRect().top - y) < 12,
+   expandY, {timeout:2500});
+ }
+}
 data.remote[0].metadata.artists[0].local_id=1;
 data.remote[0].metadata.release.local_id=442;
 data.remote[0].metadata.featured_artists=[{name:'Guest & Co'}];
@@ -246,6 +283,7 @@ data.remote[0].availability.local={track_id:111, stream_url:'/api/player/stream/
    assert.equal(await page.evaluate(()=>window.groupPlays.at(-1).id),'fed:'+remote(12).key.content_id);
    assert.equal(await page.evaluate(()=>Alpine.store('player').volume),0.37);
    await checkArtistPopularTracks(page);
+   await checkArtistScrollReturn(page);
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Search and artist version groups, expansion, playback and streaming checks passed.');
