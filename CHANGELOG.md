@@ -20,7 +20,8 @@
 - Collapsing popular tracks on an artist page returns the list to the position
   where it was expanded.
 - The desktop sidebar now has a `#furumi` wordmark with an embedded monospace
-  font and a subtle click animation that respects reduced motion.
+  font and a subtle click animation that respects reduced motion. The build
+  version beside it links to the project repository.
 
 ## v0.16.1 — 2026-11-24
 

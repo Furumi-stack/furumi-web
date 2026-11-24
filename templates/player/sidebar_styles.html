@@ -1,6 +1,8 @@
 <style>
 {% if !guest %}{% include "player/wordmark_font.css" %}{% endif %}
-.sidebar-brand { flex: none; margin: 0; padding: 18px 22px 0; line-height: 1; }
+.sidebar-brand { display: flex; align-items: baseline; gap: 8px; flex: none; padding: 18px 22px 0; line-height: 1; }
+.sidebar-build-version { color: #888; font-size: 11px; white-space: nowrap; text-decoration: none; }
+.sidebar-build-version:is(:hover, :focus-visible) { color: var(--text-secondary); text-decoration: underline; }
 .sidebar-wordmark {
     display: inline-block; padding: 0; border: 0; border-radius: 3px; background: transparent;
     color: #e7e7e7; font: 700 23px/1.2 "Furumi Wordmark", ui-monospace, monospace;

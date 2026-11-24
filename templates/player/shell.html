@@ -9,9 +9,11 @@
     <div class="main-content">
         {% if !guest %}
         <aside class="sidebar-left">
-            <h2 class="sidebar-brand">
-                <button class="sidebar-wordmark" type="button" @click="nudgeWordmark($el)" @keydown.space.stop><span>#</span>furumi</button>
-            </h2>
+            <header class="sidebar-brand">
+                <h2><button class="sidebar-wordmark" type="button" @click="nudgeWordmark($el)" @keydown.space.stop><span>#</span>furumi</button></h2>
+                <a class="sidebar-build-version" href="https://gt.hexor.cy/Furumi/furumi-web"
+                   target="_blank" rel="noopener noreferrer">v{{ t.app_version() }}</a>
+            </header>
             {% include "player/sidebar_nav.html" %}
             <div class="sidebar-account" data-account-menu x-show="$store.user.profile" x-cloak
                  @keydown.escape="if ($store.user.menuOpen) { $store.user.menuOpen = false; $refs.accountTrigger.focus() }">
