@@ -96,16 +96,19 @@ async function checkArtistScrollReturn(page) {
  const scroller = page.locator('#center-scroll');
  for (const reducedMotion of ['no-preference','reduce']) {
   await page.emulateMedia({reducedMotion});
-  // Expand midway down the viewport, then scroll the distant Collapse button into a different position.
+  // Start halfway down the viewport, as when a listener discovers the toggle below the preview.
   const offset = await scroller.evaluate(el => {
    const button = el.querySelector('.artist-top-tracks-toggle');
    el.scrollTop += button.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight * .5;
    return el.scrollTop;
   });
-  const expandY = (await toggle.boundingBox()).y;
   await toggle.click();
   await section.locator('.artist-appearance-row').last().getByText('Track 34',{exact:true}).waitFor({state:'attached'});
   await section.locator('.artist-popular-overflow').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
+  await page.waitForFunction(() => {
+   const heading = document.querySelector('.artist-top-tracks h2'), scroller = document.querySelector('#center-scroll');
+   return Math.abs(heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8) <= 2;
+  }, null, {timeout:2500});
   const expandedOffset = await scroller.evaluate(el => {
    const button = el.querySelector('.artist-top-tracks-toggle');
    el.scrollTop += button.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight * .25;
@@ -114,8 +117,7 @@ async function checkArtistScrollReturn(page) {
   assert.ok(expandedOffset > offset + 1000, 'the listener has scrolled through the expanded tracks');
   await collapse.click();
   await section.locator('.artist-appearance-row').nth(5).waitFor({state:'detached'});
-  await page.waitForFunction(y => Math.abs(document.querySelector('.artist-top-tracks-toggle').getBoundingClientRect().top - y) < 12,
-   expandY, {timeout:2500});
+  await page.waitForFunction(() => document.querySelector('#center-scroll').scrollTop <= 1, null, {timeout:2500});
  }
 }
 data.remote[0].metadata.artists[0].local_id=1;

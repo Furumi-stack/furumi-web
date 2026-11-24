@@ -1,6 +1,6 @@
 <section class="artist-release-group artist-top-tracks" x-data="artistPopularTracks" :class="{'artist-top-folding':folding}"
          x-effect="setTracks($store.library.currentArtist?.top_tracks)">
-    <h2 class="artist-release-group-title">{{ t.player_top_tracks }}</h2>
+    <h2 class="artist-release-group-title" x-ref="heading">{{ t.player_top_tracks }}</h2>
     <div class="track-list-header">
         <span>#</span>
         <span>{{ t.player_title }}</span>
@@ -22,7 +22,7 @@
         </div>
     </div>
     <button class="artist-top-tracks-toggle" type="button" x-show="groups.length > 5" x-cloak
-            @click="anchorListScroll($el); toggleList()" :aria-expanded="expanded" aria-controls="artist-popular-tracks">
+            @click="toggleList(); $nextTick(() => scrollList())" :aria-expanded="expanded" aria-controls="artist-popular-tracks">
         <span x-text="expanded ? '{{ t.player_collapse }}' : '{{ t.player_expand_all }}'"></span>
         <svg viewBox="0 0 36 8" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="m1 1 17 5 17-5" stroke-linecap="round" stroke-linejoin="round"/>

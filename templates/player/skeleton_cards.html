@@ -1,0 +1,11 @@
+<div class="page-skeleton" role="status">
+    <span class="loading-label">{{ t.player_loading_content }}</span>
+    <div class="card-grid" aria-hidden="true">
+        {% for _ in 0..4 %}
+        <div class="skeleton-card">
+            <div class="skeleton-art"></div>
+            <i class="skeleton-bar"></i><i class="skeleton-bar"></i>
+        </div>
+        {% endfor %}
+    </div>
+</div>

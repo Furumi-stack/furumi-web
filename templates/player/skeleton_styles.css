@@ -1,0 +1,25 @@
+.loading-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.page-skeleton, .skeleton-tracks { pointer-events: none; user-select: none; }
+.skeleton-bar, .skeleton-thumb, .skeleton-art { display: block; background: var(--bg-elevated); }
+.skeleton-bar { height: 9px; border-radius: 4px; }
+.skeleton-crumb { width: 126px; margin-block: 4px; }
+.skeleton-caption { min-width: 0; width: 100%; padding-block: 6px; }
+.playlist-detail-heading .skeleton-caption { grid-area: details; }
+.skeleton-title { width: min(76%, 360px); height: clamp(20px, 3vw, 40px); }
+.skeleton-byline { width: min(52%, 174px); margin-top: 12px; }
+.page-skeleton .skeleton-art { background: var(--bg-elevated); box-shadow: none; }
+.skeleton-list-head { padding: 10px 16px; border-bottom: 1px solid var(--border-color); }
+.skeleton-list-head .skeleton-bar { width: 74px; }
+.skeleton-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 52px; padding-inline: 16px; }
+.skeleton-thumb { width: 32px; aspect-ratio: 1; border-radius: 4px; }
+.skeleton-row div > :first-child { width: min(64%, 270px); }
+.skeleton-row:nth-child(even) div > :first-child { width: min(49%, 208px); }
+.skeleton-row div > :last-child, .skeleton-card .skeleton-bar:last-child { width: min(36%, 134px); height: 7px; margin-top: 7px; opacity: .75; }
+.skeleton-time { width: 26px; }
+.skeleton-card { padding: 12px; }
+.skeleton-card .skeleton-art { aspect-ratio: 1; margin-bottom: 12px; border-radius: 7px; }
+.skeleton-card .skeleton-bar { width: 70%; }
+@media (prefers-reduced-motion: no-preference) {
+    .page-skeleton { animation: skeleton-breathe 1.5s ease-in-out infinite alternate; }
+    @keyframes skeleton-breathe { from { opacity: .68; } to { opacity: 1; } }
+}

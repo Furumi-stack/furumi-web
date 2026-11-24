@@ -157,6 +157,22 @@
             {% include "player/collection.html" %}
             {% endif %}
             {% include "player/listening.html" %}
+            <template x-if="$store.library.pendingDetail">
+                <div class="page-skeleton" :data-skeleton="$store.library.pendingDetail" role="status">
+                    <span class="loading-label">{{ t.player_loading_content }}</span>
+                    <div aria-hidden="true">
+                        <div class="breadcrumb"><i class="skeleton-bar skeleton-crumb"></i></div>
+                        <div :class="{ 'artist-header': $store.library.pendingDetail === 'artist', 'release-header': $store.library.pendingDetail === 'release', 'playlist-detail-heading': $store.library.pendingDetail === 'playlist' }">
+                            <div class="skeleton-art" :class="{ 'artist-img': $store.library.pendingDetail === 'artist', 'release-cover': $store.library.pendingDetail === 'release', 'playlist-heading-cover': $store.library.pendingDetail === 'playlist' }"></div>
+                            <div class="skeleton-caption">
+                                <i class="skeleton-bar skeleton-title"></i>
+                                <i class="skeleton-bar skeleton-byline"></i>
+                            </div>
+                        </div>
+                    </div>
+                    {% include "player/skeleton_tracks.html" %}
+                </div>
+            </template>
             <template x-if="$store.library.view === 'offline_unavailable'">
                 <div class="empty-state" role="status">
                     <p>{{ t.player_offline_page_missing }}</p>
@@ -186,7 +202,10 @@
                     <p class="lyrics-search-note" x-show="$store.library.searchMode==='lyrics'" x-text="$store.lyricsSearch.text('local')"></p>
                     <p class="lyrics-search-note" role="status" x-show="$store.library.searchMode==='lyrics' && ($store.library.searchResults?.semantic_error || ($store.library.searchResults?.lyrics_status?.ready_chunks ?? 1)===0)" x-text="$store.lyricsSearch.text('lexical')"></p>
                     <template x-if="!$store.library.hasDisplaySearchResults && ($store.library.searchLoading || ($store.library.ordinarySearch && $store.library.federationSearch.loading))">
-                        <div class="loading-spinner"><div class="spinner"></div></div>
+                        <div class="page-skeleton" role="status">
+                            <span class="loading-label">{{ t.player_loading_content }}</span>
+                            {% include "player/skeleton_tracks.html" %}
+                        </div>
                     </template>
                     <template x-if="!$store.library.searchLoading && $store.library.similaritySearchError">
                         <div class="empty-state">
@@ -379,7 +398,7 @@
                         </div>
                     </template>
                     <template x-if="$store.library.loading && $store.library.artists.length === 0">
-                        <div class="loading-spinner"><div class="spinner"></div></div>
+                        {% include "player/skeleton_cards.html" %}
                     </template>
                     <div class="scroll-load-indicator"
                          x-show="$store.library.loading && $store.library.artists.length > 0"
@@ -395,6 +414,9 @@
             {% endif %}
 
             <!-- Artist Detail -->
+            <template x-if="$store.library.view === 'artist_detail' && !$store.library.currentArtist && $store.library.artistUnavailable">
+                <div class="empty-state" role="status">{{ t.player_artist_unavailable }}</div>
+            </template>
             <template x-if="$store.library.view === 'artist_detail' && $store.library.currentArtist">
                 <div>
                     <div class="breadcrumb">
@@ -453,6 +475,9 @@
                             </div>
                         </div>
                     </div>
+                    <template x-if="$store.library.currentArtist.federated && $store.library.artistFederation.loading && !$store.library.artistFederation.tracks.length && !$store.library.artistFederation.releases.length">
+                        {% include "player/skeleton_tracks.html" %}
+                    </template>
                     <template x-if="$store.library.currentArtist.top_tracks && $store.library.currentArtist.top_tracks.length > 0">
                         {% include "player/artist_popular_tracks.html" %}
                     </template>
@@ -655,9 +680,8 @@
             </template>
 
             <!-- Release Detail -->
-            <template x-if="$store.library.view === 'release_detail' && !$store.library.currentRelease">
-                <div class="empty-state" role="status"
-                     x-text="$store.library.releaseUnavailable ? '{{ t.player_release_unavailable }}' : '{{ t.player_loading_release }}'"></div>
+            <template x-if="$store.library.view === 'release_detail' && !$store.library.currentRelease && $store.library.releaseUnavailable">
+                <div class="empty-state" role="status">{{ t.player_release_unavailable }}</div>
             </template>
             <template x-if="$store.library.view === 'release_detail' && $store.library.currentRelease">
                 <div>
@@ -823,6 +847,9 @@
             </template>
 
             <!-- Playlist Detail -->
+            <template x-if="$store.library.view === 'playlist_detail' && $store.library.playlistUnavailable && !$store.library.currentPlaylist">
+                <div class="empty-state" role="status">{{ t.player_playlist_unavailable }}</div>
+            </template>
             <template x-if="$store.library.view === 'playlist_detail' && $store.library.currentPlaylist">
                 <div class="playlist-detail-view" x-data="playlistTrackFilter" x-effect="setPlaylist($store.library.currentPlaylist)">
                     <div class="breadcrumb">

@@ -31,6 +31,7 @@ function setup(hash, fetch) {
         } },
         history: { replaceState(_state, _title, url) { location.hash = url; replacements.push(url); } },
     });
+    library._scrollElement = () => null;
     library._afterNavigation = () => {};
     return { library, location, replacements, streams, offline };
 }

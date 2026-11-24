@@ -414,6 +414,7 @@ translations! {
     player_collection_empty: "No playlists yet."                , "Плейлистов пока нет.";
     player_rename_playlist:  "Rename Playlist"                 , "Переименовать плейлист";
     player_playlist_name:    "Playlist name"                   , "Название плейлиста";
+    player_playlist_unavailable: "Playlist unavailable"         , "Плейлист недоступен";
     player_playlist_cover:   "Playlist cover"                  , "Обложка плейлиста";
     player_edit_playlist_cover: "Edit playlist cover"          , "Изменить обложку плейлиста";
     player_playlist_cover_auto: "Automatic"                    , "Авто";
@@ -685,8 +686,9 @@ translations! {
     player_seen:             "seen"                            , "видели";
     player_eta:              "eta"                             , "осталось";
     player_loading_history:  "Loading history..."              , "Загрузка истории...";
-    player_loading_release:  "Loading release…"                , "Загрузка релиза…";
+    player_loading_content:  "Loading…"                        , "Загрузка…";
     player_release_unavailable: "Release unavailable"          , "Релиз недоступен";
+    player_artist_unavailable: "Artist unavailable"            , "Исполнитель недоступен";
     player_federated_result: "Available from the federation"   , "Доступно в федерации";
     player_loading_more:     "Loading more..."                 , "Загружаю ещё...";
     player_failed_load_history: "Failed to load history"        , "Не удалось загрузить историю";

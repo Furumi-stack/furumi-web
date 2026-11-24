@@ -549,19 +549,26 @@ document.addEventListener('alpine:init', () => {
         async handleInitialShareLinks() {
             if (this._handledInitialLink || !SHARE_TOKEN) return;
             this._handledInitialLink = true;
+            const library = Alpine.store('library');
+            library._beginNavigation(library._activeHash, {fromHash:true});
+            const route = library._navigationVersion;
+            library.currentPlaylist = null;
+            library.playlistUnavailable = false;
+            library.view = 'playlist_detail';
             try {
                 const response = await fetch(`/api/player/shares/${SHARE_TOKEN}`);
                 if (!response.ok) throw new Error('share unavailable');
                 const data = await response.json();
+                if (route !== library._navigationVersion) return;
                 const tracks = data.tracks || [];
-                Alpine.store('library').showSharedPlaylist(data);
                 if (!tracks.length) throw new Error('share empty');
+                library.showSharedPlaylist(data);
                 const queue = Alpine.store('queue');
                 queue.tracks = tracks;
                 queue.currentIndex = 0;
                 Alpine.store('player')._playLocal(tracks[0], {paused:true});
             } catch {
-                Alpine.store('library').showSharedPlaylist({title:T.shareUnavailable, tracks:[]});
+                if (route === library._navigationVersion) library.showSharedPlaylist({title:T.shareUnavailable, tracks:[]});
             }
         },
 
@@ -2718,9 +2725,17 @@ document.addEventListener('alpine:init', () => {
         loading: false,
         _allLoaded: false,
         _artistsLoadToken: 0,
+        get pendingDetail() {
+            if (this.view === 'artist_detail' && !this.currentArtist && !this.artistUnavailable) return 'artist';
+            if (this.view === 'playlist_detail' && !this.currentPlaylist && !this.playlistUnavailable) return 'playlist';
+            if (this.view === 'release_detail' && !this.currentRelease && !this.releaseUnavailable) return 'release';
+            return '';
+        },
         currentArtist: null,
+        artistUnavailable: false,
         currentRelease: null,
         currentPlaylist: null,
+        playlistUnavailable: false,
         _playlistReadVersion: 0,
         _observer: null,
         searchQuery: '',
@@ -2908,7 +2923,9 @@ document.addEventListener('alpine:init', () => {
         _restoreScrollPosition(hash = this._activeHash) {
             const top = this._scrollPositions[hash];
             if (top == null) return;
+            const version = this._navigationVersion;
             const restore = () => {
+                if (version !== this._navigationVersion) return;
                 const el = this._scrollElement();
                 if (el) el.scrollTop = top;
             };
@@ -2944,6 +2961,7 @@ document.addEventListener('alpine:init', () => {
             } else {
                 this._activeHash = hash;
             }
+            if (/^#(?:artist|release|playlist|artistfed|releasefed|share)[/?]/.test(hash)) this._scrollToTop();
         },
 
         _resetArtistList(filter) {
@@ -3060,6 +3078,7 @@ document.addEventListener('alpine:init', () => {
             this.stopArtistFederation();
             this._beginNavigation('#artist/' + id, options);
             const version = this._navigationVersion;
+            this.artistUnavailable = false;
             this.searchQuery = '';
             this.searchResults = null;
             this.view = 'artist_detail';
@@ -3072,7 +3091,10 @@ document.addEventListener('alpine:init', () => {
                 this.currentArtist = artist;
                 this.startArtistFederation(this.currentArtist.name);
             } catch {
-                if (playerOffline() && version === this._navigationVersion) this.view = 'offline_unavailable';
+                if (version === this._navigationVersion) {
+                    this.artistUnavailable = true;
+                    if (playerOffline()) this.view = 'offline_unavailable';
+                }
             }
             if (version === this._navigationVersion) this._afterNavigation(options);
         },
@@ -3104,9 +3126,17 @@ document.addEventListener('alpine:init', () => {
             this.stopArtistFederation();
             this._beginNavigation('#artistfed?name=' + encodeURIComponent(name), options);
             const version = this._navigationVersion;
+            this.artistUnavailable = false;
             this.searchQuery = '';
             this.searchResults = null;
             this.view = 'artist_detail';
+            this.currentArtist = null;
+            const id = await this.resolveFederatedId('artist', { name });
+            if (version !== this._navigationVersion) return;
+            if (id) {
+                history.replaceState(history.state, '', '#artist/' + id);
+                return this.openArtist(id, { ...options, fromHash: true });
+            }
             this.currentArtist = {
                 id: null,
                 name,
@@ -3118,12 +3148,6 @@ document.addEventListener('alpine:init', () => {
                 total_play_count: 0,
                 federated: true,
             };
-            const id = await this.resolveFederatedId('artist', { name });
-            if (version !== this._navigationVersion) return;
-            if (id) {
-                history.replaceState(history.state, '', '#artist/' + id);
-                return this.openArtist(id, { ...options, fromHash: true });
-            }
             this.startArtistFederation(name);
             this._afterNavigation(options);
         },
@@ -3685,6 +3709,7 @@ document.addEventListener('alpine:init', () => {
             const route = this._navigationVersion;
             const current = () => version === this._playlistReadVersion && route === this._navigationVersion;
             const likes = Number(id) === -1;
+            if (!this.currentPlaylist) this.playlistUnavailable = false;
             try {
                 const pending = Alpine.store('playlists')?.trackChange;
                 if (pending?.id === Number(id)) {
@@ -3725,9 +3750,10 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
             } catch {
-                if (current() && navigation && !this.currentPlaylist) {
+                if (current() && !this.currentPlaylist) {
                     if (playerOffline()) this.view = 'offline_unavailable';
-                    this._afterNavigation(navigation);
+                    else this.playlistUnavailable = true;
+                    if (navigation) this._afterNavigation(navigation);
                 }
             }
         },

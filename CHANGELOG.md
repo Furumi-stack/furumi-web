@@ -12,6 +12,12 @@
 
 ## v0.16.4 — 2026-11-24
 
+- Artist, playlist and release pages immediately show the outline of the artwork
+  and track list while opening. The catalog and initial search use matching
+  placeholders as well.
+- Expanding an artist's popular tracks scrolls to the section heading.
+  Collapsing the list returns to the top of the artist page.
+
 - Personal settings group language and Last.fm side by side and bring offline
   storage, the cache limit and saved music together in one compact panel.
 - Connected devices use compact lists with counts, separate mobile tabs for
