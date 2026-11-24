@@ -1,0 +1,116 @@
+<section class="settings-devices user-settings-devices" aria-labelledby="settings-devices-title"
+         x-data="{pairing:false, deviceList:'web'}">
+    <div class="settings-devices-head">
+        <div class="settings-devices-heading">
+            <h4 id="settings-devices-title">{{ t.player_connected_devices }}</h4>
+            <div class="settings-sync-tip" x-data="{showTip:false}" @mouseenter="showTip=true" @mouseleave="showTip=false" @click.outside="showTip=false">
+                <button class="settings-device-info" type="button" aria-label="{{ t.player_device_sync_details }}" aria-describedby="settings-sync-details"
+                        @focus="showTip=true" @blur="showTip=false" @click="showTip=true"
+                        @keydown.escape="if (showTip) { $event.stopPropagation(); $event.preventDefault(); showTip=false }">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-9v.2"/></svg>
+                </button>
+                <div class="settings-device-tooltip" id="settings-sync-details" role="tooltip" x-cloak x-show="showTip" x-transition.opacity.duration.120ms>
+                    <dl>
+                        <div><dt>{{ t.player_device_linked }}</dt><dd x-text="$store.devices.fed?.active_devices ?? '—'"></dd></div>
+                        <div><dt>{{ t.player_device_queued }}</dt><dd x-text="$store.devices.fed?.outbox_ops ?? '—'"></dd></div>
+                        <div><dt>{{ t.player_device_unresolved }}</dt><dd x-text="$store.devices.fed?.unresolved_items ?? '—'"></dd></div>
+                        <div class="settings-device-sync-note" x-show="$store.devices.fed?.last_sync"><dt>{{ t.player_device_last_sync }}</dt><dd x-text="$store.devices.fed?.last_sync"></dd></div>
+                    </dl>
+                </div>
+            </div>
+        </div>
+        <div class="settings-devices-tools">
+            <button type="button" class="settings-pair-toggle" x-ref="pairButton" :aria-expanded="pairing" aria-controls="settings-device-pairing"
+                    aria-label="{{ t.player_device_pair }}" title="{{ t.player_device_pair }}" @click="pairing = !pairing">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 16H4a1 1 0 01-1-1V5a1 1 0 011-1h15a1 1 0 011 1v4M8 20h6m-3-4v4m8-8v8m-4-4h8"/></svg><span>{{ t.player_device_pair }}</span>
+            </button>
+            <button type="button" class="settings-device-sync" :disabled="$store.devices.fedBusy" @click="$store.devices.syncFedDevices()"
+                    title="{{ t.player_device_sync }}" aria-label="{{ t.player_device_sync }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 5v5h-5M4 19v-5h5"/><path d="M19.3 9a7.6 7.6 0 00-12.8-3M4.7 15a7.6 7.6 0 0012.8 3"/></svg>
+            </button>
+        </div>
+    </div>
+    <div class="settings-devices-offline" data-offline-only>
+        <h4>{{ t.player_connected_devices }}</h4>
+        <p>{{ t.player_offline_devices }}</p>
+    </div>
+    <div class="settings-pair-panel" id="settings-device-pairing" inert :inert="pairing ? null : true"
+         @keydown.escape.stop.prevent="pairing=false; $refs.pairButton.focus()">
+        <div class="settings-pair-clip">
+            <div class="settings-pair-fields">
+                <button type="button" :disabled="$store.devices.fedBusy" @click="$store.devices.generateFedInvite()">{{ t.player_device_generate }}</button>
+                <div class="settings-pair-input">
+                    <input type="text" placeholder="{{ t.player_device_paste_invite }}" aria-label="{{ t.player_device_paste_invite }}"
+                        x-model="$store.devices.fedInviteInput" @keydown.enter.prevent="$store.devices.connectFedInvite()" autocapitalize="none" spellcheck="false">
+                    <button type="button" :disabled="$store.devices.fedBusy || !$store.devices.fedInviteInput.trim()" @click="$store.devices.connectFedInvite()">{{ t.player_settings_connect }}</button>
+                </div>
+                <template x-if="$store.devices.fedInvite">
+                    <input class="settings-created-invite" aria-label="{{ t.player_device_invite }}" readonly :value="$store.devices.fedInvite" @focus="$event.target.select()">
+                </template>
+            </div>
+        </div>
+    </div>
+    <template x-if="$store.devices.fedError">
+        <p role="alert" class="settings-device-error" x-text="$store.devices.fedError"></p>
+    </template>
+    <template x-if="$store.devices.fedPending().length">
+        <div class="settings-device-requests" aria-labelledby="settings-device-requests">
+            <h5 id="settings-device-requests">{{ t.player_device_requests }}</h5>
+            <template x-for="request in $store.devices.fedPending()" :key="request.request_id">
+                <div class="settings-device-request">
+                    <div class="settings-request-name"><strong x-text="request.name || request.device_id"></strong>
+                        <small x-text="request.requester_group_id ? '{{ t.player_device_other_group }}' : request.client_version"></small>
+                    </div>
+                    <div class="settings-request-actions">
+                        <button :disabled="$store.devices.fedBusy" @click="$store.devices.answerFedPairing(request, true, !!request.requester_group_id)"
+                                x-text="request.requester_group_id ? '{{ t.player_device_use_group }}' : '{{ t.player_approve }}'"></button>
+                        <button :disabled="$store.devices.fedBusy" @click="$store.devices.answerFedPairing(request, false, false)">{{ t.reviews_reject }}</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </template>
+    <div class="settings-device-tabs" role="group" aria-label="{{ t.player_connected_devices }}">
+        <label><input type="radio" name="settings-device-category" x-model="deviceList" value="web" aria-controls="settings-web-devices">
+            <span>{{ t.player_device_web_sessions }} <b x-text="$store.devices.webDevices().length"></b></span>
+        </label>
+        <label><input type="radio" name="settings-device-category" x-model="deviceList" value="trusted" aria-controls="settings-trusted-devices">
+            <span>{{ t.player_device_trusted }} <b x-text="$store.devices.fedDevices().length"></b></span>
+        </label>
+    </div>
+    <div class="settings-device-columns" :data-list="deviceList">
+        <div class="settings-device-column" id="settings-web-devices">
+            <h5>{{ t.player_device_web_sessions }} <b x-text="$store.devices.webDevices().length"></b></h5>
+            <ul class="settings-device-list" aria-label="{{ t.player_device_web_sessions }}">
+                <template x-for="device in $store.devices.webDevices()" :key="device.id">
+                    <li class="settings-device-item">
+                        <svg class="settings-device-symbol" :class="{'is-local':device.is_current}" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 20h8m-4-3v3"/></svg>
+                        <span class="settings-device-name" :title="device.name" x-text="device.name"></span>
+                        <span class="settings-device-local" x-show="device.is_current">{{ t.player_device_current }}</span>
+                        <span class="settings-device-active" x-show="!device.is_current && device.is_active">{{ t.player_device_active }}</span>
+                    </li>
+                </template>
+                <li class="settings-device-empty" x-show="!$store.devices.webDevices().length">{{ t.player_device_no_sessions }}</li>
+            </ul>
+        </div>
+        <div class="settings-device-column" id="settings-trusted-devices">
+            <h5>{{ t.player_device_trusted }} <b x-text="$store.devices.fedDevices().length"></b></h5>
+            <ul class="settings-device-list" aria-label="{{ t.player_device_trusted }}">
+                <template x-for="device in $store.devices.fedDevices()" :key="device.device_id">
+                    <li class="settings-device-item">
+                        <svg class="settings-device-symbol" :class="{'is-local':device.is_self}" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M7.5 7.5a6.5 6.5 0 000 9m9-9a6.5 6.5 0 010 9M4.3 4.5a10.5 10.5 0 000 15m15.4-15a10.5 10.5 0 010 15"/></svg>
+                        <span class="settings-device-name" :title="device.name || device.device_id" x-text="device.name || device.device_id"></span>
+                        <span class="settings-device-version" x-show="device.client_version" x-text="device.client_version"></span>
+                        <span class="settings-device-local" x-show="device.is_self">{{ t.player_device_current }}</span>
+                        <button type="button" class="settings-revoke" x-show="!device.is_self" :disabled="$store.devices.fedBusy"
+                                @click="$store.devices.revokeFedDevice(device)" title="{{ t.player_device_revoke }}"
+                                :aria-label="'{{ t.player_device_revoke }} · ' + (device.name || device.device_id)">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a4 4 0 005.8.2l2.6-2.6A4 4 0 0013 4.8l-1.2 1.3M14 11a4 4 0 00-5.8-.2l-2.6 2.6A4 4 0 0011 19.2l1.2-1.3M3 3l18 18"/></svg>
+                        </button>
+                    </li>
+                </template>
+                <li class="settings-device-empty" x-show="!$store.devices.fedDevices().length">{{ t.player_device_no_trusted }}</li>
+            </ul>
+        </div>
+    </div>
+</section>

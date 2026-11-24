@@ -2612,13 +2612,6 @@ button.user-stat:hover {
     white-space: nowrap;
 }
 
-.settings-app-version {
-    display: inline-block;
-    color: var(--text-secondary);
-    font-size: 12px;
-    text-decoration: none;
-}
-.settings-app-version:hover, .settings-app-version:focus-visible { color: var(--text-primary); text-decoration: underline; }
 
 .mobile-account-chip {
     display: none;
@@ -3216,8 +3209,8 @@ button.user-stat:hover {
 .search-release-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .search-release-cover svg { width: 40px; height: 40px; color: var(--text-subdued); }
 
-.artwork-image { z-index: 1; opacity: 0; }
-.artwork-image.artwork-loaded { opacity: 1; }
+.artwork-image { z-index: 1; }
+img[x-artwork]:not(.artwork-loaded) { visibility: hidden; }
 
 /* Like button */
 .like-btn {
@@ -4457,104 +4450,6 @@ button.user-stat:hover {
     overflow-wrap: anywhere;
 }
 
-.user-settings-modal {
-    width: min(760px, calc(100vw - 32px));
-    max-width: 760px;
-    max-height: min(86dvh, 820px);
-    overflow-y: auto;
-}
-.user-settings-head,
-.user-settings-section-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-}
-.user-settings-head {
-    margin-bottom: 16px;
-}
-.user-settings-head h3,
-.user-settings-section h4 {
-    margin: 0;
-}
-.user-settings-head p,
-.user-settings-section p {
-    margin: 4px 0 0;
-    color: var(--text-subdued);
-    font-size: 12px;
-    line-height: 1.45;
-}
-.user-settings-section {
-    padding: 16px 0;
-    border-top: 1px solid var(--border-color);
-}
-.user-settings-devices {
-    display: grid;
-    gap: 12px;
-}
-.settings-device-group {
-    overflow: hidden;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-primary);
-}
-.settings-device-label {
-    padding: 8px 11px;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-subdued);
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-}
-.settings-device-row {
-    min-height: 48px;
-    padding: 8px 11px;
-    display: grid;
-    grid-template-columns: 28px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-}
-.settings-device-row:last-child {
-    border-bottom: 0;
-}
-.settings-device-row.federation {
-    background: rgba(82, 145, 255, 0.035);
-}
-.settings-primary-btn,
-.settings-secondary-btn {
-    min-height: 34px;
-    padding: 7px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: var(--bg-hover);
-    color: var(--text-primary);
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 750;
-    white-space: nowrap;
-}
-.settings-primary-btn {
-    border-color: rgba(82, 145, 255, 0.4);
-    background: rgba(82, 145, 255, 0.18);
-    color: #d5e4ff;
-}
-.settings-primary-btn:hover,
-.settings-secondary-btn:hover {
-    filter: brightness(1.12);
-}
-.settings-primary-btn:disabled,
-.settings-secondary-btn:disabled {
-    cursor: default;
-    opacity: .55;
-}
-.settings-pairing-actions {
-    display: grid;
-    gap: 8px;
-}
-.settings-pairing-actions > .settings-primary-btn {
-    justify-self: start;
-}
 
 .torrent-modal-grid {
     display: grid;

@@ -5,10 +5,10 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 .offline-account-meter::-webkit-progress-bar {background:var(--bg-active)}
 .offline-account-meter::-webkit-progress-value {background:var(--accent); border-radius:4px}
 .offline-account-meter::-moz-progress-bar {background:var(--accent); border-radius:4px}
-.offline-account-summary,.offline-limit-label,.offline-saved-summary {display:flex; justify-content:space-between; align-items:center; gap:8px}
-.offline-account-summary > div,.offline-saved-summary > div {min-width:0}
-.offline-account strong,.offline-saved-summary strong {display:block; font-size:13px; font-weight:600; line-height:1.3}
-.offline-account small,.offline-saved small {display:block; color:var(--text-subdued); font-size:12px; font-variant-numeric:tabular-nums}
+.offline-account-summary,.offline-limit-label {display:flex; justify-content:space-between; align-items:center; gap:8px}
+.offline-account-summary > div {min-width:0}
+.offline-account strong {display:block; font-size:13px; font-weight:600; line-height:1.3}
+.offline-account small {display:block; color:var(--text-subdued); font-size:12px; font-variant-numeric:tabular-nums}
 .offline-manage,.offline-switch-row {border:0; border-radius:6px; color:var(--text-secondary); background:transparent; font:inherit; cursor:pointer}
 .offline-manage {flex:none; padding:6px; font-size:12px; text-decoration:underline; text-underline-offset:3px}
 .offline-manage:is(:hover,:focus-visible) {background:var(--bg-active); color:var(--text-primary)}
@@ -20,40 +20,81 @@ html:not(.offline-active) [data-offline-only], html.offline-active [data-online-
 .offline-mode-info svg {width:16px; height:16px}
 .offline-mode-info:is(:hover,:focus-visible) {color:var(--text-primary)}
 .offline-mode-hint {position:absolute; z-index:1; inset-inline:0; bottom:100%; margin:0; padding:7px 9px; background:var(--bg-active); color:var(--text-primary); border:1px solid var(--border-color); border-radius:6px; font-size:12px; line-height:1.4; box-shadow:0 3px 12px #0005}
-.offline-switch-row:focus-visible,.offline-manage:focus-visible,.offline-scale input:focus-visible {outline:2px solid var(--accent); outline-offset:2px}
-.offline-switch-row:disabled,.offline-saved button:disabled {opacity:.5; cursor:default}
+.offline-switch-row:focus-visible,.offline-manage:focus-visible,.offline-scale input:focus-visible,.offline-saved-link:focus-visible,.offline-preferences-help button:focus-visible {outline:2px solid var(--accent); outline-offset:2px}
+.offline-switch-row:disabled {opacity:.5; cursor:default}
 .offline-switch {position:relative; display:block; flex:none; width:32px; height:18px; border-radius:99px; background:var(--bg-active); border:1px solid var(--text-subdued)}
 .offline-switch::before {content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--text-secondary); transition:transform .12s}
 [aria-checked="true"] > .offline-switch {background:var(--accent); border-color:var(--accent)}
 [aria-checked="true"] > .offline-switch::before {background:var(--bg-primary); transform:translateX(14px)}
-.offline-settings .user-settings-section-head {align-items:center}
 .user-settings-overlay {width:100%; height:100%; max-width:none; max-height:none; margin:0; border:0; padding:0; color:var(--text-primary)}
 .user-settings-overlay:not([open]) {display:none}
 .user-settings-overlay::backdrop {background:transparent}
 .user-settings-overlay h3:focus {outline:none}
-.offline-settings .user-settings-section-head button {padding-inline:5px; min-width:44px; min-height:38px; justify-content:center}
+.offline-settings {border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary); padding:10px 16px}
+.offline-preferences {display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); align-items:center; gap:20px}
+.offline-preferences-main {position:relative; min-width:0}
+.offline-preferences-head {display:flex; align-items:center; gap:2px; min-height:32px}
+.offline-preferences-head h4 {margin:0; color:var(--text-primary); font-size:14px; line-height:1.3}
 .offline-settings h4:focus {outline:none}
-.offline-limit {margin:16px 0 0}
-.offline-limit label,.offline-limit output {font-size:13px}
-.offline-limit output {font-variant-numeric:tabular-nums; color:var(--text-secondary)}
-.offline-scale {margin:10px 0 0}
-.offline-scale-marks {position:relative; margin-inline:8px; height:17px; color:var(--text-subdued); font-size:10px; font-variant-numeric:tabular-nums}
+.offline-preferences-head .offline-switch-row {flex:none; justify-content:flex-end; min-width:44px; min-height:32px; margin-inline-start:auto}
+.offline-preferences-help [role=tooltip] {
+    position:absolute; inset-inline-start:0; top:32px; z-index:3; width:min(250px, 100%); padding:8px 10px;
+    border:1px solid var(--border-color); border-radius:7px; background:var(--bg-active); box-shadow:0 4px 14px #0005;
+    color:var(--text-primary); font-size:12px; line-height:1.45; opacity:0; visibility:hidden; transform:translateY(-2px);
+    transition:opacity 120ms, transform 120ms, visibility 0s 120ms;
+}
+.offline-preferences-help [role=tooltip].visible {visibility:visible; opacity:1; transform:none; transition-delay:0s}
+.offline-saved-reveal {display:grid; grid-template-rows:1fr; visibility:visible; opacity:1; transition:grid-template-rows 150ms, opacity 120ms, visibility 0s}
+.offline-saved-reveal[inert] {grid-template-rows:0fr; opacity:0; visibility:hidden; transition-delay:0s, 0s, 150ms}
+.offline-saved-reveal > div {min-height:0; overflow:hidden}
+.offline-saved-link {
+    display:flex; align-items:center; flex-wrap:wrap; gap:2px 6px; width:100%; min-height:32px; padding:3px 2px;
+    border:0; border-radius:4px; color:var(--text-secondary); background:transparent; font:inherit; font-size:12px; text-align:start;
+    cursor:pointer; transition:color 120ms, background 120ms;
+}
+.offline-saved-link small {font-size:inherit; color:var(--text-secondary); font-variant-numeric:tabular-nums}
+.offline-saved-link svg {width:13px; height:13px; margin-inline-start:auto; flex:none}
+.offline-saved-link:is(:hover,:focus-visible) {color:var(--accent-hover); background:var(--bg-hover)}
+.offline-saved-link:focus-visible {outline-offset:-2px}
+.offline-limit {min-width:0; padding-inline-start:20px; border-inline-start:1px solid var(--border-color)}
+.offline-limit label {font-size:13px; font-weight:600}
+.offline-limit output {font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-secondary)}
+.offline-scale {margin-top:6px}
+.offline-scale-marks {position:relative; margin-inline:6px; height:13px; color:var(--text-secondary); font-size:10px; font-variant-numeric:tabular-nums}
 .offline-scale-marks span {position:absolute; transform:translateX(-50%); white-space:nowrap}
 .offline-scale-marks span:first-of-type {transform:none}
+.offline-scale-marks span:nth-last-of-type(2) {transform:translateX(-80%)}
 .offline-scale-marks span:last-of-type {transform:translateX(-100%)}
-.offline-scale input {display:block; width:100%; height:20px; margin:0; accent-color:var(--accent)}
-.offline-saved {margin-top:16px}
+.offline-scale input {display:block; width:100%; height:20px; margin:0; appearance:none; background:transparent; accent-color:var(--accent); cursor:pointer}
+.offline-scale input::-webkit-slider-runnable-track {height:4px; border-radius:4px; background:linear-gradient(to right,var(--accent) var(--limit-position),var(--bg-active) var(--limit-position))}
+.offline-scale input::-webkit-slider-thumb {width:12px; height:12px; margin-top:-4px; appearance:none; background:var(--text-primary); border:0; border-radius:50%}
+.offline-scale input::-moz-range-track {height:4px; border-radius:4px; background:var(--bg-active)}
+.offline-scale input::-moz-range-progress {height:4px; border-radius:4px; background:var(--accent)}
+.offline-scale input::-moz-range-thumb {width:12px; height:12px; border:0; border-radius:50%; background:var(--text-primary)}
+.offline-settings-status {margin:4px 0; color:var(--text-secondary); font-size:12px; line-height:1.4}
 .offline-topbar-state svg {width:15px; height:15px; flex:none}
 .offline-settings .offline-error {color:var(--error, #edadaa)}
 .offline-topbar-state {display:inline-flex; align-items:center; gap:5px; flex:none; padding:3px 7px; border:1px solid #d8c79430; border-radius:6px; background:#d8c7940d; color:#d8c794; font-size:12px; font-weight:600; line-height:1.4}
 .offline-devices-note {padding:9px; color:var(--text-secondary); font-size:13px}
+@media (min-width:601px) {
+    .offline-preferences.cache-disabled .offline-preferences-main {grid-area:1 / 1 / 2 / -1}
+    .offline-preferences.cache-disabled .offline-limit {grid-area:1 / 2; pointer-events:none}
+}
 @media(max-width:600px) {
     .offline-account .offline-switch-row,.offline-manage {min-height:40px}
     .offline-topbar-state {gap:3px; padding-inline:5px}
+    .offline-settings {padding:8px 12px}
+    .offline-preferences {grid-template-columns:minmax(0,1fr); gap:6px}
+    .offline-preferences-head .offline-switch-row,.offline-saved-link {min-height:40px}
+    .offline-preferences-help [role=tooltip] {top:38px}
+    .offline-limit {padding:8px 0 0; border:0; border-top:1px solid var(--border-color)}
+    .offline-scale input {height:26px}
 }
 @media(max-width:360px) {
     .offline-scale-marks span:nth-last-of-type(2) {transform:translateX(-100%)}
 }
 @media(prefers-reduced-motion: reduce) {
-    .offline-switch::before {transition:none}
+    .offline-switch::before,.offline-preferences-help [role=tooltip],.offline-saved-reveal,.offline-saved-link {transition:none}
+    .offline-limit {transition-duration:0s !important}
 }
+@media(forced-colors:active) { .offline-scale input {appearance:auto} }

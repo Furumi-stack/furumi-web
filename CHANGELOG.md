@@ -10,6 +10,15 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.4 — 2026-11-24
+
+- Personal settings group language and Last.fm side by side and bring offline
+  storage, the cache limit and saved music together in one compact panel.
+- Connected devices use compact lists with counts, separate mobile tabs for
+  browser sessions and trusted devices, and on-demand pairing and sync details.
+- Artwork fades in over 100 ms after loading, including covers from the offline
+  cache. Reduced-motion preferences skip the fade.
+
 ## v0.16.3 — 2026-11-24
 
 - Furumi downloads the lyrics search model when indexing is enabled and reuses

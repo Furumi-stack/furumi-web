@@ -647,10 +647,7 @@ document.addEventListener('alpine:init', () => {
         lastfmStatusLabel() {
             if (!this.lastfm?.configured) return T.lastfmStatusNotConfigured;
             if (this.lastfm?.connected && this.lastfm?.reauth_required) return T.lastfmStatusReconnect;
-            if (this.lastfm?.connected) {
-                const user = this.lastfm.username || T.unknown;
-                return `${T.lastfmStatusConnected}: ${user}`;
-            }
+            if (this.lastfm?.connected) return this.lastfm.username || T.lastfmStatusConnected;
             return T.lastfmStatusConnect;
         },
 
@@ -692,7 +689,15 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        closeSettings() {
+        async closeSettings() {
+            const dialog = document.querySelector('.user-settings-overlay[open]');
+            if (dialog?.dataset.closing) return;
+            if (dialog?.animate && matchMedia('(prefers-reduced-motion: no-preference)').matches) {
+                dialog.dataset.closing = 'true';
+                const closing = dialog.animate([{opacity:getComputedStyle(dialog).opacity}, {opacity:0}],
+                    {duration:110, easing:'ease-in', fill:'forwards'});
+                await closing.finished.catch(() => {});
+            }
             this.settingsOpen = false;
             Alpine.nextTick(() => {
                 const triggers = document.querySelectorAll('.sidebar-account-trigger, .mobile-account-chip');
@@ -2035,13 +2040,6 @@ document.addEventListener('alpine:init', () => {
 
         fedPending() {
             return this.fed?.pending || [];
-        },
-
-        fedSummary() {
-            if (!this.fed) return 'Fed sync unavailable';
-            const outbox = Number(this.fed.outbox_ops || 0);
-            const unresolved = Number(this.fed.unresolved_items || 0);
-            return `${this.fed.active_devices || 0} linked · ${outbox} queued · ${unresolved} unresolved`;
         },
 
         async loadFedDevices() {
@@ -4102,7 +4100,6 @@ document.addEventListener('alpine:init', () => {
         },
 
         federationArtworkFailed(image) {
-            image.classList.remove('artwork-loaded');
             const url = image.getAttribute('src');
             if (url) this.failedFederationArtwork.add(url);
         },

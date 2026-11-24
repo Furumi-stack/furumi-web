@@ -93,6 +93,53 @@ async function mobile(browser) {
     await page.close();
 }
 
+async function artworkLoading(browser) {
+    const {page, errors, cover} = await setup(browser, {viewport: {width: 1000, height: 800}});
+    const image = cover.locator('img');
+    await cover.locator('img.artwork-loaded').waitFor();
+    await image.evaluate(img => {
+        img.addEventListener('load', () => {
+            img.dataset.fadeDurations = img.getAnimations().map(a => a.effect.getTiming().duration).join(',');
+        });
+    });
+
+    let receiveRequest;
+    const requested = new Promise(resolve => { receiveRequest = resolve; });
+    await page.route('**/pending-art', receiveRequest);
+    await setTrack(page, 2, '/pending-art');
+    const route = await requested;
+    assert.equal(await image.isVisible(), false, 'keep the pending image hidden');
+    await route.fulfill({contentType: 'image/svg+xml', body: artwork});
+    await cover.locator('img.artwork-loaded').waitFor();
+    assert.equal(await image.getAttribute('data-fade-durations'), '', 'reduced motion skips the fade');
+
+    await page.emulateMedia({reducedMotion: 'no-preference'});
+    const cachedCover = 'data:image/svg+xml,' + encodeURIComponent(artwork);
+    await page.evaluate(async src => { const img = new Image(); img.src = src; await img.decode(); }, cachedCover);
+    await setTrack(page, 3, cachedCover);
+    await page.waitForFunction(() => document.querySelector('.player-cover img')?.dataset.fadeDurations === '100');
+    await image.evaluate(img => {
+        img.dataset.sourceChanges = '0';
+        new MutationObserver(changes => { img.dataset.sourceChanges = String(changes.length); })
+            .observe(img, {attributes: true, attributeFilter: ['src']});
+    });
+    await setTrack(page, 4, cachedCover);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    assert.equal(await image.getAttribute('data-source-changes'), '0', 'shared cover stays visible across tracks');
+
+    await page.route('**/broken-art', route => route.fulfill({status: 404, body: ''}));
+    await setTrack(page, 5, '/broken-art');
+    await page.waitForFunction(() => {
+        const img = document.querySelector('.player-cover img');
+        return img.getAttribute('src') === '/broken-art' && img.complete && !img.naturalWidth;
+    });
+    assert.equal(await image.isVisible(), false, 'broken images remain hidden');
+    await setTrack(page, 6, localCover);
+    await cover.locator('img.artwork-loaded').waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+}
+
 (async () => {
     const browser = await chromium.launch({
         headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}),
@@ -100,7 +147,8 @@ async function mobile(browser) {
     try {
         await desktop(browser);
         await mobile(browser);
-        console.log('Player artwork hover, pin, dismissal, track changes and touch checks passed.');
+        await artworkLoading(browser);
+        console.log('Player artwork preview, touch, loading, fallback and fade checks passed.');
     } finally {
         await browser.close();
     }

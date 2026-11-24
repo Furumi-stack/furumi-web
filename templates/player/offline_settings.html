@@ -1,4 +1,4 @@
-<section class="user-settings-section offline-settings" aria-labelledby="offline-settings-title" @keydown.space.stop
+<section class="offline-settings" aria-labelledby="offline-settings-title" @keydown.space.stop
          x-data="{
              get offline() { return $store.offline }, min: 100000000, max: 512000000000, draft: null,
              marks: [100000000,1000000000,10000000000,100000000000,512000000000],
@@ -8,16 +8,40 @@
                  return Math.min(this.max, Math.max(this.min, Math.round(bytes)));
              }
          }">
-    <div class="user-settings-section-head">
-        <h4 id="offline-settings-title" tabindex="-1">{{ t.player_offline_listening }}</h4>
-        <button type="button" class="offline-switch-row" role="switch" aria-label="{{ t.player_offline_enable }}"
-                :aria-checked="offline.enabled" :disabled="offline.busy || (!offline.supported && !offline.enabled)"
-                @click="offline.setEnabled(!offline.enabled)">
-            <span class="offline-switch" aria-hidden="true"></span>
-        </button>
-    </div>
-    <p role="status" x-text="offline.busy && !offline.enabled ? '{{ t.player_offline_preparing }}' : offline.supported ? '{{ t.player_offline_hint }}' : '{{ t.player_offline_unsupported }}'"></p>
-    <div class="offline-limit" x-show="offline.enabled" x-cloak>
+    <div class="offline-preferences" :class="{ 'cache-disabled': !offline.enabled }">
+      <div class="offline-preferences-main">
+        <div class="offline-preferences-head">
+            <h4 id="offline-settings-title" tabindex="-1">{{ t.player_offline_listening }}</h4>
+            <span class="offline-preferences-help" x-data="{help:false}" @click.outside="help = false"
+                  @pointerenter="if ($event.pointerType === 'mouse') help = true" @pointerleave="help = false"
+                  @keydown.escape="if (help) { $event.stopPropagation(); $event.preventDefault(); help = false }">
+                <button type="button" class="offline-mode-info" aria-label="{{ t.player_info }}"
+                        aria-describedby="offline-settings-hint" @focus="help = true" @blur="help = false" @click="help = true">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                        <circle cx="10" cy="10" r="7.25"/><path d="M10 9v4.25"/><circle cx="10" cy="6.5" r=".9" fill="currentColor" stroke="none"/>
+                    </svg>
+                </button>
+                <span role="tooltip" id="offline-settings-hint" :class="{visible:help}">{{ t.player_offline_hint }}</span>
+            </span>
+            <button type="button" class="offline-switch-row" role="switch" aria-label="{{ t.player_offline_enable }}"
+                    :aria-checked="offline.enabled" :disabled="offline.busy || (!offline.supported && !offline.enabled)"
+                    @click="offline.setEnabled(!offline.enabled)">
+                <span class="offline-switch" aria-hidden="true"></span>
+            </button>
+        </div>
+        <div class="offline-saved-reveal" :inert="offline.enabled || offline.items.length ? null : true">
+            <div>
+                <button type="button" id="open-offline-cache" class="offline-saved-link"
+                        aria-label="{{ t.player_offline_saved }} · {{ t.player_offline_open_cache }}" title="{{ t.player_offline_open_cache }}"
+                        aria-describedby="offline-saved-count" @click="openCache()">
+                    <span>{{ t.player_offline_saved }}</span>
+                    <small id="offline-saved-count" x-text="formatArtistCount(offline.items.length, 'tracks') + ' · ' + offline.formatBytes(offline.bytes)"></small>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>
+                </button>
+            </div>
+        </div>
+      </div>
+      <div class="offline-limit" x-show="offline.enabled" :inert="offline.enabled ? null : true" x-transition.opacity.duration.120ms x-cloak>
         <div class="offline-limit-label">
             <label for="offline-limit">{{ t.player_offline_limit }}</label>
             <output for="offline-limit" x-text="offline.formatBytes(draft ?? offline.limitBytes)"></output>
@@ -29,23 +53,13 @@
                 </template>
             </div>
             <input id="offline-limit" type="range" min="0" max="100" step="0.5"
+                   :style="{'--limit-position': position(draft ?? offline.limitBytes) + '%'}"
                    :value="position(offline.limitBytes)" :aria-valuetext="offline.formatBytes(draft ?? offline.limitBytes)"
                    @input="draft = bytesAt($el.value)" @change="offline.setLimit(bytesAt($el.value)); draft = null">
         </div>
+      </div>
     </div>
-    <p role="status" x-show="offline.saving" x-cloak>{{ t.player_offline_saving }}</p>
-    <p class="offline-error" role="alert" x-show="offline.error" x-text="offline.error"></p>
-    <template x-if="offline.enabled || offline.items.length">
-        <div class="offline-saved">
-            <div class="offline-saved-summary">
-                <div><strong>{{ t.player_offline_saved }}</strong>
-                    <small x-text="formatArtistCount(offline.items.length, 'tracks') + ' · ' + offline.formatBytes(offline.bytes)"></small>
-                </div>
-                <button type="button" id="open-offline-cache" class="offline-manage" @click="openCache()">
-                    {{ t.player_offline_open_cache }}
-                </button>
-            </div>
-            <p x-show="!offline.items.length">{{ t.player_offline_empty }}</p>
-        </div>
-    </template>
+    <p class="offline-settings-status" role="status" x-show="!offline.supported || offline.busy && !offline.enabled || offline.saving" x-cloak
+       x-text="!offline.supported ? '{{ t.player_offline_unsupported }}' : offline.saving ? '{{ t.player_offline_saving }}' : '{{ t.player_offline_preparing }}'"></p>
+    <p class="offline-settings-status offline-error" role="alert" x-show="offline.error" x-text="offline.error" x-cloak></p>
 </section>

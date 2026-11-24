@@ -214,7 +214,7 @@
                                                 <div class="search-artist-img">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
                                                     <template x-if="$store.library.localSearchArtwork('artists', artist)">
-                                                        <img class="artwork-image" x-artwork="$store.library.localSearchArtwork('artists', artist) || null" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$store.library.federationArtworkFailed($event.currentTarget)">
+                                                        <img class="artwork-image" x-artwork="$store.library.localSearchArtwork('artists', artist) || null" alt="" aria-hidden="true" loading="lazy" @error="$store.library.federationArtworkFailed($event.currentTarget)">
                                                     </template>
                                                 </div>
                                                 <div class="search-artist-name"><a class="artist-link"
@@ -239,7 +239,7 @@
                                                 <div class="search-release-cover" style="position:relative">
                                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
                                                     <template x-if="$store.library.localSearchArtwork('releases', release)">
-                                                        <img class="artwork-image" x-artwork="$store.library.localSearchArtwork('releases', release) || null" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$store.library.federationArtworkFailed($event.currentTarget)">
+                                                        <img class="artwork-image" x-artwork="$store.library.localSearchArtwork('releases', release) || null" alt="" aria-hidden="true" loading="lazy" @error="$store.library.federationArtworkFailed($event.currentTarget)">
                                                     </template>
                                                     <button class="card-info-btn" @click.stop="$store.library.openReleaseInfo(release)" :title="$store.library.releaseInfo(release)" aria-label="{{ t.player_release_info }}">
                                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -921,7 +921,7 @@
                         <div class="queue-track-cover">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                             <template x-if="item.track.cover_url">
-                                <img class="artwork-image" x-artwork="item.track.cover_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
+                                <img class="artwork-image" x-artwork="item.track.cover_url" alt="" aria-hidden="true" loading="lazy">
                             </template>
                             <span class="queue-federation-status federation-track-status"
                                   x-show="item.track.federation_pending"
@@ -1314,7 +1314,7 @@
                     <div class="mobile-expanded-queue-cover">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
                         <template x-if="item.track.cover_url">
-                            <img class="artwork-image" x-artwork="item.track.cover_url" alt="" aria-hidden="true" loading="lazy" @load="$event.currentTarget.classList.add('artwork-loaded')" @error="$event.currentTarget.classList.remove('artwork-loaded')">
+                            <img class="artwork-image" x-artwork="item.track.cover_url" alt="" aria-hidden="true" loading="lazy">
                         </template>
                     </div>
                     <div class="mobile-expanded-queue-info">

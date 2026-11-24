@@ -47,18 +47,42 @@ document.addEventListener('alpine:init', () => {
         for (const entry of entries) lazyCovers.get(entry.target)?.(entry.isIntersecting);
     }, {rootMargin:'450px'});
     const missingCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#747474" stroke-width="2"><circle cx="24" cy="24" r="13"/><circle cx="24" cy="24" r="3"/></svg>');
+    const reducedArtworkMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     Alpine.directive('artwork', (image, {expression}, {evaluateLater, effect, cleanup}) => {
         const read = evaluateLater(expression);
-        let dispose;
+        let dispose, previousUrl, previousLocal, fade;
         function clear() { dispose?.(); dispose = null; }
+        function hide() {
+            fade?.cancel();
+            fade = null;
+            image.classList.remove('artwork-loaded');
+        }
+        function reveal() {
+            if (!image.complete || !image.naturalWidth || image.classList.contains('artwork-loaded')) return;
+            image.classList.add('artwork-loaded');
+            if (!reducedArtworkMotion.matches && image.animate) {
+                fade = image.animate([{opacity:0}, {}], {duration:100, easing:'ease-out'});
+            }
+        }
+        function show(src) {
+            if (image.getAttribute('src') === (src || null)) {
+                if (src) reveal();
+                return;
+            }
+            hide();
+            if (src) image.setAttribute('src', src);
+            else image.removeAttribute('src');
+        }
+        image.addEventListener('load', reveal);
+        image.addEventListener('error', hide);
         effect(() => read(url => {
-            clear();
             const offline = Alpine.store('offline');
-            const show = src => {
-                if (src) image.setAttribute('src', src);
-                else image.removeAttribute('src');
-            };
-            if (!offline.localArtworkOnly || !url || /^(?:blob:|data:)/i.test(url)) { show(url); return; }
+            const local = offline.localArtworkOnly && !!url && !/^(?:blob:|data:)/i.test(url);
+            if (previousUrl === url && previousLocal === local) return;
+            previousUrl = url;
+            previousLocal = local;
+            clear();
+            if (!local) { show(url); return; }
             show(null);
             const open = () => offline.bindArtwork(url, src => show(src || missingCover));
             if (image.loading !== 'lazy' || !coverObserver) { dispose = open(); return; }
@@ -70,7 +94,12 @@ document.addEventListener('alpine:init', () => {
             coverObserver.observe(image);
             dispose = () => { coverObserver.unobserve(image); lazyCovers.delete(image); release?.(); };
         }));
-        cleanup(clear);
+        cleanup(() => {
+            clear();
+            fade?.cancel();
+            image.removeEventListener('load', reveal);
+            image.removeEventListener('error', hide);
+        });
     });
     function eligible(track) {
         return globalThis.OfflineCatalog?.canSave(track) === true;
