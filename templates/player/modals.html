@@ -93,7 +93,7 @@
 
     <!-- User Settings Modal -->
     <template x-if="$store.user.settingsOpen">
-        <dialog class="modal-overlay user-settings-overlay"
+        <dialog class="player-dialog user-settings-overlay" @dismiss-player-dialog.stop="$store.user.closeSettings()"
                 x-data="{
                     managingCache:false, settingsScroll:0,
                     openCache() {
@@ -115,19 +115,14 @@
                 x-init="$nextTick(() => { if ($el.isConnected) { $el.showModal(); document.getElementById($store.user.settingsFocus)?.focus() } })"
                 @cancel.prevent="managingCache ? $dispatch('cache-manager-back') : $store.user.closeSettings()"
                 @click.self="$store.user.closeSettings()" @keydown.space.stop>
-            <div class="modal-box user-settings-modal" id="user-settings-box" :class="{ 'cache-view':managingCache }">
+            <div class="player-dialog-surface user-settings-modal" id="user-settings-box" :class="{ 'cache-view':managingCache }">
                 <div class="settings-home" x-show="!managingCache">
-                    <header class="user-settings-head">
-                        <svg class="settings-heading-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
-                            <path d="M3 7h5m6 0h7M3 17h9m6 0h3"/><circle cx="11" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>
-                        </svg>
-                        <h3 id="user-settings-title" tabindex="-1">{{ t.nav_settings }}</h3>
-                        <a class="settings-app-version" data-online-only href="https://gt.hexor.cy/Furumi/furumi-web"
-                           target="_blank" rel="noopener noreferrer" aria-label="Furumi v{{ t.app_version() }}">v{{ t.app_version() }}</a>
-                        <button type="button" class="settings-close" @click="$store.user.closeSettings()" aria-label="{{ t.player_close }}" title="{{ t.player_close }}">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
-                        </button>
-                    </header>
+                    {% let dialog_head_class = "user-settings-head" %}
+                    {% let dialog_title_id = "user-settings-title" %}
+                    {% let dialog_title = t.nav_settings %}
+                    {% let dialog_icon = "M3 7h5m6 0h7M3 17h9m6 0h3M14 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm4 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" %}
+                    {% let show_version = true %}
+                    {% include "player/dialog_header.html" %}
                     <div class="settings-content">
                         <div class="settings-preferences" data-online-only>
                             <div class="settings-preference">

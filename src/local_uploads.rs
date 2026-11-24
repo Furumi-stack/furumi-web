@@ -210,7 +210,7 @@ pub async fn list(
     user_id: i64,
     inbox_dir: &str,
 ) -> anyhow::Result<Vec<LocalUploadDto>> {
-    sync_statuses(pool, user_id, inbox_dir).await?;
+    sync_statuses(pool, user_id, inbox_dir, None).await?;
     crate::import_playlists::reconcile(pool, Some(user_id)).await?;
     let rows: Vec<LocalUploadRow> = sqlx::query_as(
         r#"SELECT id, user_id, filename, size_bytes, status, inbox_path, error,
@@ -239,7 +239,12 @@ pub async fn remove(pool: &PgPool, user_id: i64, id: &str) -> anyhow::Result<()>
     Ok(())
 }
 
-async fn sync_statuses(pool: &PgPool, user_id: i64, inbox_dir: &str) -> anyhow::Result<()> {
+pub(crate) async fn sync_statuses(
+    pool: &PgPool,
+    user_id: i64,
+    inbox_dir: &str,
+    batches: Option<&[String]>,
+) -> anyhow::Result<()> {
     let inbox_dir = inbox_dir.trim();
     if inbox_dir.is_empty() {
         bail!("agent_inbox_dir is not configured");
@@ -253,9 +258,11 @@ async fn sync_statuses(pool: &PgPool, user_id: i64, inbox_dir: &str) -> anyhow::
         r#"SELECT id, user_id, filename, size_bytes, status, inbox_path, error,
                   created_at, updated_at, completed_at, target_playlist_id
            FROM furumusic__local_upload
-           WHERE user_id = $1 AND status <> 'complete'"#,
+           WHERE user_id = $1 AND status <> 'complete'
+             AND ($2::text[] IS NULL OR batch_id = ANY($2))"#,
     )
     .bind(user_id)
+    .bind(batches)
     .fetch_all(pool)
     .await?;
     if rows.is_empty() {
@@ -304,7 +311,7 @@ async fn sync_statuses(pool: &PgPool, user_id: i64, inbox_dir: &str) -> anyhow::
                 continue;
             }
             let full_path = crate::media_paths::resolve_path_from_root(inbox_dir, &row.inbox_path);
-            if tokio::fs::try_exists(full_path).await.unwrap_or(false) {
+            if tokio::fs::try_exists(full_path).await? {
                 "queued"
             } else {
                 "complete"

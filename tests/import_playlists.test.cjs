@@ -19,7 +19,7 @@ function downloads(fetchImpl) {
         T:new Proxy({}, {get:(_,key)=>key}),crypto:{randomUUID},XMLHttpRequest:XHR,redirectOnUnauthorized:()=>{},console,setInterval:()=>0,clearInterval:()=>{}});
     vm.runInContext(code,context);
     const store=stores.torrents;
-    store._poll=()=>{};store.loadSessions=async()=>{};store.loadAgentStatus=async()=>{};store.loadLocalUploadHistory=async()=>{};
+    store._poll=()=>{};store.refreshDownloads=async()=>{};
     return {store,requests};
 }
 test('destinations are independent, owned playlists only, new titles required',()=>{
@@ -68,6 +68,21 @@ test('playlist creation failure leaves the batch editable and does not signal up
     s.setLocalFiles([{name:'a.mp3',size:1}]);s.localPlaylistChoice='__new__';s.localNewPlaylistTitle='OST';
     await s.uploadLocalFiles();assert.equal(s.localPlaylistLocked,false);assert.equal(s.localFilesUploading,false);
     assert.deepEqual(calls,['/api/player/playlists']);assert.equal(s.localFiles.length,1);
+});
+test('retrying finalization reuses the batch and skips uploaded audio', async () => {
+    const finishes = [];
+    const {store, requests} = downloads(async (url, options) => {
+        assert.equal(url, '/api/player/uploads/local');
+        finishes.push(options.headers['X-Furumusic-Upload-Batch-Id']);
+        return {ok: finishes.length > 1};
+    });
+    store.setLocalFiles([{name:'outro.flac', size:12}]);
+    await store.uploadLocalFiles();
+    assert.equal(store.localPendingFinish, true);
+    await store.uploadLocalFiles();
+    assert.equal(store.localPendingFinish, false);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(finishes, Array(2).fill(requests[0].headers['X-Furumusic-Upload-Batch-Id']));
 });
 test('torrent destination locks after start',()=>{
     const {store:s}=downloads();s.currentJob={status:'preview'};assert.equal(s.torrentDestinationLocked(),false);

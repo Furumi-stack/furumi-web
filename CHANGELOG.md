@@ -10,6 +10,15 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.6 — 2026-11-24
+
+- Add music opens with file and folder upload, with torrent and YouTube forms
+  alongside it. The form shows the latest transfer and a personal track and
+  release count. File selection is available on demand.
+- Upload history groups each submission into one entry. Checkboxes remove a
+  selection across upload types while preserving the music and ongoing jobs.
+- Settings and Add music share a dialog frame, title bar and close control.
+
 ## v0.16.5 — 2026-11-24
 
 - Downloads opens with transfer activity across torrents, YouTube and local

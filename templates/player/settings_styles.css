@@ -1,47 +1,6 @@
-.user-settings-overlay .user-settings-modal {
-    width: min(760px, calc(100% - 24px));
-    min-width: 0;
-    max-width: none;
-    max-height: calc(100dvh - 32px);
-    overflow: auto;
-    overscroll-behavior: contain;
-    padding: 0;
-    border: 1px solid var(--bg-active);
-    border-radius: 14px;
-    background: var(--bg-secondary);
-    box-shadow: 0 16px 60px #0007;
-    color-scheme: dark;
-}
-.settings-home { --settings-gutter: clamp(14px, 3vw, 22px); }
-.user-settings-head {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px var(--settings-gutter);
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-}
-.user-settings-head .settings-heading-icon { color: var(--accent); flex: none; }
-.user-settings-head h3 { margin: 0; font-size: 21px; line-height: 1.25; }
+.settings-home { --settings-gutter: var(--dialog-gutter); }
 .settings-app-version { font-size: 11px; color: var(--text-subdued); text-decoration: none; }
 .settings-app-version:hover { color: var(--text-secondary); text-decoration: underline; }
-.settings-close {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 32px;
-    height: 32px;
-    margin-inline-start: auto;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-}
 .settings-content { display: grid; gap: 18px; padding: 16px var(--settings-gutter) 20px; }
 .settings-preferences { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .settings-preference {
@@ -94,12 +53,9 @@
 }
 .settings-language-control select { appearance: none; padding-inline-end: 26px; }
 .preference-action:disabled { opacity: .55; cursor: default; }
-.settings-home :is(.settings-close, .settings-language-control select, .preference-action:enabled):hover { background: var(--bg-active); color: var(--text-primary); }
-.settings-home :is(.settings-close, .settings-app-version, .settings-language-control select, .preference-action):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-home :is(.settings-language-control select, .preference-action:enabled):hover { background: var(--bg-active); color: var(--text-primary); }
+.settings-home :is(.settings-app-version, .settings-language-control select, .preference-action):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 600px) {
-    .user-settings-overlay .user-settings-modal { max-height: calc(100dvh - 20px); }
-    .user-settings-head { padding-block: 7px; }
-    .settings-close { width: 40px; height: 40px; }
     .settings-content { gap: 14px; padding-block: 14px; }
     .settings-preference { grid-template-columns: 16px minmax(0, 1fr); grid-template-rows: 1fr auto; gap: 6px; padding-inline-end: 10px; }
     .settings-preference + .settings-preference { padding-inline-start: 10px; }
@@ -112,8 +68,4 @@
     .settings-preference { grid-template-columns: minmax(0, 1fr); }
     .preference-icon { display: none; }
     .settings-language-control, .preference-action { grid-column: 1; }
-}
-@media (prefers-reduced-motion: no-preference) {
-    .user-settings-overlay[open] .user-settings-modal { animation: settings-appear 140ms ease-out; }
-    @keyframes settings-appear { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 }

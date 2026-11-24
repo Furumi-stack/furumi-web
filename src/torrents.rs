@@ -456,26 +456,48 @@ impl TorrentService {
                 .collect::<HashMap<_, _>>()
         };
 
-        for row in rows.iter().filter(|row| row.status == "resolving") {
-            if row.source_kind == "magnet" {
-                if let Some(magnet) = row.source_label.clone() {
-                    self.spawn_resolve_pending_magnet(
-                        pool.clone(),
-                        user_id,
-                        row.id.clone(),
-                        magnet,
-                        row.created_at.clone(),
-                        proxy_url.clone(),
-                    )
-                    .await;
-                }
-            }
-        }
+        self.resume_pending(pool, user_id, proxy_url).await?;
 
         Ok(rows
             .iter()
             .map(|row| row.dto(handles.get(&row.id)))
             .collect())
+    }
+
+    pub(crate) async fn resume_pending(
+        self: &Arc<Self>,
+        pool: &PgPool,
+        user_id: i64,
+        proxy: Option<String>,
+    ) -> anyhow::Result<()> {
+        let pending: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT id, source_label, created_at FROM furumusic__torrent_session
+             WHERE user_id=$1 AND status='resolving' AND source_kind='magnet' AND source_label IS NOT NULL"
+        ).bind(user_id).fetch_all(pool).await?;
+        for (id, magnet, created_at) in pending {
+            self.spawn_resolve_pending_magnet(
+                pool.clone(),
+                user_id,
+                id,
+                magnet,
+                created_at,
+                proxy.clone(),
+            )
+            .await;
+        }
+        Ok(())
+    }
+
+    /// Download percentages change in memory between persisted state transitions.
+    pub(crate) async fn live_progress(&self, user_id: i64, id: &str) -> Option<f64> {
+        let jobs = self.jobs.lock().await;
+        let job = jobs.get(id).filter(|job| job.user_id == user_id)?;
+        let stats = job.handle.as_ref()?.stats();
+        Some(
+            progress_percent(stats.progress_bytes, stats.total_bytes)
+                .unwrap_or(job.progress_percent)
+                .clamp(0.0, 100.0),
+        )
     }
 
     pub async fn details(
@@ -1279,6 +1301,7 @@ async fn mark_job_started(
     sqlx::query(
         r#"UPDATE furumusic__torrent_session
               SET selected_files_json = $2,
+                  history_processed = false,
                   status = 'downloading',
                   selected_size = $3,
                   downloaded_bytes = 0,
@@ -1499,7 +1522,7 @@ mod playlist_tests {
                 id text PRIMARY KEY,user_id bigint,name text,info_hash text,source_kind text,source_label text,torrent_bytes bytea,
                 files_json text,selected_files_json text,status text,total_size bigint DEFAULT 0,selected_size bigint DEFAULT 0,
                 downloaded_bytes bigint DEFAULT 0,uploaded_bytes bigint DEFAULT 0,progress_percent float8 DEFAULT 0,
-                error text,created_at text,updated_at text,completed_at text,target_playlist_id bigint);
+                error text,created_at text,updated_at text,completed_at text,target_playlist_id bigint,history_processed boolean DEFAULT false);
         "#).execute(&pool).await.unwrap();
         let root = std::env::temp_dir().join(format!("furumi-torrent-test-{}", Uuid::new_v4()));
         let mut service = TorrentService::new(Arc::new(OnceCell::new()));

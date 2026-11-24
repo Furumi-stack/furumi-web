@@ -167,6 +167,7 @@ const T = {
     fileUploadLoadFailed: "{{ t.player_file_upload_load_failed }}",
     removeFileUploadConfirm: "{{ t.player_remove_file_upload_confirm }}",
     fileUploadHistoryRemoved: "{{ t.player_file_upload_history_removed }}",
+    loadHistoryFailed: "{{ t.player_failed_load_history }}",
     fileUploadHistoryRemoveFailed: "{{ t.player_file_upload_history_remove_failed }}",
     noSupportedAudioFiles: "{{ t.player_no_supported_audio_files }}",
     youtubeQueued: "{{ t.player_youtube_queued }}",
@@ -225,6 +226,15 @@ const artistCountLabels = {
 function formatArtistCount(count, kind) {
     const labels = artistCountLabels[kind];
     return count + ' ' + (labels[artistPluralRules.select(count)] || labels.other);
+}
+
+async function finishPlayerDialog(dialog, close) {
+    if (dialog?.dataset.closing) return;
+    if (dialog?.animate && matchMedia('(prefers-reduced-motion: no-preference)').matches) {
+        dialog.dataset.closing = 'true';
+        await dialog.animate([{opacity:1}, {opacity:0}], {duration:120, easing:'ease-in', fill:'forwards'}).finished.catch(() => {});
+    }
+    close();
 }
 
 function formatTime(seconds) {
@@ -698,17 +708,12 @@ document.addEventListener('alpine:init', () => {
 
         async closeSettings() {
             const dialog = document.querySelector('.user-settings-overlay[open]');
-            if (dialog?.dataset.closing) return;
-            if (dialog?.animate && matchMedia('(prefers-reduced-motion: no-preference)').matches) {
-                dialog.dataset.closing = 'true';
-                const closing = dialog.animate([{opacity:getComputedStyle(dialog).opacity}, {opacity:0}],
-                    {duration:110, easing:'ease-in', fill:'forwards'});
-                await closing.finished.catch(() => {});
-            }
-            this.settingsOpen = false;
-            Alpine.nextTick(() => {
-                const triggers = document.querySelectorAll('.sidebar-account-trigger, .mobile-account-chip');
-                Array.from(triggers).find(button => button.getClientRects().length)?.focus({preventScroll:true});
+            await finishPlayerDialog(dialog, () => {
+                this.settingsOpen = false;
+                Alpine.nextTick(() => {
+                    const triggers = document.querySelectorAll('.sidebar-account-trigger, .mobile-account-chip');
+                    Array.from(triggers).find(button => button.getClientRects().length)?.focus({preventScroll:true});
+                });
             });
         },
 
@@ -4949,9 +4954,17 @@ document.addEventListener('alpine:init', () => {
         downloadsEnabled: {{ downloads_enabled }},
         torrentDownloadsEnabled: {{ torrent_downloads_enabled }},
         youtubeDownloadsEnabled: {{ youtube_downloads_enabled }},
-        sourceTab: 'overview',
-        overviewLoading: false,
-        overviewLoaded: false,
+        sourceTab: 'files',
+        downloadHistory: [],
+        latestDownload: null,
+        downloadStats: null,
+        historyPage: 0,
+        historyPageSize: 20,
+        historyHasMore: false,
+        historyLoading: false,
+        historyLoaded: false,
+        historyError: '',
+        historyRequest: 0,
         youtubeUrl: '',
         youtubePreview: null,
         youtubePreviewSelected: new Set(),
@@ -4963,28 +4976,21 @@ document.addEventListener('alpine:init', () => {
         localTargetPlaylistId: null,
         youtubePlaylistChoice: '',
         youtubeNewPlaylistTitle: '',
-        downloadPlaylistStates: {},
         youtubePreviewLoading: false,
-        youtubeJobs: [],
-        youtubeExpandedJobId: null,
-        youtubeLoading: false,
+        youtubeDetail: null,
+        youtubeActionBusy: false,
         youtubeSubmitting: false,
-        youtubeCancellingIds: new Set(),
         file: null,
         localFiles: [],
         localFilesBatchId: null,
         localFileUploadIds: new WeakMap(),
         localFilesDragging: false,
         localFilesUploading: false,
-        localUploadHistory: [],
-        localUploadHistoryLoading: false,
+        localPendingFinish: false,
         magnet: '',
-        sessions: [],
-        loadingSessions: false,
-        sessionsLoaded: false,
         currentJob: null,
         previewData: null,
-        workspaceMode: 'empty',
+        workspaceMode: 'new',
         treeRoot: null,
         selected: new Set(),
         expanded: new Set(),
@@ -4992,66 +4998,36 @@ document.addEventListener('alpine:init', () => {
         message: '',
         error: false,
         _pollTimer: null,
-        _pollJobId: null,
+        _pollRequest: 0,
         _refreshTimer: null,
-        queuedTasks: 0,
-        processingTasks: 0,
-        loadingAgentStatus: false,
         uploadProgress: 0,
         uploadProgressText: '',
-        uploadTracks: [],
-        uploadReleases: [],
-        uploadPending: [],
-        uploadQueued: [],
-        uploadPendingTotal: 0,
-        uploadQueuedTotal: 0,
-        uploadQueueOffset: 0,
-        uploadQueuePageSize: 6,
-        uploadLoaded: false,
-        uploadLoading: false,
-        uploadEditId: null,
-        uploadSavingId: null,
-        uploadDraft: null,
-        uploadReviewEditId: null,
-        uploadReviewSavingId: null,
-        uploadReviewDraft: null,
-        uploadReleaseEditId: null,
-        uploadReleaseSavingId: null,
-        uploadReleaseDraft: null,
-        selectedUploadTracks: new Set(),
-        expandedUploadReleases: new Set(),
-        uploadBulkSaving: false,
-        uploadBulkDraft: {
-            artists: '',
-            featured_artists: '',
-            release_title: '',
-            release_type: '',
-            release_year: '',
-            hidden: '',
-        },
-
         open() {
             if (!this.downloadsEnabled || this.modal) return;
-            this.sourceTab = 'overview';
+            this.youtubeDetail = null;
+            if (this.workspaceMode === 'session' && !['preview','resolving'].includes(this.normalizedStatus(this.currentJob))) this.addNew();
+            this.sourceTab = 'files';
+            this.historyPage = 0;
             this.modal = true;
             Alpine.store('playlists')?.reload?.();
             this.message = '';
             this.error = false;
             this.refreshDownloads();
-            this.loadAgentStatus();
             this._startRefresh();
         },
 
         close() {
             this.modal = false;
+            this.historyRequest++;
+            this.historyLoading = false;
             this._stopRefresh();
             this._stopPoll();
         },
 
         _stopPoll() {
-            if (this._pollTimer) clearInterval(this._pollTimer);
+            if (this._pollTimer) clearTimeout(this._pollTimer);
             this._pollTimer = null;
-            this._pollJobId = null;
+            this._pollRequest++;
         },
 
         isImporting() {
@@ -5062,58 +5038,56 @@ document.addEventListener('alpine:init', () => {
             if (tab === 'torrents' && !this.torrentDownloadsEnabled || tab === 'youtube' && !this.youtubeDownloadsEnabled) return;
             if (this.sourceTab === tab) return;
             this._stopPoll();
-            if (tab === 'torrents') this.showTorrentOverview();
             this.sourceTab = tab;
+            if (tab === 'torrents') this.resumeTorrentPoll();
             this._setMessage('');
+            this.historyPage = 0;
+            this.historyLoaded = false;
             this.refreshDownloads();
         },
 
-        async refreshDownloads(silent = false) {
-            if (this.sourceTab === 'youtube') return this.loadYoutubeJobs({silent});
-            if (this.sourceTab === 'files') return this.loadLocalUploadHistory({silent});
-            if (this.sourceTab === 'uploads') return this.loadUploads({silent});
-            if (this.sourceTab === 'torrents') return this.loadSessions({silent});
-            if (this.overviewLoading) return;
-            this.overviewLoading = true;
+        async refreshDownloads() {
+            if (!this.modal) return;
+            const request = ++this.historyRequest;
+            const history = this.sourceTab === 'history';
+            const limit = history ? this.historyPageSize : 1;
+            const page = this.historyPage;
+            const detailId = this.sourceTab === 'youtube' && this.youtubeDetail?.id;
+            const params = detailId ? new URLSearchParams({source:'youtube', id:detailId})
+                : new URLSearchParams({limit, offset:history ? page * limit : 0});
+            this.historyLoading = true;
             try {
-                const requests = [this.loadLocalUploadHistory({silent})];
-                if (this.youtubeDownloadsEnabled) requests.push(this.loadYoutubeJobs({silent}));
-                if (this.torrentDownloadsEnabled) requests.push(this.loadSessions({silent}));
-                await Promise.all(requests);
-                this.overviewLoaded = true;
-            } finally {
-                this.overviewLoading = false;
-            }
-        },
-
-        async loadYoutubeJobs({ silent = false } = {}) {
-            if (!silent) this.youtubeLoading = true;
-            try {
-                const res = await fetch('/api/player/youtube');
-                const data = await res.json().catch(() => null);
-                if (!res.ok) throw new Error(data?.error || T.youtubeLoadFailed);
-                this.youtubeJobs = Array.isArray(data) ? data : [];
-                if (
-                    this.youtubeExpandedJobId !== null
-                    && !this.youtubeJobs.some(job => job.id === this.youtubeExpandedJobId)
-                ) {
-                    this.youtubeExpandedJobId = null;
+                const res = await fetch('/api/player/downloads/history?' + params);
+                if (!res.ok) throw new Error(T.loadHistoryFailed);
+                const data = await res.json();
+                if (request !== this.historyRequest) return;
+                if (history && page && !data.items.length) {
+                    this.historyPage--;
+                    return this.refreshDownloads();
                 }
-                this.refreshChangedPlaylists('youtube', this.youtubeJobs);
-            } catch (err) {
-                if (!silent) this._setMessage(err.message || T.youtubeLoadFailed, true);
+                if (!detailId && page === 0) this.latestDownload = data.items[0] || null;
+                if (history) {
+                    this.downloadHistory = data.items;
+                    this.historyHasMore = data.has_more;
+                    this.historyLoaded = true;
+                }
+                if (this.downloadStats && data.stats.tracks !== this.downloadStats.tracks) Alpine.store('playlists')?.reload?.();
+                this.downloadStats = data.stats;
+                if (detailId && this.youtubeDetail?.id === detailId && !data.items.length) this.youtubeDetail = null;
+                else this.syncYoutubeJob(data.items);
+                this.historyError = '';
+            } catch {
+                if (request === this.historyRequest) this.historyError = T.loadHistoryFailed;
             } finally {
-                if (!silent) this.youtubeLoading = false;
+                if (request === this.historyRequest) this.historyLoading = false;
             }
         },
 
-        refreshChangedPlaylists(source, jobs) {
-            const state = jobs.filter(job => job.target_playlist_id)
-                .map(job => [job.id, job.target_playlist_id, job.status, job.completed_items, job.failed_items, job.review_items].join(':'))
-                .sort().join('|');
-            const previous = this.downloadPlaylistStates[source];
-            this.downloadPlaylistStates[source] = state;
-            if (previous !== undefined && previous !== state) Alpine.store('playlists')?.reload?.();
+        changeHistoryPage(delta) {
+            if (this.historyLoading || (delta < 0 ? !this.historyPage : !this.historyHasMore)) return;
+            this.historyPage += delta;
+            this.historyLoaded = false;
+            this.refreshDownloads();
         },
 
         clearYoutubePreview() {
@@ -5144,7 +5118,6 @@ document.addEventListener('alpine:init', () => {
                 this.youtubePreviewSelected = new Set(
                     items.filter(item => item.selected_by_default).map(item => item.source_id)
                 );
-                this.youtubeExpandedJobId = null;
                 this._setMessage('');
             } catch (err) {
                 this._setMessage(err.message || T.youtubePreviewFailed, true);
@@ -5195,11 +5168,6 @@ document.addEventListener('alpine:init', () => {
         youtubeDestinationValid() {
             return this.youtubePlaylistChoice !== '__new__'
                 || String(this.youtubeNewPlaylistTitle || '').trim().length > 0;
-        },
-
-        youtubePlaylistTitle(playlistId) {
-            const wanted = Number(playlistId || 0);
-            return this.youtubeOwnedPlaylists().find(playlist => Number(playlist.id) === wanted)?.title || '';
         },
 
         importPlaylistChoiceChanged(kind) {
@@ -5266,11 +5234,10 @@ document.addEventListener('alpine:init', () => {
                 });
                 const data = await res.json().catch(() => null);
                 if (!res.ok) throw new Error(data?.error || T.youtubeStartFailed);
-                this.youtubeJobs = [data, ...this.youtubeJobs.filter(job => job.id !== data.id)];
-                this.youtubeExpandedJobId = data.id;
                 this.youtubeUrl = '';
                 this.clearYoutubePreview();
                 this._setMessage(T.youtubeStarted);
+                await this.refreshDownloads();
             } catch (err) {
                 this._setMessage(err.message || T.youtubeStartFailed, true);
             } finally {
@@ -5278,69 +5245,42 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        openYoutubeJob(row) {
+            this.youtubeDetail = row;
+            this.showSourceTab('youtube');
+        },
+
+        syncYoutubeJob(rows) {
+            if (!this.youtubeDetail) return;
+            const updated = rows.find(row => row.source === 'youtube' && row.id === this.youtubeDetail.id);
+            if (updated) this.youtubeDetail = updated;
+        },
+
         async cancelYoutubeJob(id) {
-            if (this.youtubeCancellingIds.has(id) || !confirm(T.youtubeStopConfirm)) return;
-            const cancelling = new Set(this.youtubeCancellingIds);
-            cancelling.add(id);
-            this.youtubeCancellingIds = cancelling;
-            this._setMessage(T.youtubeStopping);
-            try {
-                const res = await fetch(`/api/player/youtube/${encodeURIComponent(id)}/cancel`, {
-                    method: 'POST',
-                });
-                const data = await res.json().catch(() => null);
-                if (!res.ok) throw new Error(data?.error || T.youtubeStopFailed);
-                this.youtubeJobs = this.youtubeJobs.map(job => job.id === id ? data : job);
-                this._setMessage(T.youtubeStopped);
-            } catch (err) {
-                this._setMessage(err.message || T.youtubeStopFailed, true);
-            } finally {
-                const remaining = new Set(this.youtubeCancellingIds);
-                remaining.delete(id);
-                this.youtubeCancellingIds = remaining;
-            }
+            if (this.youtubeActionBusy || !confirm(T.youtubeStopConfirm)) return;
+            return this.updateYoutubeJob(id, 'cancel');
         },
 
         async retryYoutubeJob(id) {
+            if (!this.youtubeActionBusy) return this.updateYoutubeJob(id, 'retry');
+        },
+
+        async updateYoutubeJob(id, action) {
+            this.youtubeActionBusy = true;
             try {
-                const res = await fetch(`/api/player/youtube/${encodeURIComponent(id)}/retry`, {
-                    method: 'POST',
-                });
-                const data = await res.json().catch(() => null);
-                if (!res.ok) throw new Error(data?.error || T.youtubeRetryFailed);
-                this.youtubeJobs = this.youtubeJobs.map(job => job.id === id ? data : job);
-                this._setMessage(T.youtubeStarted);
+                const res = await fetch('/api/player/youtube/' + encodeURIComponent(id) + '/' + action, {method:'POST'});
+                const job = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(job?.error || (action === 'cancel' ? T.youtubeStopFailed : T.youtubeRetryFailed));
+                if (this.youtubeDetail?.id === id) {
+                    this.youtubeDetail = {...this.youtubeDetail, status:job.status, error:job.error};
+                }
+                this._setMessage(action === 'cancel' ? T.youtubeStopped : T.youtubeStarted);
+                await this.refreshDownloads();
             } catch (err) {
-                this._setMessage(err.message || T.youtubeRetryFailed, true);
+                this._setMessage(err.message || String(err), true);
+            } finally {
+                this.youtubeActionBusy = false;
             }
-        },
-
-        async removeYoutubeJob(id) {
-            if (!confirm(T.youtubeDeleteConfirm)) return;
-            try {
-                const res = await fetch(`/api/player/youtube/${encodeURIComponent(id)}`, {
-                    method: 'DELETE',
-                });
-                const data = await res.json().catch(() => null);
-                if (!res.ok) throw new Error(data?.error || T.youtubeDeleteFailed);
-                this.youtubeJobs = this.youtubeJobs.filter(job => job.id !== id);
-                this._setMessage('');
-            } catch (err) {
-                this._setMessage(err.message || T.youtubeDeleteFailed, true);
-            }
-        },
-
-        openYoutubeReviews() {
-            this.showSourceTab('uploads');
-        },
-
-        youtubeActiveCount() {
-            return this.youtubeJobs.filter(job => !this.youtubeJobTerminal(job.status)).length;
-        },
-
-        youtubeSummary() {
-            const active = this.youtubeActiveCount();
-            return active > 0 ? active + ' ' + T.active : T.clientIdle;
         },
 
         youtubeStatusLabel(status) {
@@ -5383,114 +5323,8 @@ document.addEventListener('alpine:init', () => {
             return classes[String(status || '').toLowerCase()] || 'status-preview';
         },
 
-        youtubeIsError(status) {
-            return ['failed', 'ai_failed'].includes(String(status || '').toLowerCase());
-        },
-
-        youtubeJobTerminal(status) {
-            return ['complete', 'complete_with_errors', 'failed', 'needs_review', 'cancelled'].includes(String(status || '').toLowerCase());
-        },
-
-        youtubeItemTerminal(status) {
-            return ['complete', 'skipped', 'needs_review', 'failed', 'ai_failed', 'cancelled'].includes(String(status || '').toLowerCase());
-        },
-
         youtubeJobCancellable(status) {
             return ['queued', 'resolving', 'downloading', 'postprocessing'].includes(String(status || '').toLowerCase());
-        },
-
-        youtubeJobExpanded(jobId) {
-            return this.youtubeExpandedJobId === jobId;
-        },
-
-        toggleYoutubeJob(jobId) {
-            this.youtubeExpandedJobId = this.youtubeExpandedJobId === jobId ? null : jobId;
-        },
-
-        youtubeJobMeta(job) {
-            const kind = job.source_kind === 'playlist' ? T.youtubePlaylist : T.youtubeVideo;
-            const parts = [kind];
-            if (Number(job.total_items || 0) > 0) parts.push(Number(job.total_items) + ' ' + T.youtubeItems);
-            if (Number(job.failed_items || 0) > 0) parts.push(Number(job.failed_items) + ' ' + T.youtubeErrors);
-            const playlistTitle = this.youtubePlaylistTitle(job.target_playlist_id);
-            if (playlistTitle) parts.push(T.youtubeAddedTo + ' ' + playlistTitle);
-            return parts.join(' · ');
-        },
-
-        youtubeItemMeta(item) {
-            const parts = [];
-            if (Number(item.chapter_count || 0) > 0) parts.push(Number(item.chapter_count) + ' ' + T.chapters);
-            if (Number(item.audio_file_count || 0) > 0) parts.push(Number(item.audio_file_count) + ' ' + T.trackWord);
-            if (Number(item.total_bytes || 0) > 0) parts.push(this.bytes(item.total_bytes));
-            return parts.join(' · ');
-        },
-
-        youtubeDownloadMeta(item) {
-            const downloaded = this.bytes(item.downloaded_bytes || 0);
-            const total = Number(item.total_bytes || 0) > 0 ? ' / ' + this.bytes(item.total_bytes) : '';
-            const speed = Number(item.speed_bytes_per_sec || 0) > 0 ? ' · ' + this.bytes(item.speed_bytes_per_sec) + '/s' : '';
-            const eta = Number(item.eta_seconds || 0) > 0 ? ' · ' + T.eta + ' ' + formatTime(item.eta_seconds) : '';
-            return downloaded + total + speed + eta;
-        },
-
-        youtubeItemProgress(item) {
-            const status = String(item?.status || 'queued').toLowerCase();
-            if (status === 'cancelled') {
-                const downloaded = Number(item.progress_percent || 0);
-                return downloaded > 0 ? Math.max(5, Math.min(55, 5 + downloaded * 0.5)) : 0;
-            }
-            if (this.youtubeItemTerminal(status)) return 100;
-            if (status === 'downloading') return 5 + Math.max(0, Math.min(100, Number(item.progress_percent || 0))) * 0.5;
-            if (status === 'postprocessing') return 62;
-            if (status === 'awaiting_ai') return 75;
-            if (status === 'ai_processing') return 88;
-            return 2;
-        },
-
-        youtubeJobProgress(job) {
-            const items = Array.isArray(job?.items) ? job.items : [];
-            if (!items.length) return job?.status === 'failed' ? 100 : 2;
-            return Math.round(items.reduce((sum, item) => sum + this.youtubeItemProgress(item), 0) / items.length);
-        },
-
-        youtubeJobProgressText(job) {
-            const items = Array.isArray(job?.items) ? job.items : [];
-            if (!items.length) return this.youtubeStatusLabel(job?.status);
-            const done = items.filter(item => this.youtubeItemTerminal(item.status) && item.status !== 'cancelled').length;
-            return done + ' ' + T.ofWord + ' ' + items.length;
-        },
-
-        youtubeStage(item) {
-            const status = String(item?.status || 'queued').toLowerCase();
-            if (status === 'cancelled') {
-                if (Number(item?.progress_percent || 0) >= 99) return 2;
-                return Number(item?.progress_percent || 0) > 0 ? 1 : 0;
-            }
-            if (status === 'downloading') return 1;
-            if (status === 'postprocessing') return 2;
-            if (['awaiting_ai', 'ai_processing', 'ai_failed'].includes(status)) return 3;
-            if (status === 'failed') return Number(item?.progress_percent || 0) >= 99 ? 2 : 1;
-            if (this.youtubeItemTerminal(status)) return 4;
-            return 0;
-        },
-
-        youtubeStepClass(item, step) {
-            const status = String(item?.status || '').toLowerCase();
-            const stage = this.youtubeStage(item);
-            if (status === 'cancelled') {
-                if (step < stage) return 'done';
-                if (step === stage) return 'cancelled';
-                return '';
-            }
-            if (this.youtubeIsError(status) && step === stage) return 'failed';
-            if (['complete', 'skipped'].includes(status)) return 'done';
-            if (step < stage) return 'done';
-            if (step === stage) return 'active';
-            return '';
-        },
-
-        youtubeFinalStepLabel(item) {
-            return this.youtubeStatusLabel(item?.status === 'complete' ? 'complete' : item?.status);
         },
 
         addNew() {
@@ -5504,12 +5338,6 @@ document.addEventListener('alpine:init', () => {
             this.treeRoot = null;
             this.selected = new Set();
             this.expanded = new Set();
-            this._setMessage('');
-        },
-
-        showTorrentOverview() {
-            this._stopPoll();
-            this.workspaceMode = 'empty';
             this._setMessage('');
         },
 
@@ -5528,10 +5356,6 @@ document.addEventListener('alpine:init', () => {
                 idx++;
             }
             return (idx === 0 ? size.toFixed(0) : size.toFixed(1)) + ' ' + units[idx];
-        },
-
-        activeCount() {
-            return this.sessions.filter(job => job.active || job.status === 'downloading' || job.status === 'moving').length;
         },
 
         isDownloading(job) {
@@ -5601,25 +5425,6 @@ document.addEventListener('alpine:init', () => {
             return Math.max(0, Math.min(100, Number(job.progress_percent || 0)));
         },
 
-        clientSummary() {
-            const active = this.activeCount();
-            return active > 0 ? active + ' ' + T.active : T.clientIdle;
-        },
-
-        agentSummary() {
-            const queued = Number(this.queuedTasks || 0);
-            const processing = Number(this.processingTasks || 0);
-            if (queued === 0 && processing === 0) return T.aiIdle;
-            const parts = [];
-            if (processing > 0) parts.push(processing + ' ' + T.processing);
-            parts.push(queued + ' ' + T.queued);
-            return T.aiPrefix + ' ' + parts.join(' / ');
-        },
-
-        agentBusy() {
-            return Number(this.queuedTasks || 0) > 0 || Number(this.processingTasks || 0) > 0;
-        },
-
         statusText(job) {
             if (!job) return T.noTorrentSelected;
             const state = job.client_state ? ' / ' + job.client_state : '';
@@ -5670,502 +5475,20 @@ document.addEventListener('alpine:init', () => {
 
         toggleDownloadAction() {
             if (this.isCurrentCompletedLocked()) return;
-            if (this.isCurrentDownloading()) this.pause();
-            else this.start();
-        },
-
-        sessionMeta(job) {
-            if (!job) return '';
-            const size = this.bytes(job.selected_size || job.total_size);
-            const title = this.youtubePlaylistTitle(job.target_playlist_id);
-            return this.progressValue(job).toFixed(1) + '% - ' + size + (title ? ' · ' + T.youtubePlaylist + ': ' + title : '');
-        },
-
-        async loadAgentStatus() {
-            this.loadingAgentStatus = true;
-            try {
-                const res = await fetch('/api/player/agent-queue');
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.loadAiQueueFailed);
-                this.queuedTasks = Number(data.queued_count || 0);
-                this.processingTasks = Number(data.processing_count || 0);
-            } catch {
-                this.queuedTasks = 0;
-                this.processingTasks = 0;
-            } finally {
-                this.loadingAgentStatus = false;
-            }
-        },
-
-        async loadUploads({ silent = false, preserveEditor = true } = {}) {
-            if (preserveEditor && this.uploadHasEditorOpen()) return;
-            if (this.uploadLoading) return;
-            this.uploadLoading = true;
-            try {
-                const res = await fetch('/api/player/uploads/tracks');
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.loadUploadsFailed);
-                this.applyUploadPage(data);
-                this.uploadLoaded = true;
-                if (this.uploadEditId && !this.uploadTracks.some(item => item.track.id === this.uploadEditId)) {
-                    this.cancelUploadEdit();
-                }
-            } catch (err) {
-                if (!silent) this._setMessage(err.message || String(err), true);
-                if (!this.uploadLoaded) {
-                    this.uploadTracks = [];
-                    this.uploadReleases = [];
-                    this.uploadPending = [];
-                    this.uploadQueued = [];
-                    this.uploadPendingTotal = 0;
-                    this.uploadQueuedTotal = 0;
-                }
-            } finally {
-                this.uploadLoading = false;
-            }
-        },
-
-        uploadSummary() {
-            const trackCount = this.uploadTracks.length;
-            const releaseCount = this.uploadReleases.length;
-            const parts = [trackCount + ' ' + T.trackWord, releaseCount + ' ' + T.releaseWord];
-            if (this.uploadPendingTotal > 0) parts.push(this.uploadPendingTotal + ' ' + T.needsApproval);
-            if (this.uploadQueuedTotal > 0) parts.push(this.uploadQueuedTotal + ' ' + T.queued);
-            return parts.join(' / ');
-        },
-
-        uploadArtistsText(item) {
-            const track = item?.track || item;
-            const names = [
-                ...((track?.artists || []).map(artist => artist.name)),
-                ...((track?.featured_artists || []).map(artist => T.featuredShort + ' ' + artist.name)),
-            ];
-            return names.join(', ') || T.unknown;
-        },
-
-        uploadReleaseArtistsText(release) {
-            const names = (release?.artists || []).map(artist => artist.name);
-            return names.join(', ') || T.unknown;
-        },
-
-        uploadArtistGroups() {
-            const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
-            const groups = new Map();
-            for (const release of this.uploadReleases) {
-                const artists = Array.isArray(release?.artists) ? release.artists : [];
-                const artistKey = artists
-                    .map(artist => artist?.id != null ? 'id:' + artist.id : 'name:' + String(artist?.name || '').trim().toLowerCase())
-                    .filter(Boolean)
-                    .join('|') || 'unknown';
-                if (!groups.has(artistKey)) {
-                    groups.set(artistKey, {
-                        key: artistKey,
-                        name: this.uploadReleaseArtistsText(release),
-                        releases: [],
-                        trackCount: 0,
-                    });
-                }
-                const group = groups.get(artistKey);
-                group.releases.push(release);
-                group.trackCount += Array.isArray(release?.tracks) ? release.tracks.length : 0;
-            }
-            return [...groups.values()]
-                .map(group => ({
-                    ...group,
-                    releases: group.releases.slice().sort((a, b) => {
-                        const aDate = String(a?.tracks?.[0]?.uploaded_at || '');
-                        const bDate = String(b?.tracks?.[0]?.uploaded_at || '');
-                        return bDate.localeCompare(aDate) || collator.compare(a?.title || '', b?.title || '');
-                    }),
-                }))
-                .sort((a, b) => collator.compare(a.name, b.name));
-        },
-
-        uploadFeaturedArtistsText(item) {
-            const track = item?.track || item;
-            return (track?.featured_artists || []).map(artist => artist.name).join(', ');
-        },
-
-        compactQueuedUploads() {
-            const maxOffset = Math.max(0, this.uploadQueued.length - this.uploadQueuePageSize);
-            this.uploadQueueOffset = Math.max(0, Math.min(this.uploadQueueOffset, maxOffset));
-            return this.uploadQueued.slice(this.uploadQueueOffset, this.uploadQueueOffset + this.uploadQueuePageSize);
-        },
-
-        uploadQueueCanPrev() {
-            return this.uploadQueueOffset > 0;
-        },
-
-        uploadQueueCanNext() {
-            return this.uploadQueueOffset + this.uploadQueuePageSize < this.uploadQueued.length;
-        },
-
-        uploadQueuePrev() {
-            this.uploadQueueOffset = Math.max(0, this.uploadQueueOffset - this.uploadQueuePageSize);
-        },
-
-        uploadQueueNext() {
-            const maxOffset = Math.max(0, this.uploadQueued.length - this.uploadQueuePageSize);
-            this.uploadQueueOffset = Math.min(maxOffset, this.uploadQueueOffset + this.uploadQueuePageSize);
-        },
-
-        uploadQueueRangeText() {
-            if (this.uploadQueued.length === 0) return '';
-            const start = this.uploadQueueOffset + 1;
-            const end = Math.min(this.uploadQueueOffset + this.uploadQueuePageSize, this.uploadQueued.length);
-            const total = Math.max(this.uploadQueuedTotal || 0, this.uploadQueued.length);
-            return start + '-' + end + ' / ' + total;
-        },
-
-        uploadQueueOverflowText() {
-            const total = Math.max(this.uploadQueuedTotal || 0, this.uploadQueued.length);
-            return T.showing + ' ' + this.uploadQueued.length + ' ' + T.ofWord + ' ' + total;
-        },
-
-        uploadQueueTooltip(item) {
-            if (!item) return '';
-            const lines = [];
-            if (item.filename) lines.push(T.fileLabel + ': ' + item.filename);
-            if (item.status) lines.push(T.statusLabelText + ': ' + item.status);
-            if (item.created_at) lines.push(T.createdLabel + ': ' + item.created_at);
-            if (item.updated_at) lines.push(T.updatedLabel + ': ' + item.updated_at);
-            if (item.error_message) lines.push(T.errorLabel + ': ' + item.error_message);
-            return lines.join('\n');
-        },
-
-        uploadStatusLabel(status) {
-            const labels = {
-                pending: T.pending,
-                queued: T.queued,
-                processing: T.processing,
-                failed: T.failed,
-            };
-            return labels[String(status || '').toLowerCase()] || status || T.unknown;
-        },
-
-        uploadHasEditorOpen() {
-            return !!(this.uploadEditId || this.uploadReviewEditId || this.uploadReleaseEditId);
-        },
-
-        uploadEditorKicker() {
-            if (this.uploadReviewDraft) return T.needsApproval;
-            if (this.uploadReleaseDraft) return T.releaseMetadata;
-            if (this.uploadDraft) return T.trackMetadata;
-            return T.metadata;
-        },
-
-        uploadEditorTitle() {
-            if (this.uploadReviewDraft) return T.approveMetadata;
-            if (this.uploadReleaseDraft) return this.uploadReleaseDraft.title || T.editRelease;
-            if (this.uploadDraft) return this.uploadDraft.title || T.editTrack;
-            return T.editMetadata;
-        },
-
-        closeUploadEditor() {
-            this.cancelUploadEdit();
-            this.cancelUploadReleaseEdit();
-            this.cancelUploadReviewEdit();
-        },
-
-        uploadReleaseExpanded(releaseId) {
-            return this.expandedUploadReleases.has(releaseId);
-        },
-
-        toggleUploadRelease(releaseId) {
-            if (this.expandedUploadReleases.has(releaseId)) this.expandedUploadReleases.delete(releaseId);
-            else this.expandedUploadReleases.add(releaseId);
-        },
-
-        uploadReleaseTrackIds(release) {
-            return (release?.tracks || []).map(item => item.track.id);
-        },
-
-        uploadReleaseSelectionState(release) {
-            const ids = this.uploadReleaseTrackIds(release);
-            const selected = ids.filter(id => this.selectedUploadTracks.has(id)).length;
-            if (selected === 0) return 'empty';
-            return selected === ids.length ? 'checked' : 'partial';
-        },
-
-        toggleUploadReleaseSelection(release) {
-            const ids = this.uploadReleaseTrackIds(release);
-            const state = this.uploadReleaseSelectionState(release);
-            if (state === 'checked') ids.forEach(id => this.selectedUploadTracks.delete(id));
-            else ids.forEach(id => this.selectedUploadTracks.add(id));
-        },
-
-        toggleUploadTrackSelection(trackId) {
-            if (this.selectedUploadTracks.has(trackId)) this.selectedUploadTracks.delete(trackId);
-            else this.selectedUploadTracks.add(trackId);
-        },
-
-        uploadSelectedCount() {
-            return this.selectedUploadTracks.size;
-        },
-
-        clearUploadSelection() {
-            this.selectedUploadTracks.clear();
-            this.uploadBulkDraft = {
-                artists: '',
-                featured_artists: '',
-                release_title: '',
-                release_type: '',
-                release_year: '',
-                hidden: '',
-            };
-        },
-
-        pruneUploadSelection() {
-            const valid = new Set(this.uploadTracks.map(item => item.track.id));
-            for (const id of [...this.selectedUploadTracks]) {
-                if (!valid.has(id)) this.selectedUploadTracks.delete(id);
-            }
-        },
-
-        editUpload(item) {
-            if (!item || !item.track) return;
-            this.cancelUploadReleaseEdit();
-            this.cancelUploadReviewEdit();
-            this.uploadEditId = item.track.id;
-            this.uploadDraft = {
-                title: item.track.title || '',
-                artists: (item.track.artists || []).map(artist => artist.name).join(', '),
-                featured_artists: this.uploadFeaturedArtistsText(item),
-                release_title: item.track.release_title || '',
-                release_type: item.release_type || 'album',
-                release_year: item.track.release_year == null ? '' : String(item.track.release_year),
-                track_number: item.track.track_number == null ? '' : String(item.track.track_number),
-                disc_number: item.track.disc_number == null ? '' : String(item.track.disc_number),
-                is_hidden: !!item.is_hidden,
-            };
-        },
-
-        cancelUploadEdit() {
-            this.uploadEditId = null;
-            this.uploadSavingId = null;
-            this.uploadDraft = null;
-        },
-
-        async saveUploadEdit() {
-            if (!this.uploadEditId || !this.uploadDraft) return;
-            const id = this.uploadEditId;
-            const draft = this.uploadDraft;
-            const artistNames = String(draft.artists || '')
-                .split(',')
-                .map(name => name.trim())
-                .filter(Boolean);
-            this.uploadSavingId = id;
-            try {
-                const res = await fetch(`/api/player/uploads/tracks/${id}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: draft.title,
-                        artist_names: artistNames,
-                        featured_artist_names: String(draft.featured_artists || '').split(',').map(name => name.trim()).filter(Boolean),
-                        release_title: draft.release_title,
-                        release_type: draft.release_type,
-                        release_year: String(draft.release_year || ''),
-                        track_number: String(draft.track_number || ''),
-                        disc_number: String(draft.disc_number || ''),
-                        is_hidden: !!draft.is_hidden,
-                    }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.failedSaveTrack);
-                this.uploadTracks = this.uploadTracks.map(item => item.track.id === id ? data : item);
-                this.cancelUploadEdit();
-                this.loadUploads({ silent: true, preserveEditor: false });
-                this._setMessage(T.trackMetadataSaved);
-            } catch (err) {
-                this._setMessage(err.message || String(err), true);
-            } finally {
-                this.uploadSavingId = null;
-            }
-        },
-
-        editUploadRelease(release) {
-            if (!release) return;
-            this.cancelUploadEdit();
-            this.cancelUploadReviewEdit();
-            this.uploadReleaseEditId = release.id;
-            this.uploadReleaseDraft = {
-                title: release.title || '',
-                artists: this.uploadReleaseArtistsText(release),
-                release_type: release.release_type || 'album',
-                year: release.year == null ? '' : String(release.year),
-                is_hidden: !!release.is_hidden,
-            };
-        },
-
-        cancelUploadReleaseEdit() {
-            this.uploadReleaseEditId = null;
-            this.uploadReleaseSavingId = null;
-            this.uploadReleaseDraft = null;
-        },
-
-        async saveUploadReleaseEdit() {
-            if (!this.uploadReleaseEditId || !this.uploadReleaseDraft) return;
-            const id = this.uploadReleaseEditId;
-            const draft = this.uploadReleaseDraft;
-            this.uploadReleaseSavingId = id;
-            try {
-                const res = await fetch(`/api/player/uploads/releases/${id}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: draft.title,
-                        artist_names: String(draft.artists || '').split(',').map(name => name.trim()).filter(Boolean),
-                        release_type: draft.release_type,
-                        year: String(draft.year || ''),
-                        is_hidden: !!draft.is_hidden,
-                    }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.failedSaveRelease);
-                this.applyUploadPage(data);
-                this.cancelUploadReleaseEdit();
-                this._setMessage(T.releaseMetadataSaved);
-            } catch (err) {
-                this._setMessage(err.message || String(err), true);
-            } finally {
-                this.uploadReleaseSavingId = null;
-            }
-        },
-
-        uploadReviewPayload() {
-            const draft = this.uploadReviewDraft || {};
-            return {
-                title: draft.title,
-                artist: draft.artist,
-                album: draft.album,
-                year: String(draft.year || ''),
-                track_number: String(draft.track_number || ''),
-                genre: draft.genre,
-                featured_artists: String(draft.featured_artists || '').split(',').map(name => name.trim()).filter(Boolean),
-                release_type: draft.release_type || 'album',
-                notes: draft.notes,
-            };
-        },
-
-        editUploadReview(item) {
-            if (!item) return;
-            this.cancelUploadEdit();
-            this.cancelUploadReleaseEdit();
-            this.uploadReviewEditId = item.id;
-            this.uploadReviewDraft = {
-                title: item.fields?.title || '',
-                artist: item.fields?.artist || '',
-                album: item.fields?.album || '',
-                year: item.fields?.year || '',
-                track_number: item.fields?.track_number || '',
-                genre: item.fields?.genre || '',
-                featured_artists: (item.fields?.featured_artists || []).join(', '),
-                release_type: item.fields?.release_type || 'album',
-                notes: item.fields?.notes || '',
-            };
-        },
-
-        cancelUploadReviewEdit() {
-            this.uploadReviewEditId = null;
-            this.uploadReviewSavingId = null;
-            this.uploadReviewDraft = null;
-        },
-
-        async deleteUploadReview() {
-            if (!this.uploadReviewEditId) return;
-            const id = this.uploadReviewEditId;
-            this.uploadReviewSavingId = id;
-            try {
-                const res = await fetch(`/api/player/uploads/reviews/${id}`, {
-                    method: 'DELETE',
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.failedDeleteReview);
-                this.applyUploadPage(data);
-                this.cancelUploadReviewEdit();
-                this._setMessage(T.reviewDeleted);
-            } catch (err) {
-                this._setMessage(err.message || String(err), true);
-            } finally {
-                this.uploadReviewSavingId = null;
-            }
-        },
-
-        async approveUploadReview() {
-            if (!this.uploadReviewEditId || !this.uploadReviewDraft) return;
-            const id = this.uploadReviewEditId;
-            this.uploadReviewSavingId = id;
-            try {
-                const res = await fetch(`/api/player/uploads/reviews/${id}/approve`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.uploadReviewPayload()),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.failedApproveReview);
-                this.applyUploadPage(data);
-                this.cancelUploadReviewEdit();
-                this._setMessage(T.trackApprovedImported);
-            } catch (err) {
-                this._setMessage(err.message || String(err), true);
-            } finally {
-                this.uploadReviewSavingId = null;
-            }
-        },
-
-        async saveUploadBulkEdit() {
-            const trackIds = [...this.selectedUploadTracks];
-            if (trackIds.length === 0) return;
-            const draft = this.uploadBulkDraft;
-            const hidden = draft.hidden === '' ? null : draft.hidden === 'true';
-            const artists = String(draft.artists || '').split(',').map(name => name.trim()).filter(Boolean);
-            const featured = String(draft.featured_artists || '').split(',').map(name => name.trim()).filter(Boolean);
-            this.uploadBulkSaving = true;
-            try {
-                const res = await fetch('/api/player/uploads/bulk-tracks', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        track_ids: trackIds,
-                        artist_names: artists.length ? artists : null,
-                        featured_artist_names: featured.length ? featured : null,
-                        release_title: draft.release_title || null,
-                        release_type: draft.release_type || null,
-                        release_year: draft.release_year === '' ? null : String(draft.release_year),
-                        is_hidden: hidden,
-                    }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.failedUpdateSelectedTracks);
-                this.applyUploadPage(data);
-                this.clearUploadSelection();
-                this._setMessage(T.selectedTracksUpdated);
-            } catch (err) {
-                this._setMessage(err.message || String(err), true);
-            } finally {
-                this.uploadBulkSaving = false;
-            }
-        },
-
-        applyUploadPage(data) {
-            this.uploadTracks = Array.isArray(data.tracks) ? data.tracks : [];
-            this.uploadReleases = Array.isArray(data.releases) ? data.releases : [];
-            this.uploadPending = Array.isArray(data.pending) ? data.pending : [];
-            this.uploadQueued = Array.isArray(data.queued) ? data.queued : [];
-            this.uploadPendingTotal = Number(data.pending_total || this.uploadPending.length || 0);
-            this.uploadQueuedTotal = Number(data.queued_total || this.uploadQueued.length || 0);
-            const maxQueueOffset = Math.max(0, this.uploadQueued.length - this.uploadQueuePageSize);
-            this.uploadQueueOffset = Math.max(0, Math.min(this.uploadQueueOffset, maxQueueOffset));
-            this.pruneUploadSelection();
+            return this.isCurrentDownloading() ? this.pause() : this.start();
         },
 
         _startRefresh() {
             this._stopRefresh();
+            let lastRefresh = Date.now();
             this._refreshTimer = setInterval(() => {
-                if (!this.modal) return;
-                this.refreshDownloads(true);
-                this.loadAgentStatus();
+                if (!this.modal || document.hidden || this.historyLoading) return;
+                const rows = this.sourceTab === 'history' ? this.downloadHistory : [this.latestDownload, this.youtubeDetail];
+                const inProgress = rows.some(row => row && ['uploading','queued','resolving','downloading','moving','postprocessing','awaiting_ai','ai_processing'].includes(row.status));
+                if (inProgress || Date.now() - lastRefresh >= 30000) {
+                    lastRefresh = Date.now();
+                    this.refreshDownloads();
+                }
             }, 5000);
         },
 
@@ -6174,25 +5497,12 @@ document.addEventListener('alpine:init', () => {
             this._refreshTimer = null;
         },
 
-        _rememberJob(job) {
-            if (!job || !job.id) return;
-            const rest = this.sessions.filter(item => item.id !== job.id);
-            this.sessions = [job, ...rest].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-            if (this.currentJob && this.currentJob.id === job.id) this.currentJob = job;
-        },
-
         _isSelectedJob(id) {
             return this.workspaceMode === 'session'
                 && this.currentJob
                 && this.currentJob.id === id
                 && this.previewData
                 && this.previewData.id === id;
-        },
-
-        _syncCurrentJobFromSessions() {
-            if (!this.currentJob || !this.previewData) return;
-            const selected = this.sessions.find(job => job.id === this.currentJob.id && job.id === this.previewData.id);
-            if (selected) this.currentJob = selected;
         },
 
         _applySession(data) {
@@ -6209,39 +5519,12 @@ document.addEventListener('alpine:init', () => {
                 ? data.selected_files
                 : (preview.files || []).filter(f => f.selected).map(f => f.index);
             this.selected = new Set(selected);
-            this.treeRoot = this._buildTree(preview.files || []);
-            if (job) this._rememberJob(job);
+            this.treeRoot = null;
         },
 
-        async loadSessions({silent = false} = {}) {
-            this.loadingSessions = true;
-            try {
-                const res = await fetch('/api/player/torrents');
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.loadTorrentsFailed);
-                this.sessions = Array.isArray(data) ? data : [];
-                this.refreshChangedPlaylists('torrents', this.sessions);
-                this._syncCurrentJobFromSessions();
-                if (this.sourceTab === 'torrents') await this._refreshResolvedSelection();
-            } catch (err) {
-                if (!silent) this._setMessage(err.message || String(err), true);
-            } finally {
-                this.sessionsLoaded = true;
-                this.loadingSessions = false;
-            }
-        },
-
-        async _refreshResolvedSelection() {
-            if (this.workspaceMode !== 'session' || !this.currentJob || !this.previewData || (this.previewData.files || []).length > 0) return;
-            const selected = this.sessions.find(job => job.id === this.currentJob.id);
-            if (!selected || this.normalizedStatus(selected) === 'resolving') return;
-            try {
-                const res = await fetch(`/api/player/torrents/session/${selected.id}`);
-                const data = await res.json();
-                if (!res.ok || !this._isSelectedJob(selected.id)) return;
-                this._applySession(data);
-                this._setMessage('');
-            } catch {}
+        resumeTorrentPoll() {
+            if (this.sourceTab !== 'torrents' || this.workspaceMode !== 'session' || !this.currentJob) return;
+            if (this.isCurrentDownloading() || this.normalizedStatus(this.currentJob) === 'resolving') this._poll(this.currentJob.id);
         },
 
         async openSession(id) {
@@ -6256,39 +5539,12 @@ document.addEventListener('alpine:init', () => {
                 if (this.workspaceMode !== 'opening' || !this.modal || this.sourceTab !== 'torrents') return;
                 if (!res.ok) throw new Error(data.error || T.openTorrentFailed);
                 this._applySession(data);
-                if (data.job && (data.job.active || data.job.status === 'downloading' || data.job.status === 'moving')) {
-                    this._poll(data.job.id);
-                }
+                this.resumeTorrentPoll();
             } catch (err) {
                 if (this.workspaceMode === 'opening') {
-                    this.workspaceMode = 'empty';
+                    this.workspaceMode = 'new';
                     this._setMessage(err.message || String(err), true);
                 }
-            } finally {
-                this.loading = false;
-            }
-        },
-
-        async removeSession(id) {
-            if (!id || this.loading) return;
-            if (!confirm(T.removeTorrentConfirm)) return;
-            this.loading = true;
-            try {
-                const res = await fetch(`/api/player/torrents/session/${id}`, { method: 'DELETE' });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || T.deleteTorrentFailed);
-                this.sessions = this.sessions.filter(job => job.id !== id);
-                if (this.previewData && this.previewData.id === id) {
-                    this._stopPoll();
-                    this.previewData = null;
-                    this.currentJob = null;
-                    this.treeRoot = null;
-                    this.selected = new Set();
-                    this.workspaceMode = 'empty';
-                }
-                this._setMessage(T.torrentRemoved);
-            } catch (err) {
-                this._setMessage(err.message || String(err), true);
             } finally {
                 this.loading = false;
             }
@@ -6316,6 +5572,7 @@ document.addEventListener('alpine:init', () => {
             this.localFiles = selected;
             this.localFilesBatchId = selected.length ? crypto.randomUUID() : null;
             this.localFileUploadIds = new WeakMap();
+            this.localPendingFinish = false;
             this.localPlaylistLocked = false;
             this.localTargetPlaylistId = null;
             this.localPlaylistChoice = '';
@@ -6335,6 +5592,7 @@ document.addEventListener('alpine:init', () => {
             this.localFiles = [];
             this.localFilesBatchId = null;
             this.localFileUploadIds = new WeakMap();
+            this.localPendingFinish = false;
             this.localPlaylistLocked = false;
             this.localTargetPlaylistId = null;
             this.localPlaylistChoice = '';
@@ -6398,88 +5656,45 @@ document.addEventListener('alpine:init', () => {
         },
 
         async uploadLocalFiles() {
-            if (this.localFilesUploading || this.localFiles.length === 0 || !this.importDestinationValid('local')) return;
+            if (this.localFilesUploading || (!this.localFiles.length && !this.localPendingFinish) || !this.importDestinationValid('local')) return;
             const batchId = this.localFilesBatchId;
-            this.localFilesUploading = true;
-            this.uploadProgress = 0;
-            this.uploadProgressText = '0.0%';
-            this._setMessage(T.uploadingFiles);
             const totalBytes = this.localUploadBytes();
-            let loadedBefore = 0;
-            let batchStarted = false;
+            this.localFilesUploading = true;
+            this.uploadProgress = this.localPendingFinish ? 100 : 0;
+            this.uploadProgressText = this.uploadProgress + '%';
+            this._setMessage('');
+            let loaded = 0;
             try {
                 if (!this.localPlaylistLocked) {
                     this.localTargetPlaylistId = await this.resolveImportTargetPlaylist('local');
                     this.localPlaylistLocked = true;
                 }
-                batchStarted = true;
                 for (const file of [...this.localFiles]) {
-                    const data = await this.uploadLocalFile(file, loadedBefore, totalBytes);
-                    if (data?.upload) {
-                        this.localUploadHistory = [
-                            data.upload,
-                            ...this.localUploadHistory.filter(item => item.id !== data.upload.id),
-                        ];
-                    }
-                    loadedBefore += Number(file.size || 0);
+                    await this.uploadLocalFile(file, loaded, totalBytes);
+                    loaded += Number(file.size || 0);
                     this.localFileUploadIds.delete(file);
                     this.localFiles = this.localFiles.filter(item => item !== file);
-                    this.uploadProgress = totalBytes > 0 ? Math.min(100, loadedBefore / totalBytes * 100) : 100;
+                    this.uploadProgress = totalBytes > 0 ? Math.min(100, loaded / totalBytes * 100) : 100;
                     this.uploadProgressText = this.uploadProgress.toFixed(1) + '%';
                 }
-                this.uploadProgress = 100;
+                this.localPendingFinish = true;
+                const res = await fetch('/api/player/uploads/local', {
+                    method: 'POST',
+                    headers: {
+                        'X-Furumusic-Upload-Batch-Id': batchId,
+                        'X-Furumusic-Upload-Complete': 'true',
+                    },
+                });
+                redirectOnUnauthorized(res.status);
+                if (!res.ok) throw new Error(T.uploadFailed);
+                this.localPendingFinish = false;
                 this.localFilesBatchId = null;
-                this.uploadProgressText = '100.0%';
                 this._setMessage(T.uploadComplete);
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
-                if (batchStarted) try {
-                    const response = await fetch('/api/player/uploads/local', {
-                        method: 'POST',
-                        headers: {
-                            'X-Furumusic-Upload-Batch-Id': batchId,
-                            'X-Furumusic-Upload-Complete': 'true',
-                        },
-                    });
-                    redirectOnUnauthorized(response.status);
-                    if (!response.ok) throw new Error(T.uploadFailed);
-                    await this.loadAgentStatus();
-                    await this.loadLocalUploadHistory({ silent: true });
-                } catch (err) {
-                    this._setMessage(err.message || T.uploadFailed, true);
-                }
                 this.localFilesUploading = false;
-            }
-        },
-
-        async loadLocalUploadHistory({ silent = false } = {}) {
-            if (!silent) this.localUploadHistoryLoading = true;
-            try {
-                const res = await fetch('/api/player/uploads/local/history');
-                const data = await res.json().catch(() => null);
-                if (!res.ok) throw new Error(data?.error || T.fileUploadLoadFailed);
-                this.localUploadHistory = Array.isArray(data) ? data : [];
-                this.refreshChangedPlaylists('files', this.localUploadHistory);
-            } catch (err) {
-                if (!silent) this._setMessage(err.message || T.fileUploadLoadFailed, true);
-            } finally {
-                if (!silent) this.localUploadHistoryLoading = false;
-            }
-        },
-
-        async removeLocalUploadHistory(id) {
-            if (!confirm(T.removeFileUploadConfirm)) return;
-            try {
-                const res = await fetch(`/api/player/uploads/local/history/${encodeURIComponent(id)}`, {
-                    method: 'DELETE',
-                });
-                const data = await res.json().catch(() => null);
-                if (!res.ok) throw new Error(data?.error || T.fileUploadHistoryRemoveFailed);
-                this.localUploadHistory = this.localUploadHistory.filter(item => item.id !== id);
-                this._setMessage(T.fileUploadHistoryRemoved);
-            } catch (err) {
-                this._setMessage(err.message || T.fileUploadHistoryRemoveFailed, true);
+                await this.refreshDownloads();
             }
         },
 
@@ -6516,8 +5731,11 @@ document.addEventListener('alpine:init', () => {
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.previewFailed);
-                if (this.isImporting() && this.modal && this.sourceTab === 'torrents') this._applySession(data);
-                await this.loadSessions();
+                if (this.isImporting() && this.modal) {
+                    this._applySession(data);
+                    this.resumeTorrentPoll();
+                }
+                await this.refreshDownloads();
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
@@ -6717,10 +5935,9 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.startFailed);
                 this.currentJob = data;
-                this._rememberJob(data);
                 this._setMessage(T.downloadStarted);
                 if (this._isSelectedJob(data.id) && this.modal && this.sourceTab === 'torrents') this._poll(data.id);
-                await this.loadSessions();
+                await this.refreshDownloads();
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
@@ -6740,10 +5957,9 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || T.pauseFailed);
                 this.currentJob = data;
-                this._rememberJob(data);
                 this._setMessage(T.downloadPaused);
                 this._stopPoll();
-                await this.loadSessions();
+                await this.refreshDownloads();
             } catch (err) {
                 this._setMessage(err.message || String(err), true);
             } finally {
@@ -6753,28 +5969,37 @@ document.addEventListener('alpine:init', () => {
 
         _poll(id) {
             this._stopPoll();
-            this._pollJobId = id;
-            this._pollTimer = setInterval(async () => {
+            const request = this._pollRequest;
+            const poll = async () => {
                 try {
-                    const res = await fetch(`/api/player/torrents/${id}/status`);
-                    const data = await res.json();
-                    if (this._pollJobId !== id) return;
-                    if (!res.ok) throw new Error(data.error || T.statusFailed);
-                    this._rememberJob(data);
-                    if (this._isSelectedJob(id) && data.status === 'failed') {
-                        this._setMessage(this.statusText(data), true);
+                    const res = await fetch('/api/player/torrents/' + encodeURIComponent(id) + '/status');
+                    const job = await res.json();
+                    if (this._pollRequest !== request || !this._isSelectedJob(id)) return;
+                    if (!res.ok) throw new Error(job.error || T.statusFailed);
+                    const wasResolving = this.normalizedStatus(this.currentJob) === 'resolving';
+                    this.currentJob = job;
+                    if (wasResolving && job.status !== 'resolving' && job.status !== 'failed') {
+                        const resolved = await fetch('/api/player/torrents/session/' + encodeURIComponent(id));
+                        if (!resolved.ok) throw new Error(T.openTorrentFailed);
+                        const data = await resolved.json();
+                        if (this._pollRequest !== request || !this._isSelectedJob(id)) return;
+                        this._applySession(data);
                     }
-                    if (data.status === 'complete' || data.status === 'failed') {
+                    if (!this.isCurrentDownloading() && this.normalizedStatus(this.currentJob) !== 'resolving') {
                         this._stopPoll();
-                        this.loadSessions();
-                        this.loadAgentStatus();
+                        if (job.status === 'failed') this._setMessage(job.error || this.statusText(job), true);
+                        await this.refreshDownloads();
+                        return;
                     }
                 } catch (err) {
-                    if (this._pollJobId !== id) return;
-                    if (this._isSelectedJob(id)) this._setMessage(err.message || String(err), true);
+                    if (this._pollRequest !== request) return;
+                    this._setMessage(err.message || String(err), true);
                     this._stopPoll();
+                    return;
                 }
-            }, 2000);
+                if (this._pollRequest === request) this._pollTimer = setTimeout(poll, 2000);
+            };
+            this._pollTimer = setTimeout(poll, 2000);
         },
     });
 

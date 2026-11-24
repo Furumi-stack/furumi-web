@@ -1,8 +1,7 @@
 .user-settings-overlay .user-settings-modal.cache-view {
-    width: min(950px, calc(100% - 24px));
+    --dialog-width: 950px;
     height: min(82dvh, 740px);
     max-width: none;
-    max-height: none;
     min-width: 0;
     padding: 0;
     overflow: hidden;

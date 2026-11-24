@@ -44,9 +44,7 @@
                 <h3 id="offline-cache-title" tabindex="-1">{{ t.player_offline_saved }}</h3>
                 <p x-text="formatArtistCount($store.offline.items.length, 'tracks') + ' · ' + $store.offline.formatBytes($store.offline.bytes)"></p>
             </div>
-            <button type="button" class="mobile-list-action" @click="$store.user.closeSettings()" aria-label="{{ t.player_close }}">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 5 14 14M19 5 5 19"/></svg>
-            </button>
+            {% include "player/dialog_close.html" %}
         </header>
         <div class="offline-cache-body" x-ref="body">
             <div class="offline-cache-tools">

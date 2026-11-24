@@ -3,88 +3,109 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('downloadManager', () => ({
         get manager() { return Alpine.store('torrents'); },
         sections: [
-            {id:'overview', label:'{{ t.player_download_overview }}'},
-            {% if youtube_downloads_enabled %}{id:'youtube', label:'{{ t.player_youtube }}'},{% endif %}
-            {% if torrent_downloads_enabled %}{id:'torrents', label:'{{ t.player_torrents }}'},{% endif %}
             {id:'files', label:'{{ t.player_files }}'},
-            {id:'uploads', label:'{{ t.player_download_imports }}'},
+            {% if torrent_downloads_enabled %}{id:'torrents', label:'{{ t.player_torrents }}'},{% endif %}
+            {% if youtube_downloads_enabled %}{id:'youtube', label:'{{ t.player_youtube }}'},{% endif %}
+            {id:'history', label:'{{ t.player_download_history_tab }}'},
         ],
-        adding: false,
-        closing: false,
-        status: 'all',
-        visibleCount: 30,
-        get sources() { return this.sections.filter(section => !['overview','uploads'].includes(section.id)); },
-        sourceLabel(id) { return this.sections.find(section => section.id === id)?.label || ''; },
+        checked: new Map(),
+        confirming: false,
+        removing: false,
+        removalError: '',
+        sourceLabel(id) {
+            return {files:'{{ t.player_files }}', torrents:'{{ t.player_torrents }}', youtube:'{{ t.player_youtube }}'}[id];
+        },
+        fileCount(n) {
+            const forms = {one:'{{ t.player_download_file_one }}', few:'{{ t.player_download_file_few }}', other:'{{ t.player_files_count }}'};
+            return n + ' ' + (forms[artistPluralRules.select(n)] || forms.other);
+        },
+        titleFor(row) { return row.title || (row.item_count ? this.fileCount(row.item_count) : this.sourceLabel(row.source)); },
+        metaFor(row) {
+            const parts = [this.sourceLabel(row.source)];
+            if (row.title && row.item_count > 1) parts.push(this.fileCount(row.item_count));
+            if (row.created_at) parts.push(this.manager.formatUploadDate(row.created_at));
+            return parts.join(' · ');
+        },
+        tone(row) {
+            if (['complete','completed','skipped'].includes(row.status)) return 'success';
+            if (['failed','ai_failed','needs_review','complete_with_errors'].includes(row.status)) return 'attention';
+            return 'normal';
+        },
+        statusFor(row) {
+            const transfer = row.source === 'torrents' && ['preview','moving','paused','completed'].includes(row.status);
+            const label = transfer ? this.manager.statusLabel(row) : this.manager.youtubeStatusLabel(row.status);
+            return row.status === 'downloading' && row.progress_percent != null ? label + ' · ' + Math.round(row.progress_percent) + '%' : label;
+        },
         select(id) {
-            this.adding = false;
+            if (this.removing) return;
+            this.confirming = false;
             this.manager.showSourceTab(id);
             this.$nextTick(() => document.getElementById('downloads-tab-' + id)?.focus({preventScroll:true}));
         },
         navigate(event) {
-            const keys = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
-            if (!keys.includes(event.key)) return;
-            event.preventDefault();
-            const current = this.sections.findIndex(section => section.id === this.manager.sourceTab);
+            const index = this.sections.findIndex(s => s.id === this.manager.sourceTab);
             const count = this.sections.length;
-            let index = (current + (['ArrowLeft','ArrowUp'].includes(event.key) ? -1 : 1) + count) % count;
-            if (event.key === 'Home') index = 0;
-            if (event.key === 'End') index = count - 1;
-            this.select(this.sections[index].id);
+            const next = {ArrowLeft:(index+count-1)%count, ArrowRight:(index+1)%count, Home:0, End:count-1}[event.key];
+            if (next === undefined) return;
+            event.preventDefault();
+            this.select(this.sections[next].id);
         },
-        add(source) {
-            this.adding = false;
-            this.manager.showSourceTab(source);
-            if (source === 'torrents') this.manager.addNew();
-            if (source === 'files') document.getElementById('direct-audio-file-input')?.click();
-            this.$nextTick(() => {
-                const target = {youtube:'youtube-download-url', torrents:'torrent-magnet-input', files:'downloads-tab-files'}[source];
-                document.getElementById(target)?.focus({preventScroll:true});
-            });
+        canOpen(row) {
+            return row.source === 'torrents' && this.manager.torrentDownloadsEnabled || row.source === 'youtube' && this.manager.youtubeDownloadsEnabled;
         },
-        get activity() {
-            const m = this.manager, rows = [];
-            const add = (source, job, title, status, label, progress) => {
-                let group = 'active';
-                if (['preview','paused','failed','ai_failed','needs_review','complete_with_errors'].includes(status)) group = 'attention';
-                if (['complete','completed','cancelled','skipped'].includes(status)) group = 'history';
-                rows.push({source, id:job.id, title, label, status, group, progress,
-                    date:job.updated_at || job.created_at || '', key:source + ':' + job.id});
-            };
-            if (m.torrentDownloadsEnabled) for (const j of m.sessions) {
-                add('torrents', j, j.name, m.normalizedStatus(j), m.statusLabel(j), m.isDownloading(j) ? m.progressValue(j) : null);
+        openTransfer(row) {
+            if (row.source === 'torrents') {
+                this.select('torrents');
+                this.manager.openSession(row.id);
+            } else {
+                this.manager.openYoutubeJob(row);
             }
-            if (m.youtubeDownloadsEnabled) for (const j of m.youtubeJobs) {
-                add('youtube', j, j.title || j.source_url, j.status, m.youtubeStatusLabel(j.status),
-                    j.status === 'downloading' ? m.youtubeJobProgress(j) : null);
-            }
-            for (const f of m.localUploadHistory) add('files', f, f.filename, f.status, m.youtubeStatusLabel(f.status), null);
-            const priority = {active:0, attention:1, history:2};
-            return rows.sort((a,b) => priority[a.group] - priority[b.group] || b.date.localeCompare(a.date));
         },
-        get filteredActivity() { return this.status === 'all' ? this.activity : this.activity.filter(row => row.group === this.status); },
-        async openActivity(row) {
-            this.select(row.source);
-            if (row.source === 'torrents') { await this.manager.openSession(row.id); return; }
-            if (row.source === 'youtube') this.manager.youtubeExpandedJobId = row.id;
-            this.$nextTick(() => {
-                const item = document.getElementById((row.source === 'youtube' ? 'download-youtube-job-' : 'download-file-job-') + row.id);
-                item?.scrollIntoView({block:'nearest'});
-                item?.focus({preventScroll:true});
-            });
+        key(row) { return row.source + ':' + row.id; },
+        mark(rows, value) {
+            for (const row of rows) {
+                if (value) this.checked.set(this.key(row), {source:row.source, id:row.id});
+                else this.checked.delete(this.key(row));
+            }
+        },
+        get checkedOnPage() { return this.manager.downloadHistory.filter(row => this.checked.has(this.key(row))).length; },
+        stopConfirmation() {
+            this.confirming = false;
+            this.$nextTick(() => this.$refs.remove?.focus());
+        },
+        async forget() {
+            if (this.removing || !this.checked.size) return;
+            this.removing = true;
+            this.removalError = '';
+            try {
+                const res = await fetch('/api/player/downloads/history/hide', {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:[...this.checked.values()]})
+                });
+                if (!res.ok) throw new Error();
+                const m = this.manager;
+                m.downloadHistory = m.downloadHistory.filter(row => !this.checked.has(this.key(row)));
+                if (m.latestDownload && this.checked.has(this.key(m.latestDownload))) m.latestDownload = null;
+                if (m.youtubeDetail && this.checked.has('youtube:' + m.youtubeDetail.id)) m.youtubeDetail = null;
+                if (m.previewData && this.checked.has('torrents:' + m.previewData.id)) m.addNew();
+                this.checked.clear();
+                this.confirming = false;
+                await m.refreshDownloads();
+                this.$nextTick(() => this.$refs.all?.focus({preventScroll:true}));
+            } catch {
+                this.removalError = '{{ t.player_download_forget_error }}';
+            } finally {
+                this.removing = false;
+            }
         },
         cancel() {
-            if (this.adding) { this.adding = false; this.$refs.addButton.focus(); return; }
-            if (this.manager.sourceTab === 'uploads' && this.manager.uploadHasEditorOpen()) { this.manager.closeUploadEditor(); return; }
-            this.dismiss();
+            if (this.confirming && !this.removing) this.stopConfirmation();
+            else this.dismiss();
         },
-        async dismiss() {
-            if (this.closing) return;
-            this.closing = true;
-            if (this.$root.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                await this.$root.animate([{opacity:1}, {opacity:0}], {duration:120, fill:'forwards'}).finished.catch(() => {});
-            }
-            this.manager.close();
-            this.$nextTick(() => document.querySelector('.torrent-import-btn')?.focus({preventScroll:true}));
+        dismiss() {
+            finishPlayerDialog(this.$root, () => {
+                this.manager.close();
+                this.$nextTick(() => document.querySelector('.torrent-import-btn')?.focus({preventScroll:true}));
+            });
         },
     }));
 });

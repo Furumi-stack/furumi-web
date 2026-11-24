@@ -1,112 +1,74 @@
 <template x-if="manager.sourceTab === 'torrents'">
 <section id="downloads-torrents" class="download-torrent-panel" role="tabpanel" aria-labelledby="downloads-tab-torrents"
          x-data="{ get torrent() { return $store.torrents } }">
-    <template x-if="torrent.workspaceMode === 'empty'">
-        <div class="torrent-sessions">
-            <header class="torrent-pane-head">
-                <h4>{{ t.player_saved_torrents }} <small x-text="torrent.sessions.length"></small></h4>
-                <button type="button" class="download-icon-button" :disabled="torrent.loadingSessions" @click="torrent.loadSessions()"
-                        title="{{ t.player_refresh }}" aria-label="{{ t.player_refresh }}">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.3 8a7.5 7.5 0 0 1 12.2-2L20 9M4 15l2.5 3A7.5 7.5 0 0 0 18.7 16"/></svg>
-                </button>
-                <button type="button" class="download-button primary torrent-add" x-ref="add" @click="torrent.addNew()" :disabled="torrent.loading">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>{{ t.player_add_torrent }}
-                </button>
-            </header>
-            <div class="torrent-sessions-list">
-                <template x-if="torrent.loadingSessions && !torrent.sessionsLoaded && !torrent.sessions.length">
-                    <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>
-                        {% include "player/skeleton_tracks.html" %}
-                    </div>
-                </template>
-                <template x-if="!torrent.sessions.length && (torrent.sessionsLoaded || !torrent.loadingSessions) && !torrent.error">
-                    <p class="torrent-pane-empty">{{ t.player_no_saved_torrents }}</p>
-                </template>
-                <template x-for="job in torrent.sessions" :key="job.id">
-                    <button type="button" class="torrent-session-open" @click="torrent.openSession(job.id)" :disabled="torrent.loading">
-                        <svg class="torrent-session-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7ZM14 3v5h4M9 14h6m-6 3h4"/></svg>
-                        <span class="torrent-session-copy">
-                            <strong :title="job.name" x-text="job.name"></strong>
-                            <small x-text="torrent.sessionMeta(job)"></small>
-                            <progress x-show="torrent.isDownloading(job)" max="100" :value="torrent.progressValue(job)" :aria-label="torrent.statusLabel(job)"></progress>
-                        </span>
-                        <span class="torrent-status-badge" :class="torrent.statusBadgeClass(job)" x-text="torrent.statusLabel(job)"></span>
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-                    </button>
-                </template>
-            </div>
+    <template x-if="torrent.isImporting()">
+        <form class="torrent-source-form" @submit.prevent="torrent.preview()">
+            <label class="torrent-input-label" for="torrent-magnet-input">{{ t.player_magnet_link }}</label>
+            <input class="download-field" id="torrent-magnet-input" type="text" autocomplete="off" spellcheck="false" x-model="torrent.magnet"
+                   :disabled="torrent.loading" @input="torrent.file = null" placeholder="magnet:?xt=urn:btih:…">
+            <label class="torrent-file-source" :class="{picked:torrent.file}">
+                <input type="file" id="torrent-file-input" accept=".torrent,application/x-bittorrent" :disabled="torrent.loading"
+                       @change="if ($el.files.length) { torrent.file = $el.files[0]; torrent.magnet = ''; $el.value = '' }">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H5v20h14V7ZM14 2v6h5M8 15h8m-4-4v8"/></svg>
+                <span x-text="torrent.file?.name || '{{ t.player_torrent_file }}'"></span>
+                <small>.torrent</small>
+            </label>
+            <button type="submit" class="download-button primary torrent-preview-submit" :disabled="torrent.loading || !(torrent.file || torrent.magnet.trim())">{{ t.player_upload_content }}</button>
+        </form>
+    </template>
+    <template x-if="torrent.workspaceMode === 'opening' || (torrent.isImporting() && torrent.loading)">
+        <div class="page-skeleton torrent-loading" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>
+            {% include "player/skeleton_tracks.html" %}
         </div>
     </template>
 
-    <template x-if="torrent.workspaceMode !== 'empty'">
-        <div class="torrent-task">
-            <header class="torrent-pane-head">
-                <button type="button" class="download-icon-button torrent-back" title="{{ t.player_saved_torrents }}" aria-label="{{ t.player_saved_torrents }}"
-                        @click="torrent.showTorrentOverview(); $nextTick(() => $refs.add?.focus())">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 5-7 7 7 7M4 12h16"/></svg>
-                </button>
-                <h4 x-text="torrent.workspaceMode === 'session' ? torrent.previewData.name : torrent.workspaceMode === 'opening' ? T.openingSavedTorrent : '{{ t.player_add_torrent }}'"
-                    :title="torrent.workspaceMode === 'session' ? torrent.previewData.name : ''"></h4>
-                <template x-if="torrent.workspaceMode === 'session'">
-                    <button type="button" class="download-icon-button torrent-remove" :aria-label="'{{ t.player_remove_from_history }} · ' + torrent.previewData.name"
-                            title="{{ t.player_remove_from_history }}" @click="torrent.removeSession(torrent.previewData.id)" :disabled="torrent.loading">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M6 6l1 14h10l1-14M10 10v6m4-6v6"/></svg>
-                    </button>
-                </template>
-            </header>
-
-            <template x-if="torrent.isImporting()">
-                <form class="torrent-source-form" @submit.prevent="torrent.preview()">
-                    <label class="torrent-input-label" for="torrent-magnet-input">{{ t.player_magnet_link }}</label>
-                    <input class="download-field" id="torrent-magnet-input" type="text" autocomplete="off" spellcheck="false" x-model="torrent.magnet"
-                           :disabled="torrent.loading" @input="torrent.file = null" placeholder="magnet:?xt=urn:btih:…">
-                    <label class="torrent-file-source" :class="{picked:torrent.file}">
-                        <input type="file" id="torrent-file-input" accept=".torrent,application/x-bittorrent" :disabled="torrent.loading"
-                               @change="if ($el.files.length) { torrent.file = $el.files[0]; torrent.magnet = ''; $el.value = '' }">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H5v20h14V7ZM14 2v6h5M8 15h8m-4-4v8"/></svg>
-                        <span x-text="torrent.file?.name || '{{ t.player_torrent_file }}'"></span>
-                        <small>.torrent</small>
-                    </label>
-                    <button type="submit" class="download-button primary torrent-preview-submit" :disabled="torrent.loading || !(torrent.file || torrent.magnet.trim())">{{ t.player_upload_content }}</button>
-                </form>
-            </template>
-            <template x-if="torrent.workspaceMode === 'opening' || (torrent.isImporting() && torrent.loading)">
-                <div class="page-skeleton torrent-loading" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>
-                    {% include "player/skeleton_tracks.html" %}
+    <template x-if="torrent.workspaceMode === 'session' && torrent.previewData">
+        <div class="torrent-session-detail" x-data="{choosing:false}">
+            <div class="download-preview-title">
+                <h4 x-text="torrent.previewData.name" :title="torrent.previewData.name"></h4>
+                <button type="button" class="download-button" :disabled="torrent.loading"
+                        @click="torrent.addNew(); $nextTick(() => document.getElementById('torrent-magnet-input')?.focus())">{{ t.player_download_another }}</button>
+            </div>
+            <template x-if="torrent.currentJob">
+                <div class="torrent-transfer-summary">
+                    <span class="torrent-status-badge" :class="torrent.statusBadgeClass(torrent.currentJob)" x-text="torrent.statusLabel(torrent.currentJob)"></span>
+                    <small x-text="torrent.progressDetailText(torrent.currentJob)"></small>
+                    <span class="torrent-live-progress" x-show="torrent.isCurrentDownloading()">
+                        <progress max="100" :value="torrent.progressValue(torrent.currentJob)" :aria-label="torrent.statusLabel(torrent.currentJob)"></progress>
+                        <small x-text="torrent.progressValue(torrent.currentJob).toFixed(0) + '%'"></small>
+                    </span>
+                    <details class="torrent-transfer-info" @click.outside="$el.open = false"
+                             @keydown.escape="if ($el.open) { $event.stopPropagation(); $event.preventDefault(); $el.open = false; $refs.info.focus() }">
+                        <summary class="download-icon-button" x-ref="info" title="{{ t.player_info }}" aria-label="{{ t.player_info }}">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg>
+                        </summary>
+                        <dl>
+                            <div><dt>{{ t.player_status }}</dt><dd x-text="torrent.statusText(torrent.currentJob)"></dd></div>
+                            <div><dt>{{ t.player_size }}</dt><dd x-text="torrent.bytes(torrent.previewData.total_size)"></dd></div>
+                            <div x-show="!torrent.isCurrentCompleted()"><dt>{{ t.player_speed }}</dt><dd x-text="torrent.speedText(torrent.currentJob)"></dd></div>
+                            <div x-show="!torrent.isCurrentCompleted()"><dt>{{ t.player_peers }}</dt><dd x-text="torrent.peerText(torrent.currentJob)"></dd></div>
+                            <div x-show="torrent.etaText(torrent.currentJob)"><dt>{{ t.player_eta }}</dt><dd x-text="torrent.etaText(torrent.currentJob)"></dd></div>
+                        </dl>
+                    </details>
                 </div>
             </template>
-
-            <template x-if="torrent.workspaceMode === 'session' && torrent.previewData">
-                <div class="torrent-session-detail">
-                    <template x-if="torrent.currentJob">
-                        <div class="torrent-transfer-summary">
-                            <span class="torrent-status-badge" :class="torrent.statusBadgeClass(torrent.currentJob)" x-text="torrent.statusLabel(torrent.currentJob)"></span>
-                            <small x-text="torrent.progressDetailText(torrent.currentJob)"></small>
-                            <span class="torrent-live-progress" x-show="torrent.isCurrentDownloading()">
-                                <progress max="100" :value="torrent.progressValue(torrent.currentJob)" :aria-label="torrent.statusLabel(torrent.currentJob)"></progress>
-                                <small x-text="torrent.progressValue(torrent.currentJob).toFixed(0) + '%'"></small>
-                            </span>
-                            <details class="torrent-transfer-info" @click.outside="$el.open = false"
-                                     @keydown.escape="if ($el.open) { $event.stopPropagation(); $event.preventDefault(); $el.open = false; $refs.info.focus() }">
-                                <summary class="download-icon-button" x-ref="info" title="{{ t.player_info }}" aria-label="{{ t.player_info }}">
-                                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></svg>
-                                </summary>
-                                <dl>
-                                    <div><dt>{{ t.player_status }}</dt><dd x-text="torrent.statusText(torrent.currentJob)"></dd></div>
-                                    <div><dt>{{ t.player_size }}</dt><dd x-text="torrent.bytes(torrent.previewData.total_size)"></dd></div>
-                                    <div x-show="!torrent.isCurrentCompleted()"><dt>{{ t.player_speed }}</dt><dd x-text="torrent.speedText(torrent.currentJob)"></dd></div>
-                                    <div x-show="!torrent.isCurrentCompleted()"><dt>{{ t.player_peers }}</dt><dd x-text="torrent.peerText(torrent.currentJob)"></dd></div>
-                                    <div x-show="torrent.etaText(torrent.currentJob)"><dt>{{ t.player_eta }}</dt><dd x-text="torrent.etaText(torrent.currentJob)"></dd></div>
-                                </dl>
-                            </details>
-                        </div>
-                    </template>
-                    <div class="torrent-selection-tools" x-show="torrent.previewData.files.length">
+            <div class="torrent-selection-summary" x-show="torrent.previewData.files.length">
+                <span x-text="torrent.selected.size + ' / ' + torrent.previewData.files.length + ' · ' + torrent.bytes(torrent.selectedBytes())"></span>
+                <button type="button" class="download-button torrent-choose-files" :aria-expanded="choosing" aria-controls="torrent-file-picker"
+                        @click="if (!torrent.treeRoot) torrent.treeRoot=torrent._buildTree(torrent.previewData.files); choosing=!choosing">{{ t.player_choose_audio_files }}</button>
+            </div>
+            <template x-if="!torrent.previewData.files.length && torrent.normalizedStatus(torrent.currentJob) === 'resolving'">
+                <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_resolving }}</span>{% include "player/skeleton_tracks.html" %}</div>
+            </template>
+            <p class="torrent-pane-empty" x-show="!torrent.previewData.files.length && torrent.normalizedStatus(torrent.currentJob) !== 'resolving'">{{ t.player_no_torrent_files }}</p>
+            <div id="torrent-file-picker" x-show="choosing" x-transition.opacity.duration.130ms>
+                <template x-if="torrent.treeRoot"><div class="torrent-file-picker">
+                    <div class="torrent-selection-tools">
                         <label class="torrent-master-check">
                             <input type="checkbox" :checked="torrent.selected.size > 0 && torrent.selected.size === torrent.previewData.files.length"
                                    x-effect="$el.indeterminate = torrent.selected.size > 0 && torrent.selected.size < torrent.previewData.files.length"
                                    @change="torrent.selectAll($el.checked)" aria-label="{{ t.player_youtube_select_all }}">
-                            <span x-text="torrent.selected.size + ' / ' + torrent.previewData.files.length + ' · ' + torrent.bytes(torrent.selectedBytes())"></span>
+                            <span>{{ t.player_youtube_select_all }}</span>
                         </label>
                         <div class="torrent-tree-controls" x-show="torrent.treeRoot?.children.some(node => node.type === 'folder')">
                             <button type="button" class="download-icon-button" @click="torrent.expandAll(true)" title="{{ t.player_expand_all }}" aria-label="{{ t.player_expand_all }}">
@@ -118,14 +80,6 @@
                         </div>
                     </div>
                     <div class="torrent-file-tree" tabindex="0" role="region" aria-label="{{ t.player_files }}">
-                        <template x-if="!torrent.previewData.files.length && torrent.normalizedStatus(torrent.currentJob) === 'resolving'">
-                            <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_resolving }}</span>
-                                {% include "player/skeleton_tracks.html" %}
-                            </div>
-                        </template>
-                        <template x-if="!torrent.previewData.files.length && torrent.normalizedStatus(torrent.currentJob) !== 'resolving'">
-                            <p class="torrent-pane-empty">{{ t.player_no_torrent_files }}</p>
-                        </template>
                         <template x-for="node in torrent.visibleNodes()" :key="node.key">
                             <div class="torrent-tree-row" :style="{'--depth': Math.min(node.depth, 5)}">
                                 <button type="button" class="torrent-folder-toggle" :style="node.type === 'folder' ? null : 'visibility:hidden'"
@@ -143,13 +97,14 @@
                             </div>
                         </template>
                     </div>
-                    <footer class="torrent-start-bar">
-                        {% let kind = "torrent" %}{% include "player/download_destination.html" %}
-                        <button type="button" class="download-button torrent-start" :class="{primary:!torrent.isCurrentDownloading() && !torrent.isCurrentCompletedLocked()}"
-                                @click="torrent.toggleDownloadAction()" :disabled="torrent.actionButtonDisabled()" x-text="torrent.actionButtonText()"></button>
-                    </footer>
-                </div>
-            </template>
+                </div></template>
+            </div>
+            <footer class="torrent-start-bar">
+                {% let kind = "torrent" %}{% include "player/download_destination.html" %}
+                <button type="button" class="download-button torrent-start" :class="{primary:!torrent.isCurrentDownloading() && !torrent.isCurrentCompletedLocked()}"
+                        @click="await torrent.toggleDownloadAction(); if (torrent.isCurrentDownloading()) choosing=false"
+                        :disabled="torrent.actionButtonDisabled()" x-text="torrent.actionButtonText()"></button>
+            </footer>
         </div>
     </template>
 </section>

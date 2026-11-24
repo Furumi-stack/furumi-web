@@ -516,6 +516,16 @@ translations! {
     // Player download/history UI
     player_torrent_manager:  "Download Manager"                , "Менеджер загрузок";
     player_download_title: "Downloads", "Загрузки";
+    player_download_music: "Add music", "Добавить музыку";
+    player_download_history_tab: "History", "История";
+    player_download_latest: "Latest upload", "Последняя загрузка";
+    player_download_select_page: "Select this page", "Выбрать на странице";
+    player_download_forget: "Remove", "Убрать";
+    player_download_forget_question: "Remove from history?", "Убрать из истории?";
+    player_download_forget_hint: "Music stays in your library. Ongoing transfers continue.", "Музыка останется в библиотеке. Активные загрузки продолжатся.";
+    player_download_forget_error: "Could not update the history. Try again.", "Не удалось обновить историю. Попробуйте ещё раз.";
+    player_download_file_one: "file", "файл";
+    player_download_file_few: "files", "файла";
     player_download_overview: "Overview", "Обзор";
     player_download_add: "Add", "Добавить";
     player_download_imports: "Imports", "Импорт";
@@ -679,6 +689,8 @@ translations! {
     player_magnet_link:      "Magnet link"                     , "Magnet-ссылка";
     player_upload_content:   "Preview torrent"                 , "Проверить торрент";
     player_add_torrent:      "Add torrent"                     , "Добавить торрент";
+    player_download_another: "Add another", "Добавить ещё";
+    player_finish_upload:    "Finish upload", "Завершить загрузку";
     player_download_selected: "Download selected"              , "Скачать выбранное";
     player_pause_download:   "Pause download"                  , "Поставить на паузу";
     player_expand_all:       "Expand all"                      , "Развернуть всё";

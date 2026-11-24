@@ -686,10 +686,36 @@ impl YouTubeService {
         cookie_contents: Option<String>,
     ) -> anyhow::Result<Vec<YouTubeJobDto>> {
         validate_inbox_dir(inbox_dir)?;
-        sync_ai_statuses(pool, user_id).await?;
+        sync_ai_statuses(pool, user_id, None).await?;
+        if let Err(error) = sync_target_playlist_tracks_for_user(pool, user_id).await {
+            tracing::warn!(user_id, %error, "could not synchronize imported YouTube tracks with their target playlists");
+        }
+        let pending = self.pending_jobs(pool, user_id).await?;
+        self.resume_jobs(pool, pending, inbox_dir, proxy_url, cookie_contents)
+            .await;
+        let ids: Vec<String> = sqlx::query_scalar(
+            r#"SELECT id FROM furumusic__youtube_download
+               WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2"#,
+        )
+        .bind(user_id)
+        .bind(YOUTUBE_LIST_LIMIT)
+        .fetch_all(pool)
+        .await?;
+        let mut jobs = Vec::with_capacity(ids.len());
+        for id in ids {
+            refresh_parent(pool, &id).await?;
+            jobs.push(load_job_dto(pool, user_id, &id).await?);
+        }
+        Ok(jobs)
+    }
 
-        let resumable: Vec<(String, String)> = sqlx::query_as(
-            r#"SELECT id, status::text
+    pub(crate) async fn pending_jobs(
+        &self,
+        pool: &PgPool,
+        user_id: i64,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut resumable: Vec<String> = sqlx::query_scalar(
+            r#"SELECT id
                FROM furumusic__youtube_download
                WHERE user_id = $1
                  AND status IN ('queued', 'resolving', 'downloading', 'postprocessing')
@@ -698,7 +724,20 @@ impl YouTubeService {
         .bind(user_id)
         .fetch_all(pool)
         .await?;
-        for (id, _) in resumable {
+        let running = self.running_jobs.lock().await;
+        resumable.retain(|id| !running.contains(id));
+        Ok(resumable)
+    }
+
+    pub(crate) async fn resume_jobs(
+        self: &Arc<Self>,
+        pool: &PgPool,
+        resumable: Vec<String>,
+        inbox_dir: &str,
+        proxy_url: Option<String>,
+        cookie_contents: Option<String>,
+    ) {
+        for id in resumable {
             self.spawn_job(
                 pool.clone(),
                 id,
@@ -708,24 +747,6 @@ impl YouTubeService {
             )
             .await;
         }
-
-        let ids: Vec<String> = sqlx::query_scalar(
-            r#"SELECT id FROM furumusic__youtube_download
-               WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2"#,
-        )
-        .bind(user_id)
-        .bind(YOUTUBE_LIST_LIMIT)
-        .fetch_all(pool)
-        .await?;
-        for id in &ids {
-            refresh_parent(pool, id).await?;
-        }
-
-        let mut jobs = Vec::with_capacity(ids.len());
-        for id in ids {
-            jobs.push(load_job_dto(pool, user_id, &id).await?);
-        }
-        Ok(jobs)
     }
 
     pub async fn retry(
@@ -1923,7 +1944,11 @@ fn is_audio_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-async fn sync_ai_statuses(pool: &PgPool, user_id: i64) -> anyhow::Result<()> {
+pub(crate) async fn sync_ai_statuses(
+    pool: &PgPool,
+    user_id: i64,
+    jobs: Option<&[String]>,
+) -> anyhow::Result<()> {
     let items: Vec<YouTubeItemRow> = sqlx::query_as(
         r#"SELECT i.id, i.job_id, i.source_id, i.source_url, i.title,
                   i.playlist_index, i.status, i.progress_percent,
@@ -1933,10 +1958,12 @@ async fn sync_ai_statuses(pool: &PgPool, user_id: i64) -> anyhow::Result<()> {
            FROM furumusic__youtube_download_item i
            JOIN furumusic__youtube_download j ON j.id = i.job_id
            WHERE j.user_id = $1
+             AND ($2::text[] IS NULL OR j.id = ANY($2))
              AND i.status IN ('awaiting_ai', 'ai_processing', 'needs_review', 'ai_failed')
              AND i.inbox_path IS NOT NULL"#,
     )
     .bind(user_id)
+    .bind(jobs)
     .fetch_all(pool)
     .await?;
 
@@ -2015,13 +2042,6 @@ async fn sync_ai_statuses(pool: &PgPool, user_id: i64) -> anyhow::Result<()> {
     }
     for job_id in touched_jobs {
         refresh_parent(pool, &job_id).await?;
-    }
-    if let Err(error) = sync_target_playlist_tracks_for_user(pool, user_id).await {
-        tracing::warn!(
-            user_id,
-            %error,
-            "could not synchronize imported YouTube tracks with their target playlists"
-        );
     }
     Ok(())
 }

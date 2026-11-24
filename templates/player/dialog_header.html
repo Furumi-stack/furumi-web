@@ -1,0 +1,11 @@
+<header class="player-dialog-head {{ dialog_head_class }}">
+    <svg class="player-dialog-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="{{ dialog_icon }}"/>
+    </svg>
+    <h2 id="{{ dialog_title_id }}" tabindex="-1">{{ dialog_title }}</h2>
+    {% if show_version %}
+    <a class="settings-app-version" data-online-only href="https://gt.hexor.cy/Furumi/furumi-web"
+       target="_blank" rel="noopener noreferrer" aria-label="Furumi v{{ t.app_version() }}">v{{ t.app_version() }}</a>
+    {% endif %}
+    {% include "player/dialog_close.html" %}
+</header>

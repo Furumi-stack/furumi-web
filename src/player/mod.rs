@@ -28,14 +28,15 @@ use crate::youtube::{YouTubePreviewRequest, YouTubeService, YouTubeStartRequest}
 
 #[cfg(test)]
 mod artist_tests;
+mod download_history;
 mod dto;
 mod helpers;
 mod listening;
 mod pins;
 mod playlist_artwork;
 mod playlist_image;
-mod release_likes;
 mod queries;
+mod release_likes;
 mod rows;
 mod sharing;
 
@@ -8151,8 +8152,17 @@ impl App for PlayerApp {
         let youtube_service: Arc<tokio::sync::OnceCell<Arc<YouTubeService>>> =
             Arc::new(tokio::sync::OnceCell::new());
         let device_hub = Arc::clone(&self.device_hub);
+        let [history, hide_history] = download_history::Services {
+            pool: pool.clone(),
+            config: pool_config.clone(),
+            torrents: torrent_service.clone(),
+            youtube: youtube_service.clone(),
+            scheduler: self.scheduler_handle.clone(),
+        }
+        .routes();
 
         Router::with_urls([
+            history, hide_history,
             pins::route(pool.clone(), pool_config.clone()),
             playlist_artwork::route(pool.clone(), pool_config.clone()),
             // -- Current user profile --

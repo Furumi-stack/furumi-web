@@ -3061,7 +3061,31 @@ pub mod db_migrations {
         const OPERATIONS: &'static [Operation] = &[Operation::custom(repair_like_aliases).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn add_download_history(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        for statement in include_str!("../player/download_history_schema.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0063DownloadHistory;
+    impl migrations::Migration for M0063DownloadHistory {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0063_download_history";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0062_repair_like_aliases",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(add_download_history).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0063DownloadHistory,
         &M0062RepairLikeAliases,
         &M0061AddPlaylistArtwork,
         &M0060RepairLegacyWebListenDurations,

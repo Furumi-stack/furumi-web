@@ -1,0 +1,58 @@
+<template x-if="manager.sourceTab === 'history'">
+    <section id="downloads-history" class="download-history" role="tabpanel" aria-labelledby="downloads-tab-history">
+        <template x-if="manager.historyLoaded && (manager.downloadHistory.length || checked.size)">
+            <div class="download-history-tools">
+                <label><input type="checkbox" x-ref="all" :disabled="confirming || !manager.downloadHistory.length"
+                    :checked="manager.downloadHistory.length > 0 && checkedOnPage === manager.downloadHistory.length"
+                    x-effect="$el.indeterminate = checkedOnPage > 0 && checkedOnPage < manager.downloadHistory.length"
+                    @change="mark(manager.downloadHistory,$el.checked)">
+                    <span>{{ t.player_download_select_page }}</span>
+                </label>
+                <button type="button" class="download-button forget-button" x-ref="remove" x-show="checked.size && !confirming"
+                        @click="removalError=''; confirming=true; $nextTick(() => $refs.keep.focus())">
+                    {{ t.player_remove_from_history }} <b x-text="checked.size"></b>
+                </button>
+            </div>
+        </template>
+        <template x-if="confirming">
+            <div class="download-confirm" role="group" aria-label="{{ t.player_download_forget_question }}">
+                <div><strong>{{ t.player_download_forget_question }} (<span x-text="checked.size"></span>)</strong>
+                    <small>{{ t.player_download_forget_hint }}</small></div>
+                <button type="button" class="download-button" x-ref="keep" :disabled="removing" @click="stopConfirmation()">{{ t.player_cancel }}</button>
+                <button type="button" class="download-button forget-button" :disabled="removing" @click="forget()">{{ t.player_download_forget }}</button>
+            </div>
+        </template>
+        <p class="download-history-error" role="alert" x-show="removalError" x-text="removalError"></p>
+        <div class="download-history-error" role="status" x-show="manager.historyError">
+            <span x-text="manager.historyError"></span>
+            <button type="button" class="download-button" @click="manager.refreshDownloads()">{{ t.player_refresh }}</button>
+        </div>
+        <template x-if="!manager.historyLoaded && manager.historyLoading">
+            <div class="page-skeleton" role="status"><span class="loading-label">{{ t.player_loading_content }}</span>{% include "player/skeleton_tracks.html" %}</div>
+        </template>
+        <template x-if="manager.historyLoaded && !manager.downloadHistory.length && !manager.historyError">
+            <p class="download-history-empty">{{ t.player_download_empty }}</p>
+        </template>
+        <ul class="download-activity" x-show="manager.historyLoaded">
+            <template x-for="row in manager.downloadHistory" :key="key(row)">
+                <li class="download-history-row">
+                    <input type="checkbox" :aria-label="titleFor(row)" :disabled="confirming"
+                           :checked="checked.has(key(row))" @change="mark([row],$el.checked)">
+                    <svg class="download-source-icon" aria-hidden="true"><use :href="'#download-symbol-' + row.source"/></svg>
+                    <div class="download-job-title">
+                        <template x-if="canOpen(row)"><button type="button" :title="titleFor(row)" :disabled="confirming" @click="openTransfer(row)" x-text="titleFor(row)"></button></template>
+                        <template x-if="!canOpen(row)"><strong :title="titleFor(row)" x-text="titleFor(row)"></strong></template>
+                        <small x-text="metaFor(row)"></small>
+                        <small class="download-history-error" x-show="row.error" x-text="row.error"></small>
+                    </div>
+                    <span class="download-job-status" :data-tone="tone(row)" x-text="statusFor(row)"></span>
+                </li>
+            </template>
+        </ul>
+        <div class="download-history-pages" x-show="manager.historyPage || manager.historyHasMore">
+            <button type="button" class="download-button" :disabled="!manager.historyPage || manager.historyLoading || confirming" @click="manager.changeHistoryPage(-1)">{{ t.player_previous }}</button>
+            <span x-text="manager.historyPage+1"></span>
+            <button type="button" class="download-button" :disabled="!manager.historyHasMore || manager.historyLoading || confirming" @click="manager.changeHistoryPage(1)">{{ t.player_next }}</button>
+        </div>
+    </section>
+</template>
