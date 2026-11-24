@@ -896,7 +896,8 @@
                         <span></span>
                         <span style="text-align:right">{{ t.player_duration }}</span>
                     </div>
-                    <template x-for="(track, idx) in $store.library.currentPlaylist.tracks" :key="track.playlist_track_id || (track.id + '-' + idx)">
+                    <template x-for="(track, idx) in $store.library.currentPlaylist.tracks"
+                              :key="$store.library.currentPlaylist.kind === 'likes' ? (track.content_id || track.id) : (track.playlist_track_id || (track.id + '-' + idx))">
                         <div class="track-row playlist-track-row"
                              :data-playlist-index="idx"
                              :class="{ playing: $store.player.currentTrack && $store.player.currentTrack.id === track.id, editing: $store.playlists.isEditingCurrent(), dragging: $store.playlists._dragIdx === idx }"

@@ -24,7 +24,11 @@
   artists are accessible from the account menu.
 - Playlist headers show release artwork as a collage and keep the pin on the
   right. Owners can rename inline, choose up to four images from the playlist,
-  upload a cover, or restore the automatic collage.
+  upload a cover, or restore the automatic collage. The artwork picker floats
+  beside the cover and keeps the track list in place.
+- Liked songs now keeps one entry when several catalog rows share the same
+  audio. Existing duplicate likes are repaired on upgrade. Different recordings
+  with the same title can still be liked separately.
 - Track rows keep lyrics, popularity and playback controls aligned. The new
   actions menu includes sharing, playlists, queueing, track details, similarity
   search and downloading where available.

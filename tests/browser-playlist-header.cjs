@@ -120,8 +120,23 @@ async function checkHeader(browser, width) {
         return {italic:s.fontStyle === 'italic',underline:rgb && +rgb[2] > +rgb[1] && +rgb[2] > +rgb[3]};
     });
     assert.ok(decoration.italic && decoration.underline,'editable title is italic with a green underline');
+    const headerLayout = () => heading.evaluate(el => {
+        const row = document.querySelector('.playlist-track-row');
+        return [el.getBoundingClientRect().height, row.getBoundingClientRect().top, row.closest('.main-content').scrollHeight];
+    });
+    const initialLayout = await headerLayout();
     await showCoverEditor();
+    assert.deepEqual(await headerLayout(), initialLayout, 'opening the artwork picker leaves the track list in place');
     await chooseMode('releases');
+    assert.deepEqual(await headerLayout(), initialLayout, 'showing thumbnails keeps the header and page height stable');
+    const popup = await editor.boundingBox(), anchor = await cover.boundingBox();
+    assert.ok(popup.x >= 0 && popup.x + popup.width <= width + 1);
+    assert.ok(Math.abs(popup.y - anchor.y - anchor.height) < 12 ||
+        Math.abs(anchor.y - popup.y - popup.height) < 12, 'the picker floats next to the artwork');
+    await activate(input);
+    await editor.waitFor({state:'hidden'});
+    assert.equal(await input.inputValue(), 'Draft that will be discarded', 'outside click preserves the header draft');
+    await showCoverEditor();
     await page.keyboard.press('Escape');
     await editor.waitFor({state:'hidden'});
     assert.ok(await input.isVisible(),'closing the cover picker keeps the title draft');
@@ -198,6 +213,8 @@ async function checkHeader(browser, width) {
     await chooseMode('releases');
     await activate(choices.nth(4));
     await activate(choices.nth(1));
+    await page.keyboard.press('Escape');
+    await editor.waitFor({state:'hidden'});
     const rows = page.locator('.playlist-track-row');
     let finishDelete;
     delayedDelete = new Promise(resolve => {finishDelete = resolve;});
@@ -210,6 +227,7 @@ async function checkHeader(browser, width) {
     finishDelete();
     delayedDelete = null;
     await verifyArt([covers[1].cover_url]);
+    await showCoverEditor();
     assert.equal(await choices.count(),4,'deleted track artwork is no longer offered');
     assert.equal(await editor.locator('.playlist-cover-choice[aria-pressed="true"]').count(),1);
     assert.equal(await input.inputValue(),draftTitle);

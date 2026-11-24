@@ -638,6 +638,7 @@ async fn materialize(
     .fetch_optional(&mut *tx)
     .await?
     {
+        super::devices::likes::on_content_available(&mut tx, content_id, Some(track_id)).await?;
         tx.commit().await?;
         return Ok(track_id);
     }
@@ -731,14 +732,7 @@ async fn materialize(
     .bind(now_iso())
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "UPDATE furumusic__fed_state_like
-            SET local_track_id = $2 WHERE content_id = $1",
-    )
-    .bind(content_id)
-    .bind(track_id)
-    .execute(&mut *tx)
-    .await?;
+    super::devices::likes::on_content_available(&mut tx, content_id, Some(track_id)).await?;
     sqlx::query(
         "UPDATE furumusic__fed_state_playlist_item
             SET local_track_id = $2 WHERE content_id = $1",
@@ -748,7 +742,7 @@ async fn materialize(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    super::devices::materialize_content_state(pool, content_id, track_id).await?;
+    super::devices::materialize_playlist_items(pool, content_id, track_id).await?;
 
     // Artwork is non-authoritative for identity and may be installed after
     // the audio transaction. Failure does not invalidate a verified track.

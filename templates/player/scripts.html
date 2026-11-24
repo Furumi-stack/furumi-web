@@ -2557,6 +2557,7 @@ document.addEventListener('alpine:init', () => {
         currentArtist: null,
         currentRelease: null,
         currentPlaylist: null,
+        _playlistReadVersion: 0,
         _observer: null,
         searchQuery: '',
         searchResults: null,
@@ -3474,26 +3475,51 @@ document.addEventListener('alpine:init', () => {
         async openPlaylist(id, options = {}) {
             if (GUEST) return;
             this._beginNavigation('#playlist/' + id, options);
-            const version = this._navigationVersion;
             this.view = 'playlist_detail';
             this.currentPlaylist = null;
+            return this._loadPlaylist(id, options);
+        },
+
+        refreshLikedPlaylist() {
+            if (this.view === 'playlist_detail' && this._activeHash === '#playlist/-1') {
+                return this._loadPlaylist(-1);
+            }
+        },
+
+        reloadLikes() {
+            return Promise.all([
+                Alpine.store('likes').reload(), this.loadFederationLikes(),
+                Alpine.store('playlists').reload(), this.refreshLikedPlaylist(),
+            ]);
+        },
+
+        async _loadPlaylist(id, navigation) {
+            const version = ++this._playlistReadVersion;
+            const route = this._navigationVersion;
+            const current = () => version === this._playlistReadVersion && route === this._navigationVersion;
+            const likes = Number(id) === -1;
             try {
                 const pending = Alpine.store('playlists')?.trackChange;
                 if (pending?.id === Number(id)) {
                     await pending.done;
-                    if (version !== this._navigationVersion) return;
+                    if (!current()) return;
                 }
                 const res = await fetch(`/api/player/playlists/${id}`);
                 if (!res.ok) throw new Error('failed');
                 const playlist = await res.json();
-                if (version !== this._navigationVersion) return;
-                if (Number(id) === -1) playlist.tracks = this.sortLikeTracks(playlist.tracks || []);
+                if (!current()) return;
+                const locals = playlist.tracks || [];
+                if (likes) {
+                    // Keep already-visible remote likes until their endpoint finishes refreshing.
+                    const previous = navigation ? [] : this.currentPlaylist?.tracks.filter(t => t.federation_pending) || [];
+                    playlist.tracks = this.sortLikeTracks([...locals, ...previous]);
+                }
                 this.currentPlaylist = playlist;
-                this._afterNavigation(options);
+                if (navigation) this._afterNavigation(navigation);
                 const federationResponse = await fetch(`/api/player/playlists/${id}/federation-tracks`);
                 if (federationResponse.ok) {
                     const references = await federationResponse.json();
-                    if (version !== this._navigationVersion) return;
+                    if (!current()) return;
                     const federated = (references || [])
                         .map(reference => {
                             const track = this.federationTrackFromWire(reference.federation);
@@ -3504,13 +3530,14 @@ document.addEventListener('alpine:init', () => {
                             };
                         })
                         .filter(Boolean);
-                    if (federated.length) {
-                        const tracks = [...this.currentPlaylist.tracks, ...federated];
-                        this.currentPlaylist.tracks = Number(id) === -1 ? this.sortLikeTracks(tracks) : tracks;
+                    if (likes) {
+                        this.currentPlaylist.tracks = this.sortLikeTracks([...locals, ...federated]);
+                    } else if (federated.length) {
+                        this.currentPlaylist.tracks = [...this.currentPlaylist.tracks, ...federated];
                     }
                 }
             } catch {
-                if (version === this._navigationVersion && !this.currentPlaylist) this._afterNavigation(options);
+                if (current() && navigation && !this.currentPlaylist) this._afterNavigation(navigation);
             }
         },
 
@@ -4183,7 +4210,7 @@ document.addEventListener('alpine:init', () => {
             return this.setFederationLike(track, liked);
         },
 
-        async setFederationLike(track, liked) {
+        async setFederationLike(track, liked, refresh = true) {
             const contentId = track?.key?.content_id;
             if (!contentId) return;
             const response = await fetch('/api/player/tracks/content/like', {
@@ -4196,31 +4223,37 @@ document.addEventListener('alpine:init', () => {
                 }),
             });
             if (!response.ok) return;
-            if (liked) this.federationLiked.push(contentId);
-            else this.federationLiked = this.federationLiked.filter(id => id !== contentId);
-            if (this.currentPlaylist?.id === -1) {
-                if (liked && !this.currentPlaylist.tracks.some(item => item.content_id === contentId)) {
-                    this.currentPlaylist = {
-                        ...this.currentPlaylist,
-                        tracks: this.sortLikeTracks([
-                            ...this.currentPlaylist.tracks,
-                            {
-                                ...this.federationQueueTrack(track),
-                                sort_key: Date.now(),
-                            },
-                        ]),
-                    };
-                } else if (!liked) {
-                    this.currentPlaylist = {
-                        ...this.currentPlaylist,
-                        tracks: this.currentPlaylist.tracks.filter(item => item.content_id !== contentId),
-                    };
-                }
+            this.updateLikeStatus(contentId, liked, []);
+            if (refresh) await this.reloadLikes();
+        },
+
+        updateLikeStatus(contentId, liked, trackIds) {
+            if (contentId) {
+                if (!liked) this.federationLiked = this.federationLiked.filter(id => id !== contentId);
+                else if (!this.federationLiked.includes(contentId)) this.federationLiked.push(contentId);
+            }
+            if (!liked && this.currentPlaylist?.id === -1) {
+                this.currentPlaylist.tracks = this.currentPlaylist.tracks.filter(track =>
+                    !(contentId && track.content_id === contentId) && !trackIds.includes(track.id));
             }
         },
 
+        uniqueLikeTracks(tracks) {
+            const contentById = new Map();
+            for (const track of tracks) {
+                if (track.content_id) contentById.set(track.id, track.content_id);
+            }
+            const unique = new Map();
+            for (const track of tracks) {
+                const key = track.content_id || contentById.get(track.id) || track.id;
+                const previous = unique.get(key);
+                if (!previous || (previous.federation_pending && !track.federation_pending)) unique.set(key, track);
+            }
+            return [...unique.values()];
+        },
+
         sortLikeTracks(tracks) {
-            return [...(tracks || [])].sort((left, right) => {
+            return this.uniqueLikeTracks(tracks).sort((left, right) => {
                 const order = Number(right.sort_key || 0) - Number(left.sort_key || 0);
                 if (order) return order;
                 const stable = String(left.content_id || left.id || '')
@@ -4247,19 +4280,22 @@ document.addEventListener('alpine:init', () => {
         async toggleMixedReleaseLike(release) {
             const tracks = release?.tracks || [];
             if (!tracks.length) return;
+            if (release.id && tracks.every(track => !track.federation_pending)) {
+                return Alpine.store('likes').toggleRelease(release.id);
+            }
             const liked = !this.isMixedReleaseLiked(release);
             const operations = [];
-            for (const track of tracks) {
+            for (const track of this.uniqueLikeTracks(tracks)) {
                 if (track.federation_pending) {
                     if (this.federationIsLiked(track._federationTrack) !== liked) {
-                        operations.push(this.setFederationLike(track._federationTrack, liked));
+                        operations.push(this.setFederationLike(track._federationTrack, liked, false));
                     }
                 } else if (Alpine.store('likes').has(track.id) !== liked) {
-                    operations.push(Alpine.store('likes').toggle(track.id));
+                    operations.push(Alpine.store('likes').toggle(track.id, false));
                 }
             }
             await Promise.allSettled(operations);
-            Alpine.store('playlists').reload();
+            await this.reloadLikes();
         },
 
         async playFederatedTrack(track, options = {}) {
@@ -4566,9 +4602,9 @@ document.addEventListener('alpine:init', () => {
             return this._set.has(trackId);
         },
 
-        async toggle(trackId) {
-            // Optimistic update
-            if (this._set.has(trackId)) {
+        async toggle(trackId, refresh = true) {
+            const wasLiked = this._set.has(trackId);
+            if (wasLiked) {
                 this._set.delete(trackId);
             } else {
                 this._set.add(trackId);
@@ -4577,30 +4613,30 @@ document.addEventListener('alpine:init', () => {
             this._set = new Set(this._set);
             try {
                 const res = await fetch(`/api/player/likes/toggle/${trackId}`, { method: 'POST' });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.liked) {
-                        this._set.add(trackId);
-                    } else {
-                        this._set.delete(trackId);
-                    }
-                    this._set = new Set(this._set);
-                    Alpine.store('playlists').reload();
+                if (!res.ok) throw new Error('like update failed');
+                const data = await res.json();
+                const ids = data.affected_track_ids?.length ? data.affected_track_ids : [trackId];
+                for (const id of ids) {
+                    if (data.liked) this._set.add(id);
+                    else this._set.delete(id);
                 }
-            } catch {}
+                this._set = new Set(this._set);
+                const library = Alpine.store('library');
+                library.updateLikeStatus(data.content_id, data.liked, ids);
+                if (refresh) await Promise.all([Alpine.store('playlists').reload(), library.refreshLikedPlaylist()]);
+            } catch {
+                if (wasLiked) this._set.add(trackId);
+                else this._set.delete(trackId);
+                this._set = new Set(this._set);
+                await this.reload();
+            }
         },
 
         async toggleRelease(releaseId) {
             try {
                 const res = await fetch(`/api/player/likes/release/${releaseId}`, { method: 'POST' });
                 if (res.ok) {
-                    // Reload liked IDs
-                    const likesRes = await fetch('/api/player/likes');
-                    if (likesRes.ok) {
-                        const d = await likesRes.json();
-                        this._set = new Set(d.track_ids || []);
-                    }
-                    Alpine.store('playlists').reload();
+                    await Alpine.store('library').reloadLikes();
                 }
             } catch {}
         },

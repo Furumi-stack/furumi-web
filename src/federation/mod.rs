@@ -1331,21 +1331,28 @@ async fn persist_content_id(
     sha256_hash: &str,
     content_id: &str,
 ) -> Result<()> {
-    sqlx::query(
+    let mut tx = pool.begin().await?;
+    let written = sqlx::query(
         "INSERT INTO furumusic__federation_content_id_cache
          (media_file_id, sha256_hash, content_id, updated_at)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (media_file_id) DO UPDATE SET
             sha256_hash = EXCLUDED.sha256_hash,
             content_id = EXCLUDED.content_id,
-            updated_at = EXCLUDED.updated_at",
+            updated_at = EXCLUDED.updated_at
+         WHERE (furumusic__federation_content_id_cache.sha256_hash, furumusic__federation_content_id_cache.content_id)
+               IS DISTINCT FROM (EXCLUDED.sha256_hash, EXCLUDED.content_id)",
     )
     .bind(media_file_id)
     .bind(sha256_hash)
     .bind(content_id)
     .bind(now_iso())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    if written.rows_affected() > 0 {
+        devices::likes::on_content_available(&mut tx, content_id, None).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 

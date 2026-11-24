@@ -5,6 +5,8 @@
 //! protocol as the TUI clients on `furumi/sync/1` and maps operations into
 //! user-scoped Postgres state.
 
+pub(crate) mod likes;
+
 use music_dht::playback::{Announcement, Checkpoint, Config as PlaybackConfig, Engine};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -539,16 +541,32 @@ pub async fn record_track_like(
         } else {
             None
         };
-        record_local_op(
-            pool,
+        let identity = ensure_identity(pool, user_id, "").await?;
+        let mut tx = pool.begin().await?;
+        likes::lock(&mut tx, user_id).await?;
+        let aliases = likes::Aliases::load(&mut tx, &content_id).await?;
+        // Another click may have committed between the web mutation and sync.
+        if aliases.existing(&mut tx, user_id).await?.is_some() != liked {
+            return Ok(());
+        }
+        let payload = SyncOpPayload::TrackLikeSet {
+            content_id: content_id.clone(),
+            liked,
+            fed: fed.clone(),
+        };
+        let op = append_local_op(&mut tx, user_id, identity.device_id, payload).await?;
+        store_like_state(
+            &mut tx,
+            &aliases,
             user_id,
-            SyncOpPayload::TrackLikeSet {
-                content_id,
-                liked,
-                fed,
-            },
+            &content_id,
+            liked,
+            fed.as_ref(),
+            op.hlc_ms,
+            &op.op_id,
         )
         .await?;
+        tx.commit().await?;
     }
     Ok(())
 }
@@ -680,39 +698,14 @@ pub async fn record_content_playlist_add(
     .await
 }
 
-/// Reconciles content-addressed user state after a track becomes local.
-/// History is intentionally not touched: only actual web playback writes it.
-pub async fn materialize_content_state(
+/// Adds saved playlist items to the local catalog after the audio import commits.
+pub(super) async fn materialize_playlist_items(
     pool: &sqlx::PgPool,
     content_id: &str,
     track_id: i64,
 ) -> Result<()> {
     let content_id =
         music_dht::normalize_content_id(content_id).context("invalid track content id")?;
-    let likes = sqlx::query(
-        "SELECT user_id, liked, hlc_ms
-           FROM furumusic__fed_state_like WHERE content_id = $1",
-    )
-    .bind(&content_id)
-    .fetch_all(pool)
-    .await?;
-    for row in likes {
-        let user_id: i64 = row.get("user_id");
-        let liked: bool = row.get("liked");
-        if liked {
-            sqlx::query(
-                "INSERT INTO furumusic__user_liked_track
-                    (user_id, track_id, created_at)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (user_id, track_id) DO NOTHING",
-            )
-            .bind(user_id)
-            .bind(track_id)
-            .bind(iso_from_ms(row.get("hlc_ms")))
-            .execute(pool)
-            .await?;
-        }
-    }
     let playlist_items = sqlx::query(
         "SELECT i.user_id, i.playlist_id, i.position
            FROM furumusic__fed_state_playlist_item i
@@ -742,14 +735,6 @@ pub async fn materialize_content_state(
         .execute(pool)
         .await?;
     }
-    sqlx::query(
-        "UPDATE furumusic__fed_state_like
-            SET local_track_id = $2 WHERE content_id = $1",
-    )
-    .bind(&content_id)
-    .bind(track_id)
-    .execute(pool)
-    .await?;
     sqlx::query(
         "UPDATE furumusic__fed_state_playlist_item
             SET local_track_id = $2 WHERE content_id = $1",
@@ -1823,6 +1808,19 @@ async fn record_local_op(
         );
     }
 
+    let mut tx = pool.begin().await?;
+    let op = append_local_op(&mut tx, user_id, identity.device_id, payload).await?;
+    tx.commit().await?;
+    let _ = apply_op(pool, Arc::new(PlayerDeviceHub::default()), user_id, &op).await?;
+    Ok(())
+}
+
+async fn append_local_op(
+    conn: &mut sqlx::PgConnection,
+    user_id: i64,
+    device_id: String,
+    payload: SyncOpPayload,
+) -> Result<SyncOpWire> {
     let now = now_ms();
     let row = sqlx::query(
         "UPDATE furumusic__fed_device_identity
@@ -1833,14 +1831,14 @@ async fn record_local_op(
     )
     .bind(user_id)
     .bind(now)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     let seq: i64 = row.get("local_seq");
     let hlc_ms: i64 = row.get("last_hlc_ms");
-    let op_id = format!("{}:{seq}", identity.device_id);
+    let op_id = format!("{device_id}:{seq}");
     let op = SyncOpWire {
         op_id,
-        origin_device_id: identity.device_id,
+        origin_device_id: device_id,
         seq,
         hlc_ms,
         payload,
@@ -1861,7 +1859,7 @@ async fn record_local_op(
     .bind(op.hlc_ms)
     .bind(now_ms())
     .bind(op.payload.is_tombstone())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     sqlx::query(
         "INSERT INTO furumusic__fed_sync_vector (user_id, device_id, max_seq)
@@ -1872,10 +1870,9 @@ async fn record_local_op(
     .bind(user_id)
     .bind(&op.origin_device_id)
     .bind(op.seq)
-    .execute(pool)
+    .execute(conn)
     .await?;
-    let _ = apply_op(pool, Arc::new(PlayerDeviceHub::default()), user_id, &op).await?;
-    Ok(())
+    Ok(op)
 }
 
 pub(crate) async fn record_podcast_op(
@@ -2218,14 +2215,42 @@ async fn apply_like_state(
     let Some(content_id) = music_dht::normalize_content_id(content_id) else {
         return Ok(false);
     };
+    let mut tx = pool.begin().await?;
+    likes::lock(&mut tx, user_id).await?;
+    let aliases = likes::Aliases::load(&mut tx, &content_id).await?;
+    let applied = store_like_state(
+        &mut tx,
+        &aliases,
+        user_id,
+        &content_id,
+        liked,
+        fed,
+        hlc_ms,
+        op_id,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(applied)
+}
+
+async fn store_like_state(
+    conn: &mut sqlx::PgConnection,
+    aliases: &likes::Aliases,
+    user_id: i64,
+    content_id: &str,
+    liked: bool,
+    fed: Option<&SyncedFedTrack>,
+    hlc_ms: i64,
+    op_id: &str,
+) -> Result<bool> {
     let current = sqlx::query(
         "SELECT liked, hlc_ms, op_id
          FROM furumusic__fed_state_like
          WHERE user_id = $1 AND content_id = $2",
     )
     .bind(user_id)
-    .bind(&content_id)
-    .fetch_optional(pool)
+    .bind(content_id)
+    .fetch_optional(&mut *conn)
     .await?;
     let apply = current.as_ref().is_none_or(|row| {
         let current_hlc: i64 = row.get("hlc_ms");
@@ -2235,8 +2260,9 @@ async fn apply_like_state(
     if !apply {
         return Ok(false);
     }
-    let local_track_id = track_id_by_content_id(pool, &content_id).await?;
-    let metadata = fed.cloned();
+    let local_track_id = aliases
+        .project(conn, user_id, liked, None, &iso_from_ms(hlc_ms))
+        .await?;
     sqlx::query(
         "INSERT INTO furumusic__fed_state_like
             (user_id, content_id, liked, hlc_ms, op_id, local_track_id, fed_json)
@@ -2249,37 +2275,14 @@ async fn apply_like_state(
             fed_json = COALESCE(EXCLUDED.fed_json, furumusic__fed_state_like.fed_json)",
     )
     .bind(user_id)
-    .bind(&content_id)
+    .bind(content_id)
     .bind(liked)
     .bind(hlc_ms)
     .bind(op_id)
     .bind(local_track_id)
-    .bind(metadata.map(serde_json::to_value).transpose()?)
-    .execute(pool)
+    .bind(fed.map(serde_json::to_value).transpose()?)
+    .execute(conn)
     .await?;
-    if let Some(track_id) = local_track_id {
-        if liked {
-            let created_at = iso_from_ms(hlc_ms);
-            sqlx::query(
-                "INSERT INTO furumusic__user_liked_track (user_id, track_id, created_at)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (user_id, track_id) DO NOTHING",
-            )
-            .bind(user_id)
-            .bind(track_id)
-            .bind(created_at)
-            .execute(pool)
-            .await?;
-        } else {
-            sqlx::query(
-                "DELETE FROM furumusic__user_liked_track WHERE user_id = $1 AND track_id = $2",
-            )
-            .bind(user_id)
-            .bind(track_id)
-            .execute(pool)
-            .await?;
-        }
-    }
     Ok(true)
 }
 

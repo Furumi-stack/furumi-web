@@ -3021,7 +3021,48 @@ pub mod db_migrations {
         const OPERATIONS: &'static [Operation] = &[Operation::custom(add_playlist_artwork).build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn repair_like_aliases(ctx: migrations::MigrationContext<'_>) -> cot::db::Result<()> {
+        ctx.db.raw(
+            "CREATE INDEX idx_fed_like_content_user ON furumusic__fed_state_like(content_id,user_id)"
+        ).await?;
+        ctx.db
+            .raw(include_str!(
+                "../federation/devices/track_content_alias.sql"
+            ))
+            .await?;
+        ctx.db
+            .raw(include_str!(
+                "../federation/devices/repair_like_aliases.sql"
+            ))
+            .await?;
+        ctx.db
+            .raw(
+                "UPDATE furumusic__fed_state_like f SET local_track_id=l.track_id
+               FROM furumusic__user_liked_track l
+               JOIN furumusic__track_content_alias a ON a.track_id=l.track_id
+              WHERE f.user_id=l.user_id AND f.content_id=a.content_id AND f.liked
+                AND NOT a.hidden AND f.local_track_id IS DISTINCT FROM l.track_id",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0062RepairLikeAliases;
+    impl migrations::Migration for M0062RepairLikeAliases {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0062_repair_like_aliases";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0061_add_playlist_artwork",
+            )];
+        const OPERATIONS: &'static [Operation] = &[Operation::custom(repair_like_aliases).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
+        &M0062RepairLikeAliases,
         &M0061AddPlaylistArtwork,
         &M0060RepairLegacyWebListenDurations,
         &M0059AddSidebarPinOrder,

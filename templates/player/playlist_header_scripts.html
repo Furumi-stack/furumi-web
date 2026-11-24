@@ -1,6 +1,7 @@
 <script>
 document.addEventListener('alpine:init', () => {
     let generation = 0;
+    let pickerAnchorTop = 0;
     const savedMode = pl => pl?.cover_mode || 'auto';
     function automatic(pl) {
         if (pl?.auto_cover_urls?.length) return pl.auto_cover_urls;
@@ -65,6 +66,33 @@ document.addEventListener('alpine:init', () => {
         },
         cancel() {
             if (!this.busy) Alpine.store('playlists').stopEdit();
+        },
+        togglePicker(anchor, panel) {
+            if (this.pickerOpen) {
+                this.pickerOpen = false;
+                return;
+            }
+            this.placePicker(anchor, panel);
+            this.pickerOpen = true;
+            Alpine.nextTick(() => {
+                if (this.pickerOpen) panel.querySelector('[aria-pressed=true]')?.focus({preventScroll:true});
+            });
+        },
+        placePicker(anchor, panel) {
+            const rect = anchor.getBoundingClientRect();
+            pickerAnchorTop = rect.top;
+            const height = document.documentElement.clientHeight;
+            const below = height - rect.bottom;
+            const above = below < 250 && rect.top > below;
+            const gap = 6;
+            panel.style.setProperty('--anchor-left', rect.left + 'px');
+            panel.style.top = above ? 'auto' : rect.bottom + gap + 'px';
+            panel.style.bottom = above ? height - rect.top + gap + 'px' : 'auto';
+            panel.style.maxHeight = Math.max(0, (above ? rect.top : below) - gap - 8) + 'px';
+        },
+        dismissScrolledPicker(anchor) {
+            // A scroll that brought the trigger into view can be dispatched after its click.
+            if (anchor.getBoundingClientRect().top !== pickerAnchorTop) this.pickerOpen = false;
         },
         setMode(mode) {
             if (this.busy) return;

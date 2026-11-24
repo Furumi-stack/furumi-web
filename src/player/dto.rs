@@ -562,6 +562,8 @@ pub(super) struct PlayHistoryPage {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct LikeStatus {
     pub(super) liked: bool,
+    pub(super) content_id: Option<String>,
+    pub(super) affected_track_ids: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -34,6 +34,7 @@ mod listening;
 mod pins;
 mod playlist_artwork;
 mod playlist_image;
+mod release_likes;
 mod queries;
 mod rows;
 mod sharing;
@@ -7915,38 +7916,20 @@ async fn toggle_like_track_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
     let track_id = path.0.track_id;
-    let existing: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM furumusic__user_liked_track WHERE user_id = $1 AND track_id = $2",
-    )
-    .bind(user.id)
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| cot::Error::internal(e.to_string()))?;
-
-    if existing.is_some() {
-        sqlx::query("DELETE FROM furumusic__user_liked_track WHERE user_id = $1 AND track_id = $2")
-            .bind(user.id)
-            .bind(track_id)
-            .execute(pool)
+    let Some((liked, content_id, affected_track_ids)) =
+        crate::federation::devices::likes::toggle(pool, user.id, track_id)
             .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-        record_fed_track_like(pool, user.id, track_id, false).await;
-        Json(LikeStatus { liked: false }).into_response()
-    } else {
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        sqlx::query(
-            "INSERT INTO furumusic__user_liked_track (user_id, track_id, created_at) VALUES ($1, $2, $3)",
-        )
-        .bind(user.id)
-        .bind(track_id)
-        .bind(&now)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-        record_fed_track_like(pool, user.id, track_id, true).await;
-        Json(LikeStatus { liked: true }).into_response()
-    }
+            .map_err(|e| cot::Error::internal(e.to_string()))?
+    else {
+        return Ok(json_error(StatusCode::NOT_FOUND, "track not found"));
+    };
+    record_fed_track_like(pool, user.id, track_id, liked).await;
+    Json(LikeStatus {
+        liked,
+        content_id,
+        affected_track_ids,
+    })
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -7963,70 +7946,13 @@ async fn like_release_handler(
     let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
-    let release_id = path.0.id;
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let track_ids = sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM furumusic__track WHERE release_id = $1 AND is_hidden = false",
-    )
-    .bind(release_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| cot::Error::internal(e.to_string()))?;
-
-    // Check if ALL tracks in this release are already liked
-    let total = track_ids.len() as i64;
-
-    let liked_count: (i64,) = sqlx::query_as(
-        r#"SELECT COUNT(*) FROM furumusic__user_liked_track ult
-           JOIN furumusic__track t ON t.id = ult.track_id
-           WHERE ult.user_id = $1 AND t.release_id = $2 AND t.is_hidden = false"#,
-    )
-    .bind(user.id)
-    .bind(release_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| cot::Error::internal(e.to_string()))?;
-
-    if liked_count.0 >= total && total > 0 {
-        // Unlike all tracks in release
-        sqlx::query(
-            r#"DELETE FROM furumusic__user_liked_track
-               WHERE user_id = $1 AND track_id IN (
-                   SELECT id FROM furumusic__track WHERE release_id = $2 AND is_hidden = false
-               )"#,
-        )
-        .bind(user.id)
-        .bind(release_id)
-        .execute(pool)
+    let (liked, changed) = release_likes::toggle(pool, user.id, path.0.id)
         .await
         .map_err(|e| cot::Error::internal(e.to_string()))?;
-        for track_id in &track_ids {
-            record_fed_track_like(pool, user.id, *track_id, false).await;
-        }
-        Json(LikeStatus { liked: false }).into_response()
-    } else {
-        // Like all tracks in release (skip already liked)
-        sqlx::query(
-            r#"INSERT INTO furumusic__user_liked_track (user_id, track_id, created_at)
-               SELECT $1, t.id, $3
-               FROM furumusic__track t
-               WHERE t.release_id = $2 AND t.is_hidden = false
-                 AND NOT EXISTS (
-                     SELECT 1 FROM furumusic__user_liked_track ult
-                     WHERE ult.user_id = $1 AND ult.track_id = t.id
-                 )"#,
-        )
-        .bind(user.id)
-        .bind(release_id)
-        .bind(&now)
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-        for track_id in &track_ids {
-            record_fed_track_like(pool, user.id, *track_id, true).await;
-        }
-        Json(LikeStatus { liked: true }).into_response()
+    for track_id in changed {
+        record_fed_track_like(pool, user.id, track_id, liked).await;
     }
+    Json(serde_json::json!({ "liked": liked })).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -8042,17 +7968,12 @@ async fn liked_ids_handler(
     let Some(user) = auth::get_request_user(&auth_ctx, &session, &db).await else {
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
-    let rows: Vec<(i64,)> =
-        sqlx::query_as("SELECT track_id FROM furumusic__user_liked_track WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?;
-
-    Json(LikedIds {
-        track_ids: rows.into_iter().map(|r| r.0).collect(),
-    })
-    .into_response()
+    let track_ids = sqlx::query_scalar(include_str!("liked_ids.sql"))
+        .bind(user.id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
+    Json(LikedIds { track_ids }).into_response()
 }
 
 // ---------------------------------------------------------------------------

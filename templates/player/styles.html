@@ -541,11 +541,6 @@ button.user-stat:hover {
     margin-bottom: 20px;
 }
 
-.playlist-detail-heading.cover-editor-open {
-    grid-template-areas: "cover details pin" "cover editor editor";
-}
-.playlist-detail-heading.cover-editor-open .playlist-heading-cover { align-self: start; }
-
 .playlist-heading-cover {
     grid-area: cover;
     position: relative;
@@ -599,14 +594,21 @@ button.user-stat:hover {
 .playlist-detail-heading .playlist-cover-toggle:focus-visible, .playlist-cover-choice:focus-visible { outline-offset: -2px; }
 
 .playlist-cover-editor {
-    grid-area: editor;
-    width: min(100%, 510px);
+    --picker-width: min(336px, calc(100vw - 16px));
+    position: fixed;
+    z-index: 200;
+    left: clamp(8px, var(--anchor-left), calc(100vw - var(--picker-width) - 8px));
+    width: var(--picker-width);
     min-width: 0;
     margin: 0;
     padding: 10px;
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    background: var(--bg-secondary);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    box-shadow: 0 8px 26px #0008;
+    overflow: auto;
+    overscroll-behavior: contain;
 }
 .playlist-cover-modes { display: flex; flex-wrap: wrap; gap: 4px; }
 .playlist-cover-mode, .playlist-cover-file { border: 1px solid var(--bg-active); border-radius: 5px; padding: 6px 9px; color: var(--text-secondary); background: transparent; font: inherit; font-size: 13px; cursor: pointer; }
@@ -6557,9 +6559,6 @@ button.user-stat:hover {
         grid-template-columns: 72px minmax(0, 1fr) auto;
         gap: 10px;
         margin-bottom: 16px;
-    }
-    .playlist-detail-heading.cover-editor-open {
-        grid-template-areas: "cover details pin" "editor editor editor";
     }
 
     .playlist-track-row.editing {

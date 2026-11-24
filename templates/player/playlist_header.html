@@ -4,7 +4,6 @@
                  get tiles() { return $store.playlistHeader.urls },
                  get editing() { return $store.playlists.isEditingCurrent() },
                  get target() { return $store.pins.target('playlist', this.playlist) }}"
-        :class="{'cover-editor-open': editing && header.pickerOpen}"
         @keydown.escape="if (editing && !header.busy) {
             $event.stopPropagation();
             if (header.pickerOpen) { header.pickerOpen = false; $refs.coverToggle.focus() }
@@ -22,7 +21,7 @@
         <button type="button" class="playlist-cover-toggle" x-ref="coverToggle" x-show="editing" x-cloak
                 aria-label="{{ t.player_edit_playlist_cover }}" title="{{ t.player_edit_playlist_cover }}"
                 :disabled="header.busy" aria-controls="playlist-cover-editor" :aria-expanded="header.pickerOpen"
-                @click="header.pickerOpen = !header.pickerOpen; if (header.pickerOpen) $nextTick(() => $refs.coverEditor.querySelector('[aria-pressed=true]')?.focus({preventScroll:true}))">
+                @click="header.togglePicker($el, $refs.coverEditor)">
             <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m14 6 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11z"/>
             </svg></span>
@@ -63,7 +62,11 @@
     {% if !guest %}
     <div class="playlist-heading-pin" x-show="target">{% include "player/pin_button.html" %}</div>
     <fieldset class="playlist-cover-editor" id="playlist-cover-editor" x-ref="coverEditor"
-              x-show="editing && header.pickerOpen" x-cloak :disabled="header.busy" aria-label="{{ t.player_playlist_cover }}">
+              x-show="editing && header.pickerOpen" x-cloak :disabled="header.busy" aria-label="{{ t.player_playlist_cover }}"
+              @pointerdown.window.capture="if (header.pickerOpen && !$el.contains($event.target) && !$refs.coverToggle.contains($event.target)) header.pickerOpen = false"
+              @focusin.window="if (header.pickerOpen && !$el.contains($event.target) && !$refs.coverToggle.contains($event.target)) header.pickerOpen = false"
+              @scroll.window.capture="if (header.pickerOpen && !$el.contains($event.target)) header.dismissScrolledPicker($refs.coverToggle)"
+              @resize.window="if (header.pickerOpen) header.placePicker($refs.coverToggle, $el)">
         <div class="playlist-cover-modes" role="group" aria-label="{{ t.player_playlist_cover }}">
             <button type="button" class="playlist-cover-mode" data-mode="auto" :aria-pressed="header.mode === 'auto'" @click="header.setMode('auto')">{{ t.player_playlist_cover_auto }}</button>
             <button type="button" class="playlist-cover-mode" data-mode="releases" :aria-pressed="header.mode === 'releases'" @click="header.setMode('releases')">{{ t.player_playlist_cover_releases }}</button>
