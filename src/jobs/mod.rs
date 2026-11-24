@@ -2,6 +2,10 @@ pub mod archive_cleanup;
 pub mod artwork_backfill;
 pub mod inbox_discover;
 pub mod inbox_process;
+mod inbox_review;
+pub(crate) use inbox_review::remove_exact_inbox_copy;
+#[cfg(test)]
+mod inbox_review_tests;
 pub mod lastfm_popularity;
 pub mod lastfm_scrobble;
 pub mod lyrics_backfill;

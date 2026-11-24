@@ -10,6 +10,17 @@
 - Desktop/mobile lyrics view following playback, individual track previews,
   availability icons, and local version editing in the admin track editor.
 
+## v0.16.7 — 2026-11-24
+
+- Approving an upload in the admin panel now finds its audio in the inbox.
+  An import with missing audio reports an error before adding the track.
+- The review queue closes uploads that already have a verified copy in the
+  library. Dismissing a review keeps its audio and prevents the same file
+  from returning on the next scan. A replacement file can still be imported.
+- Recording conflicts have a separate queue. An administrator can check edited
+  metadata, keep a separate recording, or dismiss the upload.
+- The account menu includes a Get App dialog for downloading the Furumi TUI.
+
 ## v0.16.6 — 2026-11-24
 
 - Add music opens with file and folder upload, with torrent and YouTube forms

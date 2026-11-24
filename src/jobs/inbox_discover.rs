@@ -1,7 +1,12 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 
-use sha2::{Digest, Sha256};
+use super::inbox_review::{
+    finish_exact_review, reconcile_open_reviews, same_file_version, tracked_files,
+};
+pub use super::inbox_review::{link_exact_import, remove_exact_inbox_copy};
 
 use crate::scheduler::{Job, JobContext, JobLog, PendingReview};
 
@@ -85,6 +90,7 @@ impl Job for InboxDiscoverJob {
             return Ok(());
         }
 
+        reconcile_open_reviews(&ctx.pool, config, log).await?;
         let inbox = Path::new(&config.agent_inbox_dir);
         if !inbox.exists() {
             log.warn(&format!("Inbox path does not exist: {}", inbox.display()));
@@ -100,9 +106,32 @@ impl Job for InboxDiscoverJob {
 
         log.info(&format!("Found {} audio files in inbox", audio_files.len()));
         if audio_files.is_empty() {
+            INBOX_HASHES.lock().unwrap().clear();
             return Ok(());
         }
 
+        let relative_paths: Vec<_> = audio_files
+            .iter()
+            .filter_map(|path| crate::media_paths::path_for_root(&config.agent_inbox_dir, path))
+            .collect();
+        let tracked: HashMap<_, _> = tracked_files(&ctx.pool, &relative_paths)
+            .await?
+            .into_iter()
+            .map(|r| (r.input_path.clone(), r))
+            .collect();
+        let dismissed: HashSet<(String, String)> = sqlx::query_as(
+            "SELECT input_path, sha256 FROM furumusic__dismissed_review WHERE input_path = ANY($1)",
+        )
+        .bind(&relative_paths)
+        .fetch_all(&ctx.pool)
+        .await?
+        .into_iter()
+        .collect();
+        let present: HashSet<&PathBuf> = audio_files.iter().collect();
+        INBOX_HASHES
+            .lock()
+            .unwrap()
+            .retain(|path, _| present.contains(path));
         let groups = group_by_folder(&audio_files);
         log.info(&format!("Grouped into {} folder batches", groups.len()));
 
@@ -117,106 +146,102 @@ impl Job for InboxDiscoverJob {
                     crate::media_paths::path_for_root(&config.agent_inbox_dir, file_path)
                         .unwrap_or_else(|| file_path.to_string_lossy().to_string());
 
-                // One review row per path: any existing row blocks creating a
-                // new one. A stale "failed" row is requeued in place instead,
-                // so retries don't multiply rows. "rejected" stays rejected.
-                match PendingReview::latest_for_path(&ctx.pool, &input_path_str).await {
-                    Ok(None) => {}
-                    Ok(Some((id, status, updated_at))) => {
-                        if status == "failed" {
-                            let stale = chrono::DateTime::parse_from_rfc3339(&updated_at)
-                                .map(|t| {
-                                    chrono::Utc::now().signed_duration_since(t).num_seconds()
-                                        >= FAILED_RETRY_COOLDOWN_SECS
-                                })
-                                .unwrap_or(true);
-                            if stale {
-                                match PendingReview::requeue_by_ids(&ctx.db, &[id]).await {
-                                    Ok(()) => requeued += 1,
-                                    Err(e) => log.warn(&format!(
-                                        "Failed to requeue review {id} for {input_path_str}: {e}"
-                                    )),
-                                }
-                            } else {
-                                skipped_existing += 1;
-                            }
-                        } else {
-                            skipped_existing += 1;
-                        }
-                        continue;
-                    }
-                    Err(e) => {
+                let existing = tracked.get(&input_path_str);
+                if existing.is_some_and(|r| r.status == "processing") {
+                    skipped_existing += 1;
+                    continue;
+                }
+                let (hash, file_size) = match observed_inbox_hash(file_path).await {
+                    Ok(value) => value,
+                    Err(error) => {
                         log.warn(&format!(
-                            "Error checking existing review for {}: {e}",
-                            input_path_str
+                            "Could not inspect {}: {error}",
+                            file_path.display()
                         ));
                         continue;
                     }
+                };
+                if dismissed.contains(&(input_path_str.clone(), hash.clone())) {
+                    skipped_existing += 1;
+                    continue;
+                }
+                let same = existing.filter(|r| r.sha256.as_deref() == Some(hash.as_str()));
+                if let Some(review) = same
+                    && !matches!(review.status.as_str(), "approved" | "auto_approved")
+                {
+                    if review.status == "failed" {
+                        let stale = chrono::DateTime::parse_from_rfc3339(&review.updated_at)
+                            .map(|t| {
+                                chrono::Utc::now().signed_duration_since(t).num_seconds()
+                                    >= FAILED_RETRY_COOLDOWN_SECS
+                            })
+                            .unwrap_or(true);
+                        if stale {
+                            requeued += sqlx::query("UPDATE furumusic__pending_review SET status='queued',
+                                error_message=NULL, updated_at=$3 WHERE id=$1 AND status='failed'
+                                AND updated_at=$2 AND strpos(COALESCE(error_message,''), 'Duplicate check needs review: ') = 0")
+                                .bind(review.id).bind(&review.updated_at)
+                                .bind(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                                .execute(&ctx.pool).await?.rows_affected();
+                        }
+                    }
+                    skipped_existing += 1;
+                    continue;
                 }
 
-                // Compute SHA-256 hash
-                let path_clone = file_path.to_path_buf();
-                let hash_start = std::time::Instant::now();
-                let (hash, file_size) =
-                    match tokio::task::spawn_blocking(move || -> anyhow::Result<(String, i64)> {
-                        let data = std::fs::read(&path_clone)?;
-                        let digest = Sha256::digest(&data);
-                        let hash = format!("{:x}", digest);
-                        let size = data.len() as i64;
-                        Ok((hash, size))
-                    })
-                    .await?
-                    {
-                        Ok(v) => {
-                            crate::metrics::record_agent_file_hash(hash_start.elapsed(), v.1, "ok");
-                            v
-                        }
-                        Err(e) => {
-                            crate::metrics::record_agent_file_hash(
-                                hash_start.elapsed(),
-                                0,
-                                "error",
-                            );
-                            log.warn(&format!("Failed to hash {}: {e}", file_path.display()));
-                            continue;
-                        }
-                    };
-
-                // Skip if hash already in media_files
-                if crate::agent::rag::file_hash_exists_verified(
+                let exact = match crate::agent::rag::verified_audio_media(
                     &ctx.pool,
                     &hash,
                     &config.agent_storage_dir,
                 )
                 .await
-                .unwrap_or(false)
                 {
-                    // Close the upload by removing the exact inbox duplicate;
-                    // otherwise its history remains queued forever.
-                    tokio::fs::remove_file(file_path).await?;
-                    skipped_hash += 1;
+                    Ok(media) => media,
+                    Err(error) => {
+                        log.warn(&format!(
+                            "Could not verify catalog audio for {input_path_str}: {error}"
+                        ));
+                        continue;
+                    }
+                };
+                if let (Some(review), Some(media)) = (same, exact) {
+                    match finish_exact_review(&ctx.pool, config, review, &hash, media).await {
+                        Ok(true) => skipped_hash += 1,
+                        Ok(false) => skipped_existing += 1,
+                        Err(error) => log.warn(&format!(
+                            "Could not reconcile review {}: {error:#}",
+                            review.id
+                        )),
+                    }
                     continue;
                 }
 
                 // Extract raw metadata
                 let path_for_meta = file_path.to_path_buf();
                 let metadata_start = std::time::Instant::now();
-                let raw_meta = match tokio::task::spawn_blocking(move || {
-                    crate::agent::metadata::extract(&path_for_meta)
-                })
-                .await?
-                {
-                    Ok(m) => {
-                        crate::metrics::record_agent_metadata(metadata_start.elapsed(), "ok");
-                        m
-                    }
-                    Err(e) => {
-                        crate::metrics::record_agent_metadata(metadata_start.elapsed(), "error");
-                        log.warn(&format!(
-                            "Failed to extract metadata from {}: {e}",
-                            file_path.display()
-                        ));
-                        continue;
+                let raw_meta = if exact.is_some() {
+                    Default::default()
+                } else {
+                    match tokio::task::spawn_blocking(move || {
+                        crate::agent::metadata::extract(&path_for_meta)
+                    })
+                    .await?
+                    {
+                        Ok(m) => {
+                            crate::metrics::record_agent_metadata(metadata_start.elapsed(), "ok");
+                            m
+                        }
+                        Err(e) => {
+                            crate::metrics::record_agent_metadata(
+                                metadata_start.elapsed(),
+                                "error",
+                            );
+                            log.warn(&format!(
+                                "Failed to extract metadata from {}: {e}",
+                                file_path.display()
+                            ));
+                            continue;
+                        }
                     }
                 };
 
@@ -250,18 +275,37 @@ impl Job for InboxDiscoverJob {
                 });
                 let context_str = serde_json::to_string(&context).unwrap_or_default();
 
-                // Create PendingReview with status "queued"
-                PendingReview::create_queued(
-                    &ctx.db,
+                if PendingReview::enqueue_discovered(
+                    &ctx.pool,
                     ctx.run_id,
-                    "new_file",
-                    Some(&input_path_str),
-                    Some(&context_str),
+                    &input_path_str,
+                    &hash,
+                    &context_str,
                 )
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to create queued review: {e}"))?;
-
-                discovered += 1;
+                .await?
+                {
+                    if let Some(media) = exact
+                        && let Some(review) =
+                            tracked_files(&ctx.pool, std::slice::from_ref(&input_path_str))
+                                .await?
+                                .pop()
+                        && review.status == "queued"
+                        && review.sha256.as_deref() == Some(hash.as_str())
+                    {
+                        match finish_exact_review(&ctx.pool, config, &review, &hash, media).await {
+                            Ok(true) => {
+                                skipped_hash += 1;
+                                continue;
+                            }
+                            Ok(false) => {}
+                            Err(error) => log.warn(&format!(
+                                "Could not reconcile review {}: {error:#}",
+                                review.id
+                            )),
+                        }
+                    }
+                    discovered += 1;
+                }
             }
         }
 
@@ -313,6 +357,38 @@ impl Job for InboxDiscoverJob {
 // ---------------------------------------------------------------------------
 // Helpers (moved from inbox_scan.rs)
 // ---------------------------------------------------------------------------
+
+// Inbox files awaiting a human decision can be large. Rehash them only when
+// their filesystem identity or timestamps change. Destructive operations
+// always hash the live source again.
+static INBOX_HASHES: LazyLock<Mutex<HashMap<PathBuf, (std::fs::Metadata, String)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+async fn observed_inbox_hash(path: &Path) -> anyhow::Result<(String, i64)> {
+    let before = tokio::fs::metadata(path).await?;
+    {
+        let hashes = INBOX_HASHES.lock().unwrap();
+        if let Some((version, sha256)) = hashes.get(path)
+            && same_file_version(version, &before)
+        {
+            return Ok((sha256.clone(), i64::try_from(before.len())?));
+        }
+    }
+    let start = std::time::Instant::now();
+    let sha256 = crate::agent::mover::sha256_file(path).await?;
+    let after = tokio::fs::metadata(path).await?;
+    anyhow::ensure!(
+        same_file_version(&before, &after),
+        "file changed during discovery"
+    );
+    let size = i64::try_from(after.len())?;
+    INBOX_HASHES
+        .lock()
+        .unwrap()
+        .insert(path.to_owned(), (after, sha256.clone()));
+    crate::metrics::record_agent_file_hash(start.elapsed(), size, "ok");
+    Ok((sha256, size))
+}
 
 pub fn group_by_folder(files: &[PathBuf]) -> Vec<(PathBuf, Vec<PathBuf>)> {
     use std::collections::HashMap;

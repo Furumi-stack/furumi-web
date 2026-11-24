@@ -77,46 +77,61 @@ pub async fn find_similar_releases(
         .collect())
 }
 
-/// Check if a file with the given SHA-256 hash is actively used in the library.
-/// Returns true only if a media_file with this hash exists AND at least one
-/// track references it via audio_file_id.  Orphaned media_files (no track)
-/// are ignored so that re-discovery is possible after the user deletes
-/// artists/releases/tracks.
-pub async fn file_hash_exists(pool: &PgPool, sha256: &str) -> anyhow::Result<bool> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM furumusic__media_file mf \
-         JOIN furumusic__track t ON t.audio_file_id = mf.id \
-         WHERE mf.sha256_hash = $1)",
-    )
-    .bind(sha256)
-    .fetch_one(pool)
-    .await
-    .map_err(Into::into)
-}
-
 /// Verify the bytes on disk as well as the database hash before dropping an
 /// inbox upload. Stale catalog hashes must not discard a replacement file.
-pub async fn file_hash_exists_verified(
+pub async fn verified_audio_media(
     pool: &PgPool,
     sha256: &str,
     storage_dir: &str,
-) -> anyhow::Result<bool> {
-    let paths: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT mf.file_path FROM furumusic__media_file mf \
-            JOIN furumusic__track t ON t.audio_file_id = mf.id \
-            WHERE mf.sha256_hash = $1",
+) -> anyhow::Result<Option<i64>> {
+    if sha256.is_empty() || storage_dir.is_empty() {
+        return Ok(None);
+    }
+    let paths: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT mf.id, mf.file_path FROM furumusic__media_file mf
+         WHERE mf.file_type = 'audio' AND mf.sha256_hash = $1
+           AND EXISTS (SELECT 1 FROM furumusic__track t WHERE t.audio_file_id = mf.id)
+         ORDER BY mf.id",
     )
     .bind(sha256)
     .fetch_all(pool)
     .await?;
-    for path in paths {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let library = match tokio::fs::canonicalize(storage_dir).await {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut read_error = None;
+    for (id, path) in paths {
         let path = crate::media_paths::resolve_media_file_path(storage_dir, &path);
-        if super::mover::sha256_file(&path)
-            .await
-            .is_ok_and(|actual| actual == sha256)
-        {
-            return Ok(true);
+        // A legacy absolute path or symlink can point straight back to the
+        // inbox. It does not provide an independent archived copy.
+        let physical = match tokio::fs::canonicalize(&path).await {
+            Ok(physical) if physical.starts_with(&library) => physical,
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                read_error = Some(
+                    anyhow::Error::from(error).context(format!("resolving {}", path.display())),
+                );
+                continue;
+            }
+        };
+        match super::mover::sha256_file(&physical).await {
+            Ok(actual) if actual == sha256 => return Ok(Some(id)),
+            Ok(_) => {}
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {}
+            Err(error) => read_error = Some(error.context(format!("reading {}", path.display()))),
         }
     }
-    Ok(false)
+    match read_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
 }

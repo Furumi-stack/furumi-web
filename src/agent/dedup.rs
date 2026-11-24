@@ -11,6 +11,12 @@ use super::dto::NormalizedFields;
 #[derive(Debug)]
 pub struct DuplicateReview(pub String);
 
+impl DuplicateReview {
+    pub fn is_recorded(message: Option<&str>) -> bool {
+        message.is_some_and(|message| message.starts_with("Duplicate check needs review:"))
+    }
+}
+
 impl std::fmt::Display for DuplicateReview {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Duplicate check needs review: {}", self.0)
@@ -242,6 +248,17 @@ async fn probe(path: &Path) -> Result<AudioInfo> {
     })
 }
 
+pub async fn verify_separate_recording(path: &Path) -> Result<()> {
+    let info = probe(path)
+        .await
+        .context("cannot inspect incoming recording")?;
+    ensure!(
+        info.duration > 0.0,
+        "incoming recording has no audio duration"
+    );
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct AudioFingerprint {
     duration: f64,
@@ -443,7 +460,8 @@ pub async fn merge_existing(
     }
     // A repeated YouTube import must still resolve to this existing media ID.
     if let Some(sha) = context["sha256"].as_str() {
-        if let Err(error) = crate::import_playlists::link_media(pool, sha, candidate.media_id).await {
+        if let Err(error) = crate::import_playlists::link_media(pool, sha, candidate.media_id).await
+        {
             tracing::warn!(%error, "could not link deduplicated import to destination playlists");
         }
         if let Err(error) = sqlx::query(

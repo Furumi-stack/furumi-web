@@ -75,6 +75,27 @@ test('empty and non-pending selections do not submit approval', async () => {
     await app.bulkReviews('approve');
 });
 
+test('conflicting recordings require an individual decision', async () => {
+    const app = createApp();
+    app.toggleReview({ id: 57, status: 'conflict' });
+    assert.equal(app.selectedPendingReviewCount(), 0);
+    app.activeReview = { id: 57, status: 'pending' };
+    app.reviewDraft = { title: 'Other edition' };
+    app.request = async (_url, options) => {
+        assert.equal(JSON.parse(options.body).import_separately, false);
+        throw new Error('Duplicate check needs review: track 8: duration differs');
+    };
+    await app.approveActiveReview();
+    assert.equal(app.activeReview.status, 'conflict');
+    app.request = async (_url, options) => {
+        assert.equal(JSON.parse(options.body).import_separately, true);
+        return { ok: true };
+    };
+    await app.approveActiveReview(true);
+    assert.equal(app.activeReview, null);
+    assert.equal(app.libraryReloaded, true);
+});
+
 test('blocks duplicate bulk submissions while approval is running', async () => {
     const app = createApp();
     app.toggleReview({ id: 1, status: 'pending' });

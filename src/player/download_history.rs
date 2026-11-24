@@ -327,13 +327,7 @@ impl Services {
             let cookies =
                 crate::youtube::selected_cookie_contents(db, &config.youtube_cookie_id).await?;
             service
-                .resume_jobs(
-                    pool,
-                    jobs,
-                    &config.agent_inbox_dir,
-                    config.youtube_proxy_url()?,
-                    cookies,
-                )
+                .resume_jobs(pool, jobs, config, config.youtube_proxy_url()?, cookies)
                 .await;
         }
         Ok(())

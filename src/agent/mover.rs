@@ -21,10 +21,7 @@ pub async fn move_to_storage(
     filename: &str,
     source: &Path,
 ) -> anyhow::Result<MoveOutcome> {
-    let artist_dir = sanitize_dir_name(artist);
-    let album_dir = sanitize_dir_name(album);
-
-    let dest_dir = storage_dir.join(&artist_dir).join(&album_dir);
+    let dest_dir = album_directory(storage_dir, artist, album);
     tokio::fs::create_dir_all(&dest_dir).await?;
 
     let mut dest = dest_dir.join(filename);
@@ -52,6 +49,54 @@ pub async fn move_to_storage(
 
     tracing::info!(from = ?source, to = ?dest, "moved file to storage");
     Ok(MoveOutcome::Moved(dest))
+}
+
+fn album_directory(storage_dir: &Path, artist: &str, album: &str) -> PathBuf {
+    storage_dir
+        .join(sanitize_dir_name(artist))
+        .join(sanitize_dir_name(album))
+}
+
+/// Recover a file published before an interrupted catalog write, including a
+/// destination that move_to_storage renamed to avoid a filename collision.
+pub async fn find_moved_file(
+    storage_dir: &Path,
+    artist: &str,
+    album: &str,
+    filename: &str,
+    sha256: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    if sha256.is_empty() {
+        return Ok(None);
+    }
+    let directory = album_directory(storage_dir, artist, album);
+    let mut entries = match tokio::fs::read_dir(directory).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let name = Path::new(filename);
+    let stem = name.file_stem().and_then(|s| s.to_str()).unwrap_or("audio");
+    let ext = name.extension().and_then(|s| s.to_str()).unwrap_or("audio");
+    let prefix = format!("{stem} [");
+    let suffix = format!("].{ext}");
+    while let Some(entry) = entries.next_entry().await? {
+        let entry_name = entry.file_name();
+        let Some(entry_name) = entry_name.to_str() else {
+            continue;
+        };
+        let is_collision = entry_name
+            .strip_prefix(&prefix)
+            .and_then(|name| name.strip_suffix(&suffix))
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+        if (entry_name == filename || is_collision)
+            && entry.file_type().await?.is_file()
+            && sha256_file(&entry.path()).await? == sha256
+        {
+            return Ok(Some(entry.path()));
+        }
+    }
+    Ok(None)
 }
 
 /// Copy into the destination filesystem, then expose the complete file without
@@ -131,7 +176,14 @@ mod tests {
         };
         assert_ne!(new, old);
         assert_eq!(tokio::fs::read(&old).await.unwrap(), b"original recording");
-        assert_eq!(tokio::fs::read(new).await.unwrap(), b"different recording");
+        assert_eq!(tokio::fs::read(&new).await.unwrap(), b"different recording");
+        let sha256 = sha256_file(&new).await.unwrap();
+        assert_eq!(
+            find_moved_file(&storage, "Artist", "Album", "song.mp3", &sha256)
+                .await
+                .unwrap(),
+            Some(new)
+        );
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }

@@ -270,69 +270,46 @@ pub(crate) async fn sync_statuses(
     }
 
     let inbox_paths: Vec<String> = rows.iter().map(|row| row.inbox_path.clone()).collect();
-    let state_rows: Vec<(String, String, i64)> = sqlx::query_as(
-        r#"SELECT input_path, status::text, COUNT(*)
-           FROM furumusic__pending_review
-           WHERE input_path = ANY($1)
-           GROUP BY input_path, status"#,
+    let states: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT input_path, status, error_message FROM furumusic__upload_review_state \
+         WHERE input_path = ANY($1)",
     )
     .bind(&inbox_paths)
     .fetch_all(pool)
     .await?;
-    let mut states_by_path: HashMap<String, HashMap<String, i64>> = HashMap::new();
-    for (input_path, status, total) in state_rows {
-        states_by_path
-            .entry(input_path)
-            .or_default()
-            .insert(status, total);
-    }
-    let error_rows: Vec<(String, String)> = sqlx::query_as(
-        r#"SELECT DISTINCT ON (input_path) input_path, error_message
-           FROM furumusic__pending_review
-           WHERE input_path = ANY($1) AND status = 'failed'
-             AND error_message IS NOT NULL
-           ORDER BY input_path, id DESC"#,
-    )
-    .bind(&inbox_paths)
-    .fetch_all(pool)
-    .await?;
-    let errors_by_path: HashMap<String, String> = error_rows.into_iter().collect();
+    let states_by_path: HashMap<_, _> = states
+        .into_iter()
+        .map(|(path, status, error)| (path, (status, error)))
+        .collect();
 
     for row in rows {
-        let counts = states_by_path
-            .get(&row.inbox_path)
-            .cloned()
-            .unwrap_or_default();
-        let total: i64 = counts.values().sum();
-
-        let mut terminal_error = None;
-        let next = if total == 0 {
-            if matches!(row.status.as_str(), "uploading" | "failed" | "needs_review") {
-                continue;
+        let (next, error) = match states_by_path.get(&row.inbox_path) {
+            Some((status, error)) => match status.as_str() {
+                "processing" => ("ai_processing", None),
+                "failed" => ("failed", error.as_deref()),
+                "pending" | "rejected" => ("needs_review", None),
+                "cancelled" => ("cancelled", None),
+                "approved" | "auto_approved" => ("complete", None),
+                _ => ("queued", None),
+            },
+            None => {
+                if matches!(
+                    row.status.as_str(),
+                    "uploading" | "failed" | "needs_review" | "cancelled"
+                ) {
+                    continue;
+                }
+                let full_path =
+                    crate::media_paths::resolve_path_from_root(inbox_dir, &row.inbox_path);
+                if tokio::fs::try_exists(full_path).await? {
+                    ("queued", None)
+                } else {
+                    ("complete", None)
+                }
             }
-            let full_path = crate::media_paths::resolve_path_from_root(inbox_dir, &row.inbox_path);
-            if tokio::fs::try_exists(full_path).await? {
-                "queued"
-            } else {
-                "complete"
-            }
-        } else if count(&counts, "processing") > 0 {
-            "ai_processing"
-        } else if count(&counts, "queued") > 0 {
-            "queued"
-        } else if count(&counts, "failed") > 0 {
-            terminal_error = errors_by_path.get(&row.inbox_path).cloned();
-            "failed"
-        } else if count(&counts, "pending") > 0 || count(&counts, "rejected") > 0 {
-            "needs_review"
-        } else if count(&counts, "approved") > 0 || count(&counts, "auto_approved") > 0 {
-            "complete"
-        } else {
-            "queued"
         };
-
-        if row.status != next || row.error != terminal_error {
-            update_status(pool, &row.id, row.user_id, next, terminal_error.as_deref()).await?;
+        if row.status != next || row.error.as_deref() != error {
+            update_status(pool, &row.id, row.user_id, next, error).await?;
         }
     }
     Ok(())
@@ -347,7 +324,7 @@ async fn update_status(
 ) -> anyhow::Result<()> {
     let now = now_string();
     let completed_at =
-        matches!(status, "complete" | "failed" | "needs_review").then(|| now.clone());
+        matches!(status, "complete" | "failed" | "needs_review" | "cancelled").then(|| now.clone());
     sqlx::query(
         r#"UPDATE furumusic__local_upload
            SET status = $3, error = $4, updated_at = $5, completed_at = $6
@@ -375,10 +352,6 @@ async fn load(pool: &PgPool, user_id: i64, id: &str) -> anyhow::Result<LocalUplo
     .fetch_optional(pool)
     .await?
     .context("file upload history entry not found")
-}
-
-fn count(counts: &HashMap<String, i64>, status: &str) -> i64 {
-    counts.get(status).copied().unwrap_or(0)
 }
 
 fn trim_error(value: &str) -> String {

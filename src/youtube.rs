@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::config::AppConfig;
 use crate::scheduler::SchedulerHandle;
 
 const YOUTUBE_LIST_LIMIT: i64 = 100;
@@ -546,12 +547,12 @@ impl YouTubeService {
         pool: &PgPool,
         user_id: i64,
         request: YouTubeStartRequest,
-        inbox_dir: &str,
+        config: &AppConfig,
         proxy_url: Option<String>,
         cookie_contents: Option<String>,
     ) -> anyhow::Result<YouTubeJobDto> {
         let url = validate_youtube_url(&request.url)?;
-        validate_inbox_dir(inbox_dir)?;
+        validate_inbox_dir(&config.agent_inbox_dir)?;
         let selected: HashSet<String> = request
             .selected_source_ids
             .into_iter()
@@ -666,14 +667,8 @@ impl YouTubeService {
             );
         }
 
-        self.spawn_job(
-            pool.clone(),
-            id.clone(),
-            inbox_dir.to_string(),
-            proxy_url,
-            cookie_contents,
-        )
-        .await;
+        self.spawn_job(pool.clone(), id.clone(), config, proxy_url, cookie_contents)
+            .await;
         load_job_dto(pool, user_id, &id).await
     }
 
@@ -681,17 +676,17 @@ impl YouTubeService {
         self: &Arc<Self>,
         pool: &PgPool,
         user_id: i64,
-        inbox_dir: &str,
+        config: &AppConfig,
         proxy_url: Option<String>,
         cookie_contents: Option<String>,
     ) -> anyhow::Result<Vec<YouTubeJobDto>> {
-        validate_inbox_dir(inbox_dir)?;
+        validate_inbox_dir(&config.agent_inbox_dir)?;
         sync_ai_statuses(pool, user_id, None).await?;
         if let Err(error) = sync_target_playlist_tracks_for_user(pool, user_id).await {
             tracing::warn!(user_id, %error, "could not synchronize imported YouTube tracks with their target playlists");
         }
         let pending = self.pending_jobs(pool, user_id).await?;
-        self.resume_jobs(pool, pending, inbox_dir, proxy_url, cookie_contents)
+        self.resume_jobs(pool, pending, config, proxy_url, cookie_contents)
             .await;
         let ids: Vec<String> = sqlx::query_scalar(
             r#"SELECT id FROM furumusic__youtube_download
@@ -733,7 +728,7 @@ impl YouTubeService {
         self: &Arc<Self>,
         pool: &PgPool,
         resumable: Vec<String>,
-        inbox_dir: &str,
+        config: &AppConfig,
         proxy_url: Option<String>,
         cookie_contents: Option<String>,
     ) {
@@ -741,7 +736,7 @@ impl YouTubeService {
             self.spawn_job(
                 pool.clone(),
                 id,
-                inbox_dir.to_string(),
+                config,
                 proxy_url.clone(),
                 cookie_contents.clone(),
             )
@@ -754,11 +749,11 @@ impl YouTubeService {
         pool: &PgPool,
         user_id: i64,
         id: &str,
-        inbox_dir: &str,
+        config: &AppConfig,
         proxy_url: Option<String>,
         cookie_contents: Option<String>,
     ) -> anyhow::Result<YouTubeJobDto> {
-        validate_inbox_dir(inbox_dir)?;
+        validate_inbox_dir(&config.agent_inbox_dir)?;
         let job = load_job_row(pool, user_id, id).await?;
         if is_active_job_status(&job.status) {
             bail!("YouTube download is already active");
@@ -790,7 +785,7 @@ impl YouTubeService {
         self.spawn_job(
             pool.clone(),
             id.to_string(),
-            inbox_dir.to_string(),
+            config,
             proxy_url,
             cookie_contents,
         )
@@ -881,7 +876,7 @@ impl YouTubeService {
         self: &Arc<Self>,
         pool: PgPool,
         id: String,
-        inbox_dir: String,
+        config: &AppConfig,
         proxy_url: Option<String>,
         cookie_contents: Option<String>,
     ) {
@@ -898,6 +893,7 @@ impl YouTubeService {
             .insert(id.clone(), cancel.clone());
 
         let service = Arc::clone(self);
+        let config = config.clone();
         tokio::spawn(async move {
             let permit = tokio::select! {
                 permit = Arc::clone(&service.concurrency).acquire_owned() => permit.ok(),
@@ -908,7 +904,7 @@ impl YouTubeService {
                     .run_job(
                         &pool,
                         &id,
-                        &inbox_dir,
+                        &config,
                         proxy_url.as_deref(),
                         cookie_contents.as_deref(),
                         &cancel,
@@ -926,7 +922,7 @@ impl YouTubeService {
                 let _ = fail_parent(&pool, &id, &err.to_string()).await;
             }
             if cancel.is_cancelled()
-                && let Ok(inbox_root) = validate_inbox_dir(&inbox_dir)
+                && let Ok(inbox_root) = validate_inbox_dir(&config.agent_inbox_dir)
             {
                 let _ = tokio::fs::remove_dir_all(staging_job_root(&inbox_root, &id)).await;
             }
@@ -939,7 +935,7 @@ impl YouTubeService {
         &self,
         pool: &PgPool,
         id: &str,
-        inbox_dir: &str,
+        config: &AppConfig,
         proxy_url: Option<&str>,
         cookie_contents: Option<&str>,
         cancel: &CancellationToken,
@@ -951,7 +947,7 @@ impl YouTubeService {
         if cancel.is_cancelled() {
             return Ok(());
         }
-        let inbox_root = validate_inbox_dir(inbox_dir)?;
+        let inbox_root = validate_inbox_dir(&config.agent_inbox_dir)?;
         let job: YouTubeJobRow = sqlx::query_as(
             r#"SELECT id, user_id, source_url, title, source_kind,
                       target_playlist_id, status,
@@ -1037,7 +1033,7 @@ impl YouTubeService {
                 continue;
             }
             if let Err(err) = self
-                .process_item(pool, &job, &item, &inbox_root, ytdlp, cancel)
+                .process_item(pool, &job, &item, config, ytdlp, cancel)
                 .await
             {
                 if cancel.is_cancelled() {
@@ -1066,7 +1062,7 @@ impl YouTubeService {
         pool: &PgPool,
         job: &YouTubeJobRow,
         item: &YouTubeItemRow,
-        inbox_root: &Path,
+        config: &AppConfig,
         ytdlp: YtDlpOptions<'_>,
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
@@ -1076,7 +1072,8 @@ impl YouTubeService {
         set_item_status(pool, &item.id, "downloading", None).await?;
         set_parent_status(pool, &job.id, "downloading", None).await?;
 
-        let stage = staging_item_root(inbox_root, &job.id, &item.id);
+        let inbox_root = validate_inbox_dir(&config.agent_inbox_dir)?;
+        let stage = staging_item_root(&inbox_root, &job.id, &item.id);
         tokio::fs::create_dir_all(&stage).await?;
         let mut forbidden_retries = 0;
         loop {
@@ -1129,7 +1126,7 @@ impl YouTubeService {
         set_item_status(pool, &item.id, "postprocessing", None).await?;
         set_parent_status(pool, &job.id, "postprocessing", None).await?;
         let prepared =
-            prepare_downloaded_folder(pool, inbox_root, job.user_id, item, &stage, cancel).await?;
+            prepare_downloaded_folder(pool, config, job.user_id, item, &stage, cancel).await?;
 
         let now = now_string();
         if prepared.all_files_known {
@@ -1536,7 +1533,7 @@ async fn persist_item_progress(
 
 async fn prepare_downloaded_folder(
     pool: &PgPool,
-    inbox_root: &Path,
+    config: &AppConfig,
     user_id: i64,
     item: &YouTubeItemRow,
     stage: &Path,
@@ -1592,13 +1589,7 @@ async fn prepare_downloaded_folder(
     preserve_track_numbers(&mut audio_files, chapter_count, item.playlist_index, cancel).await?;
 
     for audio in &audio_files {
-        let hash = sha256_file(audio, cancel).await?;
-        if crate::agent::rag::file_hash_exists(pool, &hash)
-            .await
-            .unwrap_or(false)
-        {
-            tokio::fs::remove_file(audio).await?;
-        }
+        reuse_archived_audio(pool, config, &item.id, audio, cancel).await?;
     }
     audio_files = find_audio_files(stage).await?;
     if audio_files.is_empty() {
@@ -1615,6 +1606,7 @@ async fn prepare_downloaded_folder(
         bail!("YouTube import cancelled");
     }
     let folder_name = format!("{} [{}]", sanitize_component(&item.title), item.source_id);
+    let inbox_root = validate_inbox_dir(&config.agent_inbox_dir)?;
     let destination = inbox_root
         .join("user_uploads")
         .join(user_id.to_string())
@@ -1649,6 +1641,33 @@ async fn prepare_downloaded_folder(
         audio_file_count: i32::try_from(audio_files.len()).unwrap_or(i32::MAX),
         all_files_known: false,
     })
+}
+
+async fn reuse_archived_audio(
+    pool: &PgPool,
+    config: &AppConfig,
+    item_id: &str,
+    audio: &Path,
+    cancel: &CancellationToken,
+) -> anyhow::Result<()> {
+    let hash = sha256_file(audio, cancel).await?;
+    if let Some(media_id) =
+        crate::agent::rag::verified_audio_media(pool, &hash, &config.agent_storage_dir).await?
+    {
+        // Preserve the relation used to populate the destination playlist,
+        // even when this recording came from a different upload or source.
+        sqlx::query(
+            "INSERT INTO furumusic__youtube_import_media (item_id,media_file_id)
+                    VALUES ($1,$2) ON CONFLICT DO NOTHING",
+        )
+        .bind(item_id)
+        .bind(media_id)
+        .execute(pool)
+        .await?;
+        sync_target_playlists_for_imported_media(pool, media_id).await?;
+        crate::jobs::remove_exact_inbox_copy(config, audio, &hash).await?;
+    }
+    Ok(())
 }
 
 async fn sha256_file(path: &Path, cancel: &CancellationToken) -> anyhow::Result<String> {
@@ -1974,7 +1993,7 @@ pub(crate) async fn sync_ai_statuses(
         };
         let states: Vec<(String, i64)> = sqlx::query_as(
             r#"SELECT status::text, COUNT(*)
-               FROM furumusic__pending_review
+               FROM furumusic__upload_review_state
                WHERE input_path = $1
                   OR left(input_path, length($1) + 1) = $1 || '/'
                GROUP BY status"#,
@@ -2017,14 +2036,19 @@ pub(crate) async fn sync_ai_statuses(
             || counts.get("rejected").copied().unwrap_or(0) > 0
         {
             ("needs_review", None)
+        } else if counts.get("cancelled").copied().unwrap_or(0) > 0 {
+            ("cancelled", None)
         } else {
             ("complete", None)
         };
 
         if item.status != next || item.error != error {
             let now = now_string();
-            let completed_at =
-                matches!(next, "complete" | "needs_review" | "ai_failed").then(|| now.clone());
+            let completed_at = matches!(
+                next,
+                "complete" | "needs_review" | "ai_failed" | "cancelled"
+            )
+            .then(|| now.clone());
             sqlx::query(
                 r#"UPDATE furumusic__youtube_download_item
                    SET status = $2, error = $3, completed_at = $4, updated_at = $5
@@ -2155,7 +2179,9 @@ async fn refresh_parent(pool: &PgPool, job_id: &str) -> anyhow::Result<()> {
         "awaiting_ai"
     } else if failed == total {
         "failed"
-    } else if failed > 0 {
+    } else if count("cancelled") == total {
+        "cancelled"
+    } else if failed > 0 || count("cancelled") > 0 {
         "complete_with_errors"
     } else if review > 0 {
         "needs_review"
@@ -2624,6 +2650,70 @@ pub mod db_migrations {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires disposable PostgreSQL in FURU_IMPORT_TEST_DATABASE_URL"]
+    async fn youtube_staging_keeps_unverified_audio_and_links_verified_playlist_tracks()
+    -> anyhow::Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&std::env::var("FURU_IMPORT_TEST_DATABASE_URL")?)
+            .await?;
+        sqlx::raw_sql(r#"
+            CREATE TEMP TABLE furumusic__media_file(id bigint, file_path text, file_type text, sha256_hash text);
+            CREATE TEMP TABLE furumusic__track(id bigint, audio_file_id bigint, track_number int);
+            CREATE TEMP TABLE furumusic__youtube_import_media(item_id text, media_file_id bigint, PRIMARY KEY(item_id,media_file_id));
+            CREATE TEMP TABLE furumusic__youtube_download(id text, user_id bigint, target_playlist_id bigint);
+            CREATE TEMP TABLE furumusic__youtube_download_item(id text, job_id text, source_id text, playlist_index int);
+            CREATE TEMP TABLE furumusic__playlist(id bigint, owner_id bigint, updated_at text);
+            CREATE TEMP TABLE furumusic__playlist_track(playlist_id bigint,track_id bigint,position int,added_at text,added_by_user_id bigint);
+            INSERT INTO furumusic__track VALUES (43,7,1);
+            INSERT INTO furumusic__youtube_download VALUES ('job',1,4);
+            INSERT INTO furumusic__youtube_download_item VALUES ('item','job','video',1);
+            INSERT INTO furumusic__playlist VALUES (4,1,'');
+        "#).execute(&pool).await?;
+        let temp = tempfile::tempdir()?;
+        let inbox = temp.path().join("inbox");
+        let library = temp.path().join("library");
+        std::fs::create_dir(&inbox)?;
+        std::fs::create_dir(&library)?;
+        let audio = inbox.join("staged.mp3");
+        let catalog = library.join("existing.mp3");
+        let config = AppConfig {
+            agent_inbox_dir: inbox.to_string_lossy().into_owned(),
+            agent_storage_dir: library.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let cancel = CancellationToken::new();
+        let bytes = b"downloaded audio";
+        std::fs::write(&audio, bytes)?;
+        std::fs::write(&catalog, b"different bytes")?;
+        sqlx::query("INSERT INTO furumusic__media_file VALUES (7,'existing.mp3','audio',$1)")
+            .bind(sha256_file(&audio, &cancel).await?)
+            .execute(&pool)
+            .await?;
+        reuse_archived_audio(&pool, &config, "item", &audio, &cancel).await?;
+        assert_eq!(std::fs::read(&audio)?, bytes);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM furumusic__youtube_import_media")
+                .fetch_one(&pool)
+                .await?,
+            0
+        );
+        std::fs::write(&catalog, bytes)?;
+        reuse_archived_audio(&pool, &config, "item", &audio, &cancel).await?;
+        assert!(!audio.exists());
+        assert_eq!(std::fs::read(&catalog)?, bytes);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT track_id FROM furumusic__playlist_track WHERE playlist_id=4"
+            )
+            .fetch_one(&pool)
+            .await?,
+            43
+        );
+        Ok(())
+    }
 
     #[test]
     fn cookie_models_use_exact_migrated_table_name() {

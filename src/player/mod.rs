@@ -2993,7 +2993,24 @@ async fn user_upload_review_save_handler(
     };
     let result_json = serde_json::to_string(&normalized)
         .map_err(|e| cot::Error::internal(format!("failed to serialize review fields: {e}")))?;
-    save_user_upload_review_result(&db, review_id, result_json).await?;
+    let owner_pattern = format!(r#""uploaded_by_user_id"\s*:\s*{}([^0-9]|$)"#, user.id);
+    let updated = sqlx::query(
+        "UPDATE furumusic__pending_review SET result_json=$3, updated_at=$4
+        WHERE id=$1 AND context_json ~ $2 AND status IN ('pending','failed')",
+    )
+    .bind(review_id)
+    .bind(owner_pattern)
+    .bind(result_json)
+    .bind(now_iso_string())
+    .execute(pool)
+    .await
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
+    if updated.rows_affected() == 0 {
+        return Ok(json_error(
+            StatusCode::CONFLICT,
+            "review is no longer editable",
+        ));
+    }
     let mut reviews = load_user_upload_reviews(pool, user.id, Some(review_id), 1)
         .await?
         .0;
@@ -3014,20 +3031,10 @@ async fn user_upload_review_delete_handler(
         return Ok(json_error(StatusCode::UNAUTHORIZED, "not authenticated"));
     };
     let review_id = path.0.id;
-    let uploaded_by_pattern = format!(r#""uploaded_by_user_id"\s*:\s*{}([^0-9]|$)"#, user.id);
-    let result = sqlx::query(
-        r#"DELETE FROM furumusic__pending_review
-           WHERE id = $1
-             AND context_json IS NOT NULL
-             AND context_json ~ $2
-             AND status IN ('pending', 'failed')"#,
-    )
-    .bind(review_id)
-    .bind(uploaded_by_pattern)
-    .execute(pool)
-    .await
-    .map_err(|e| cot::Error::internal(e.to_string()))?;
-    if result.rows_affected() == 0 {
+    let affected = crate::scheduler::PendingReview::dismiss(pool, &[review_id], Some(user.id))
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
+    if affected == 0 {
         return Ok(json_error(StatusCode::NOT_FOUND, "upload review not found"));
     }
     let page = load_user_uploads_page(pool, user.id, 500).await?;
@@ -3059,46 +3066,44 @@ async fn user_upload_review_approve_handler(
         .await
         .map_err(|e| cot::Error::internal(format!("db error: {e}")))?
         .ok_or_else(|| cot::Error::internal("upload review not found"))?;
-    let status = review.status.as_str();
-    if status == "processing" || status == "approved" || status == "auto_approved" {
+    if !review
+        .claim_for_processing(pool, Some(result_json))
+        .await
+        .map_err(|e| cot::Error::internal(format!("db error: {e}")))?
+    {
         return Ok(json_error(
             StatusCode::BAD_REQUEST,
             "review cannot be approved from this status",
         ));
     }
-    review
-        .set_result_json(&db, result_json)
-        .await
-        .map_err(|e| cot::Error::internal(format!("db error: {e}")))?;
-
     let context: serde_json::Value =
         serde_json::from_str(review.context_json_str()).unwrap_or_default();
     let (live_config, _) = AppConfig::load_with_db(&db).await;
-    let input_path = crate::media_paths::resolve_path_from_root(
-        &live_config.agent_inbox_dir,
-        review.input_path_str(),
-    );
-    let input_path = input_path.to_string_lossy().to_string();
     match crate::jobs::inbox_process::finalize_approved(
         &db,
         pool,
         &live_config,
-        &input_path,
+        review.input_path_str(),
         &normalized,
         &context,
-        &live_config.agent_storage_dir,
-        None,
+        crate::jobs::inbox_process::ReviewApproval::Check(None),
     )
     .await
     {
         Ok(()) => {
-            let _ = review.set_approved(&db).await;
+            review
+                .set_approved(&db)
+                .await
+                .map_err(|e| cot::Error::internal(format!("db error: {e}")))?;
             let page = load_user_uploads_page(pool, user.id, 500).await?;
             Json(page).into_response()
         }
         Err(err) => {
             let message = err.to_string();
-            let _ = review.set_failed(&db, &message).await;
+            review
+                .set_approval_error(&db, &err)
+                .await
+                .map_err(|e| cot::Error::internal(format!("db error: {e}")))?;
             Ok(json_error(StatusCode::BAD_REQUEST, &message))
         }
     }
@@ -3499,22 +3504,6 @@ async fn uploaded_track_release_ids(
         return Ok(Vec::new());
     }
     Ok(rows)
-}
-
-async fn save_user_upload_review_result(
-    db: &Database,
-    review_id: i64,
-    result_json: String,
-) -> cot::Result<()> {
-    let mut review = crate::scheduler::PendingReview::get_by_id(db, review_id)
-        .await
-        .map_err(|e| cot::Error::internal(format!("db error: {e}")))?
-        .ok_or_else(|| cot::Error::internal("upload review not found"))?;
-    review
-        .set_result_json(db, result_json)
-        .await
-        .map_err(|e| cot::Error::internal(format!("db error: {e}")))?;
-    Ok(())
 }
 
 async fn replace_release_artists(
@@ -8511,7 +8500,7 @@ impl App for PlayerApp {
                                     .list(
                                         pg_pool,
                                         user.id,
-                                        &live_config.agent_inbox_dir,
+                                        &live_config,
                                         proxy_url,
                                         cookie_contents,
                                     )
@@ -8584,7 +8573,7 @@ impl App for PlayerApp {
                                         pg_pool,
                                         user.id,
                                         json.0,
-                                        &live_config.agent_inbox_dir,
+                                        &live_config,
                                         proxy_url,
                                         cookie_contents,
                                     )
@@ -8657,7 +8646,7 @@ impl App for PlayerApp {
                                         pg_pool,
                                         user.id,
                                         &path.0.id,
-                                        &live_config.agent_inbox_dir,
+                                        &live_config,
                                         proxy_url,
                                         cookie_contents,
                                     )

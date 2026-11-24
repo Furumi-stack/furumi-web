@@ -45,7 +45,7 @@
                 <section class="panel jobs-list-panel">
                     <div class="panel-head">
                         <div class="panel-title">
-                            <strong>Pending Reviews</strong>
+                            <strong>Review Queue</strong>
                             <span x-text="reviewPanelSubtitle()"></span>
                         </div>
                         <div class="toolbar">
@@ -82,7 +82,7 @@
                                 <i data-lucide="check"></i>
                                 <span x-text="reviewBulkBusy && reviewBulkAction === 'approve' ? 'Approving…' : 'Approve selected'"></span>
                             </button>
-                            <button class="btn warn" @click="bulkReviews('requeue')" :disabled="reviewBulkBusy || selectedReviewCount() === 0">
+                            <button class="btn warn" @click="bulkReviews('requeue')" :disabled="reviewBulkBusy || !selectedRequeueCount()">
                                 <i data-lucide="rotate-ccw"></i>
                                 Requeue selected
                             </button>
@@ -1395,10 +1395,10 @@
                     <input readonly :value="activeReview?.model_name || 'not processed yet'" />
                 </div>
                 <div class="field" x-show="activeReview?.error_message">
-                    <label>Error</label>
+                    <label x-text="activeReview?.status === 'conflict' ? 'Recording conflict' : 'Error'"></label>
                     <textarea readonly x-text="activeReview?.error_message || ''"></textarea>
                 </div>
-                <div x-show="activeReview?.status === 'pending'">
+                <div x-show="['pending', 'conflict'].includes(activeReview?.status)">
                     <div class="field">
                         <label>Artist</label>
                         <input x-model="reviewDraft.artist" />
@@ -1448,17 +1448,21 @@
                     </div>
                 </div>
                 <div class="toolbar dialog-actions">
-                    <button class="btn primary" x-show="activeReview?.status === 'pending'" @click="approveActiveReview()">
+                    <button class="btn primary" x-show="['pending', 'conflict'].includes(activeReview?.status)" :disabled="reviewApprovalBusy" @click="approveActiveReview()">
                         <i data-lucide="check"></i>
-                        Approve
+                        <span x-text="activeReview?.status === 'conflict' ? 'Check edited metadata' : 'Approve'"></span>
                     </button>
-                    <button class="btn warn" @click="bulkOneReview('requeue', activeReview)">
+                    <button class="btn" x-show="activeReview?.status === 'conflict'" :disabled="reviewApprovalBusy" @click="approveActiveReview(true)">
+                        <i data-lucide="disc"></i>
+                        Import as a separate recording
+                    </button>
+                    <button class="btn warn" x-show="['pending','failed','rejected'].includes(activeReview?.status)" :disabled="reviewApprovalBusy" @click="bulkOneReview('requeue', activeReview)">
                         <i data-lucide="rotate-ccw"></i>
                         Requeue
                     </button>
-                    <button class="btn danger" @click="bulkOneReview('delete', activeReview)">
+                    <button class="btn danger" :disabled="reviewApprovalBusy || activeReview?.status === 'processing'" @click="bulkOneReview('delete', activeReview)">
                         <i data-lucide="trash-2"></i>
-                        Delete
+                        <span x-text="activeReview?.status === 'conflict' ? 'Dismiss upload' : 'Delete'"></span>
                     </button>
                 </div>
             </div>
@@ -2112,11 +2116,13 @@ function adminV2() {
             notes: ''
         },
         reviewModalOpen: false,
+        reviewApprovalBusy: false,
         reviewStatuses: [
             { value: null, label: 'All' },
             { value: 'queued', label: 'Queued' },
             { value: 'processing', label: 'Processing' },
             { value: 'pending', label: 'Pending' },
+            { value: 'conflict', label: 'Recording conflicts' },
             { value: 'failed', label: 'Failed' }
         ],
         jobs: [],
@@ -3184,6 +3190,15 @@ function adminV2() {
             return Object.values(this.selectedReviewIds).filter(status => status === 'pending').length;
         },
 
+        selectedRequeueCount() {
+            const eligible = ['pending', 'failed', 'rejected'];
+            if (this.reviewSelectionScope === 'filter') {
+                const counts = this.filterStatusCounts();
+                return eligible.reduce((total, status) => total + (counts[status] || 0), 0);
+            }
+            return Object.values(this.selectedReviewIds).filter(status => eligible.includes(status)).length;
+        },
+
         reviewSelectionSummary() {
             const total = this.selectedReviewCount();
             if (!total) return 'Nothing selected';
@@ -3210,7 +3225,8 @@ function adminV2() {
             const count = this.selectedReviewCount();
             if (!count) return;
             if (action === 'approve' && !this.selectedPendingReviewCount()) return;
-            if (action === 'delete' && !confirm(`Delete ${count} review row(s)?`)) return;
+            if (action === 'requeue' && !this.selectedRequeueCount()) return;
+            if (action === 'delete' && !confirm(`Dismiss ${count} review(s)? Furumi will skip these files on future scans. Audio files are kept.`)) return;
             const payload = {
                 action,
                 mode: this.reviewSelectionScope,
@@ -3229,10 +3245,11 @@ function adminV2() {
                 });
                 this.showToast(action === 'approve'
                     ? `${result.affected} review(s) approved · ${result.failed || 0} failed · ${result.skipped || 0} skipped`
-                    : `${result.affected} review row(s) updated`);
+                    : `${result.affected} review(s) ${action === 'delete' ? 'dismissed' : 'requeued'} · ${result.skipped || 0} skipped`);
                 this.clearReviewSelection();
                 await this.loadReviews(false);
                 if (action === 'approve') await this.loadLibrary(false);
+                return true;
             } catch (error) {
                 this.showToast(error.message);
             } finally {
@@ -3244,16 +3261,17 @@ function adminV2() {
         async bulkOneReview(action, row) {
             this.reviewSelectionScope = 'ids';
             this.selectedReviewIds = { [row.id]: row.status };
-            await this.bulkReviews(action);
-            this.reviewModalOpen = false;
+            if (await this.bulkReviews(action)) this.reviewModalOpen = false;
         },
 
-        async approveActiveReview() {
-            if (!this.activeReview) return;
+        async approveActiveReview(importSeparately = false) {
+            if (!this.activeReview || this.reviewApprovalBusy) return;
+            const row = this.activeReview;
+            this.reviewApprovalBusy = true;
             try {
-                await this.request(`${this.apiBase}/reviews/${this.activeReview.id}/approve`, {
+                await this.request(`${this.apiBase}/reviews/${row.id}/approve`, {
                     method: 'POST',
-                    body: JSON.stringify(this.reviewDraft)
+                    body: JSON.stringify({ ...this.reviewDraft, import_separately: importSeparately })
                 });
                 this.showToast('Review approved');
                 this.reviewModalOpen = false;
@@ -3262,6 +3280,13 @@ function adminV2() {
                 await this.loadLibrary(false);
             } catch (error) {
                 this.showToast(error.message);
+                if (error.message.startsWith('Duplicate check needs review:')) {
+                    row.status = 'conflict';
+                    row.error_message = error.message;
+                    await this.loadReviews(false);
+                }
+            } finally {
+                this.reviewApprovalBusy = false;
             }
         },
 

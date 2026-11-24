@@ -387,30 +387,6 @@ impl PendingReview {
         Ok(review)
     }
 
-    pub async fn create_queued(
-        db: &Database,
-        job_run_id: i64,
-        review_type: &str,
-        input_path: Option<&str>,
-        context_json: Option<&str>,
-    ) -> cot::db::Result<Self> {
-        let now = now_iso();
-        let mut review = Self {
-            id: Auto::auto(),
-            job_run_id,
-            review_type: LimitedString::new(review_type).unwrap(),
-            input_path: input_path.map(|s| s.to_owned()),
-            context_json: context_json.map(|s| s.to_owned()),
-            result_json: None,
-            status: LimitedString::new("queued").unwrap(),
-            created_at: now.clone(),
-            updated_at: now,
-            error_message: None,
-        };
-        review.insert(db).await?;
-        Ok(review)
-    }
-
     pub async fn list_all(db: &Database) -> cot::db::Result<Vec<Self>> {
         Self::objects().all(db).await
     }
@@ -445,10 +421,39 @@ impl PendingReview {
         self.save(db).await
     }
 
-    pub async fn set_processing(&mut self, db: &Database) -> cot::db::Result<()> {
+    /// Claim the version of the review the caller read, optionally applying
+    /// edited metadata in the same update as the transition to processing.
+    pub async fn claim_for_processing(
+        &mut self,
+        pool: &sqlx::PgPool,
+        edited_result: Option<String>,
+    ) -> sqlx::Result<bool> {
+        if matches!(
+            self.status_str(),
+            "processing" | "approved" | "auto_approved"
+        ) {
+            return Ok(false);
+        }
+        let now = now_iso();
+        let result: Option<Option<String>> = sqlx::query_scalar(
+            "UPDATE furumusic__pending_review SET status = 'processing', updated_at = $2, \
+             error_message = NULL, result_json = COALESCE($3, result_json) \
+             WHERE id = $1 AND status = $4 RETURNING result_json",
+        )
+        .bind(self.id_val())
+        .bind(now.as_str())
+        .bind(edited_result)
+        .bind(self.status_str())
+        .fetch_optional(pool)
+        .await?;
+        let Some(result_json) = result else {
+            return Ok(false);
+        };
         self.status = LimitedString::new("processing").unwrap();
-        self.updated_at = now_iso();
-        self.save(db).await
+        self.updated_at = now;
+        self.error_message = None;
+        self.result_json = result_json;
+        Ok(true)
     }
 
     pub async fn set_auto_approved(&mut self, db: &Database) -> cot::db::Result<()> {
@@ -472,6 +477,21 @@ impl PendingReview {
         self.error_message = Some(error.to_owned());
         self.updated_at = now_iso();
         self.save(db).await
+    }
+
+    pub async fn set_approval_error(
+        &mut self,
+        db: &Database,
+        error: &anyhow::Error,
+    ) -> cot::db::Result<()> {
+        if let Some(conflict) = error.downcast_ref::<crate::agent::dedup::DuplicateReview>() {
+            self.status = LimitedString::new("pending").unwrap();
+            self.error_message = Some(conflict.to_string());
+            self.updated_at = now_iso();
+            self.save(db).await
+        } else {
+            self.set_failed(db, &format!("{error:#}")).await
+        }
     }
 
     pub async fn list_queued(db: &Database) -> cot::db::Result<Vec<Self>> {
@@ -555,26 +575,113 @@ impl PendingReview {
         Ok(())
     }
 
-    pub async fn requeue_by_ids(db: &Database, ids: &[i64]) -> cot::db::Result<()> {
-        let now = now_iso().to_string();
-        for chunk in ids.chunks(1000) {
-            if chunk.is_empty() {
-                continue;
-            }
-            let id_list = chunk
-                .iter()
-                .map(i64::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            db.raw(&format!(
-                "UPDATE furumusic__pending_review \
-                 SET status = 'queued', error_message = NULL, updated_at = '{}' \
-                 WHERE id IN ({id_list})",
-                now.replace('\'', "''")
-            ))
+    pub async fn requeue(pool: &sqlx::PgPool, ids: &[i64]) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            "UPDATE furumusic__pending_review SET status='queued', error_message=NULL, updated_at=$2 \
+             WHERE id=ANY($1) AND status IN ('failed','rejected','pending') \
+               AND COALESCE(error_message,'') NOT LIKE '%Duplicate check needs review:%'",
+        )
+        .bind(ids)
+        .bind(now_iso().as_str())
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn is_dismissed<'e>(
+        executor: impl sqlx::PgExecutor<'e>,
+        input_path: &str,
+        sha256: &str,
+    ) -> sqlx::Result<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM furumusic__dismissed_review \
+             WHERE input_path=$1 AND sha256=lower($2))",
+        )
+        .bind(input_path)
+        .bind(sha256)
+        .fetch_one(executor)
+        .await
+    }
+
+    // Discovery does file I/O before calling this. Only serialize its final
+    // database decision with other discoverers and explicit dismissals.
+    async fn discovery_transaction(
+        pool: &sqlx::PgPool,
+    ) -> sqlx::Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let mut transaction = pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('furumi-inbox-discovery',0))")
+            .execute(&mut *transaction)
             .await?;
+        Ok(transaction)
+    }
+
+    pub async fn enqueue_discovered(
+        pool: &sqlx::PgPool,
+        run_id: i64,
+        input_path: &str,
+        sha256: &str,
+        context_json: &str,
+    ) -> sqlx::Result<bool> {
+        let mut transaction = Self::discovery_transaction(pool).await?;
+        if Self::is_dismissed(&mut *transaction, input_path, sha256).await? {
+            return Ok(false);
         }
-        Ok(())
+        let current: Option<(i64, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, status::text, context_json FROM furumusic__pending_review \
+             WHERE input_path=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE",
+        )
+        .bind(input_path)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let now = now_iso();
+        if let Some((id, status, context)) = current
+            && !matches!(status.as_str(), "approved" | "auto_approved")
+        {
+            let recorded =
+                context.and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok());
+            let previous_sha = recorded.as_ref().and_then(|json| json["sha256"].as_str());
+            if status == "processing"
+                || previous_sha.is_some_and(|previous| previous.eq_ignore_ascii_case(sha256))
+            {
+                return Ok(false);
+            }
+            // A replacement needs its own identity: a stale admin dialog for
+            // the old bytes must not approve or dismiss the new upload.
+            sqlx::query("DELETE FROM furumusic__pending_review WHERE id=$1")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO furumusic__pending_review \
+             (job_run_id,review_type,input_path,context_json,status,created_at,updated_at) \
+             VALUES ($1,'new_file',$2,$3,'queued',$4,$4)",
+        )
+        .bind(run_id)
+        .bind(input_path)
+        .bind(context_json)
+        .bind(now.as_str())
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn dismiss(
+        pool: &sqlx::PgPool,
+        ids: &[i64],
+        owner: Option<i64>,
+    ) -> sqlx::Result<u64> {
+        let mut transaction = Self::discovery_transaction(pool).await?;
+        let owner_pattern =
+            owner.map(|id| format!(r#""uploaded_by_user_id"\s*:\s*{id}([^0-9]|$)"#));
+        let affected: i64 = sqlx::query_scalar(include_str!("dismiss_reviews.sql"))
+            .bind(ids)
+            .bind(owner_pattern)
+            .fetch_one(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(affected as u64)
     }
 
     pub fn id_val(&self) -> i64 {
@@ -933,6 +1040,43 @@ pub mod db_migrations {
             .build()];
     }
 
+    #[cot::db::migrations::migration_op]
+    async fn create_review_dismissals(
+        ctx: migrations::MigrationContext<'_>,
+    ) -> cot::db::Result<()> {
+        for statement in include_str!("review_dismissal_schema.sql").split(';') {
+            if !statement.trim().is_empty() {
+                ctx.db.raw(statement).await?;
+            }
+        }
+        // Older instances may have marked an archived upload complete after
+        // its inbox file was removed. Restore its recorded dismissal.
+        ctx.db
+            .raw(
+                "UPDATE furumusic__local_upload u SET status='cancelled', error=NULL, \
+            updated_at=to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+            completed_at=COALESCE(u.completed_at, u.updated_at) \
+            FROM furumusic__upload_review_state r WHERE r.input_path=u.inbox_path \
+            AND r.status='cancelled' AND u.status <> 'cancelled'",
+            )
+            .await?;
+        Ok(())
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct M0064ReviewDismissals;
+    impl migrations::Migration for M0064ReviewDismissals {
+        const APP_NAME: &'static str = "furumusic";
+        const MIGRATION_NAME: &'static str = "m_0064_review_dismissals";
+        const DEPENDENCIES: &'static [migrations::MigrationDependency] =
+            &[migrations::MigrationDependency::migration(
+                "furumusic",
+                "m_0063_download_history",
+            )];
+        const OPERATIONS: &'static [Operation] =
+            &[Operation::custom(create_review_dismissals).build()];
+    }
+
     pub const MIGRATIONS: &[&SyncDynMigration] = &[
         &M0022CreateScheduledJob,
         &M0023CreateJobRun,
@@ -940,6 +1084,7 @@ pub mod db_migrations {
         &M0025CreateSchedulerIndexes,
         &M0026AddPendingReviewErrorMessage,
         &M0027CreateProcessingStats,
+        &M0064ReviewDismissals,
     ];
 }
 

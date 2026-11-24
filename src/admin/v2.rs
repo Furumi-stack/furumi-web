@@ -379,6 +379,8 @@ struct ReviewDto {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub(super) struct ReviewEditDto {
+    #[serde(default, skip_serializing)]
+    import_separately: bool,
     title: String,
     artist: String,
     album: String,
@@ -1016,34 +1018,23 @@ pub async fn bulk_reviews(
         return Json(approve_selected_reviews(&db, pool, &body).await?).into_response();
     }
 
-    let mode = body.mode.as_deref().unwrap_or("ids");
-    let affected = if mode == "filter" {
-        apply_review_filter_action(pool, action, body.filter.unwrap_or_default()).await?
+    let ids: Vec<i64> = selected_reviews_query(&body)
+        .build_query_scalar()
+        .fetch_all(pool)
+        .await
+        .map_err(|e| cot::Error::internal(e.to_string()))?;
+    let affected = if action == "delete" {
+        scheduler::PendingReview::dismiss(pool, &ids, None).await
     } else {
-        let mut ids = body.ids.unwrap_or_default();
-        ids.retain(|id| *id > 0);
-        ids.sort_unstable();
-        ids.dedup();
-        if ids.is_empty() {
-            0
-        } else if action == "delete" {
-            crate::scheduler::PendingReview::delete_by_ids(&db, &ids)
-                .await
-                .map_err(|e| cot::Error::internal(e.to_string()))?;
-            ids.len() as u64
-        } else {
-            crate::scheduler::PendingReview::requeue_by_ids(&db, &ids)
-                .await
-                .map_err(|e| cot::Error::internal(e.to_string()))?;
-            ids.len() as u64
-        }
-    };
+        scheduler::PendingReview::requeue(pool, &ids).await
+    }
+    .map_err(|e| cot::Error::internal(e.to_string()))?;
 
     Json(BulkReviewsResponse {
         ok: true,
         affected,
         failed: 0,
-        skipped: 0,
+        skipped: ids.len() as u64 - affected,
     })
     .into_response()
 }
@@ -1091,22 +1082,13 @@ async fn approve_selected_reviews(
             result.skipped += 1;
             continue;
         };
-        if review.status_str() != "pending" {
-            result.skipped += 1;
-            continue;
-        }
-
-        // Claim one row at a time so overlapping bulk requests cannot import it twice.
-        let claimed = sqlx::query(
-            "UPDATE furumusic__pending_review SET status = 'processing', updated_at = $2 \
-             WHERE id = $1 AND status = 'pending'",
-        )
-        .bind(row.id)
-        .bind(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string())
-        .execute(pool)
-        .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
-        if claimed.rows_affected() == 0 {
+        if review.status_str() != "pending"
+            || agent::dedup::DuplicateReview::is_recorded(review.error_message.as_deref())
+            || !review
+                .claim_for_processing(pool, None)
+                .await
+                .map_err(|e| cot::Error::internal(e.to_string()))?
+        {
             result.skipped += 1;
             continue;
         }
@@ -1115,7 +1097,7 @@ async fn approve_selected_reviews(
             let normalized = serde_json::from_str::<crate::agent::dto::NormalizedFields>(
                 review.result_json_str(),
             )?;
-            finalize_review_approval(db, pool, &config, &mut review, &normalized).await
+            finalize_review_approval(db, pool, &config, &mut review, &normalized, false).await
         }
         .await;
         match approval {
@@ -1123,10 +1105,14 @@ async fn approve_selected_reviews(
             Err(error) => {
                 tracing::error!(review_id = row.id, ?error, "bulk review approval failed");
                 review
-                    .set_failed(db, &format!("Review approval failed: {error:#}"))
+                    .set_approval_error(db, &error)
                     .await
                     .map_err(|e| cot::Error::internal(e.to_string()))?;
-                result.failed += 1;
+                if error.is::<agent::dedup::DuplicateReview>() {
+                    result.skipped += 1;
+                } else {
+                    result.failed += 1;
+                }
             }
         }
     }
@@ -1150,23 +1136,54 @@ pub async fn approve_review(
         .map_err(|e| cot::Error::internal(e.to_string()))?
         .ok_or_else(|| cot::Error::internal("review not found"))?;
     let normalized = normalized_from_review_edit(&body);
+    if body.import_separately
+        && !(review.status_str() == "pending"
+            && agent::dedup::DuplicateReview::is_recorded(review.error_message.as_deref()))
+    {
+        return Ok(json_error(
+            StatusCode::CONFLICT,
+            "review has no recording conflict to resolve",
+        ));
+    }
     let result_json = serde_json::to_string(&normalized)
         .map_err(|e| cot::Error::internal(format!("failed to serialize review fields: {e}")))?;
-    review
-        .set_result_json(&db, result_json)
+    if !review
+        .claim_for_processing(pool, Some(result_json))
         .await
-        .map_err(|e| cot::Error::internal(e.to_string()))?;
+        .map_err(|e| cot::Error::internal(e.to_string()))?
+    {
+        return Ok(json_error(
+            StatusCode::CONFLICT,
+            "review cannot be approved from this status",
+        ));
+    }
 
     let (live_config, _) = AppConfig::load_with_db(&db).await;
-    match finalize_review_approval(&db, pool, &live_config, &mut review, &normalized).await {
+    match finalize_review_approval(
+        &db,
+        pool,
+        &live_config,
+        &mut review,
+        &normalized,
+        body.import_separately,
+    )
+    .await
+    {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(error) => {
-            tracing::error!(?error, "review approval failed");
-            let _ = review.set_rejected(&db).await;
-            Ok(json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "review approval failed",
-            ))
+            tracing::error!(review_id, ?error, "review approval failed");
+            review
+                .set_approval_error(&db, &error)
+                .await
+                .map_err(|e| cot::Error::internal(e.to_string()))?;
+            if let Some(conflict) = error.downcast_ref::<agent::dedup::DuplicateReview>() {
+                Ok(json_error(StatusCode::CONFLICT, &conflict.to_string()))
+            } else {
+                Ok(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "review approval failed",
+                ))
+            }
         }
     }
 }
@@ -1177,24 +1194,29 @@ async fn finalize_review_approval(
     config: &AppConfig,
     review: &mut crate::scheduler::PendingReview,
     normalized: &crate::agent::dto::NormalizedFields,
+    import_separately: bool,
 ) -> anyhow::Result<()> {
     let context: serde_json::Value =
         serde_json::from_str(review.context_json_str()).unwrap_or_default();
-    let input_path = review.input_path_str().to_owned();
     let stats = crate::scheduler::ProcessingStats::get_by_review_id(db, review.id_val())
         .await
         .unwrap_or(None);
     let model_name = stats.as_ref().map(|s| s.model_name.to_string());
+    use crate::jobs::inbox_process::ReviewApproval;
+    let approval = if import_separately {
+        ReviewApproval::Separate(model_name.as_deref())
+    } else {
+        ReviewApproval::Check(model_name.as_deref())
+    };
 
     crate::jobs::inbox_process::finalize_approved(
         db,
         pool,
         config,
-        &input_path,
+        review.input_path_str(),
         normalized,
         &context,
-        &config.agent_storage_dir,
-        model_name.as_deref(),
+        approval,
     )
     .await?;
     review.set_approved(db).await?;
@@ -3165,12 +3187,12 @@ async fn load_review_page(pool: &PgPool, query: ReviewsQuery) -> anyhow::Result<
     let total_all = count_reviews(pool, None, search_pattern.clone()).await?;
     let status_counts = load_review_status_counts(pool, None, search_pattern.clone()).await?;
 
-    let mut qb = QueryBuilder::<Postgres>::new(
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT id, job_run_id, review_type::text AS review_type, input_path, context_json, \
-                result_json, status::text AS status, created_at::text AS created_at, \
+                result_json, {REVIEW_QUEUE_STATUS} AS status, created_at::text AS created_at, \
                 updated_at::text AS updated_at, error_message \
          FROM furumusic__pending_review WHERE 1=1",
-    );
+    ));
     push_review_filters(&mut qb, status.clone(), search_pattern.clone());
     qb.push(" ORDER BY id DESC LIMIT ");
     qb.push_bind(limit);
@@ -3214,12 +3236,12 @@ async fn load_review_status_counts(
     status: Option<String>,
     search_pattern: Option<String>,
 ) -> anyhow::Result<Vec<StatusCountDto>> {
-    let mut qb = QueryBuilder::<Postgres>::new(
-        "SELECT status::text AS status, COUNT(*) AS count \
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
+        "SELECT {REVIEW_QUEUE_STATUS} AS status, COUNT(*) AS count \
          FROM furumusic__pending_review WHERE 1=1",
-    );
+    ));
     push_review_filters(&mut qb, status, search_pattern);
-    qb.push(" GROUP BY status ORDER BY status");
+    qb.push(" GROUP BY 1 ORDER BY 1");
 
     let rows = qb
         .build_query_as::<StatusCountRow>()
@@ -3234,13 +3256,18 @@ async fn load_review_status_counts(
         .collect())
 }
 
+// A recording conflict is still pending a human decision. Project it as its
+// own queue so old review rows and new decisions share the same filters.
+const REVIEW_QUEUE_STATUS: &str = "CASE WHEN status = 'pending' AND \
+    starts_with(error_message, 'Duplicate check needs review:') THEN 'conflict' ELSE status::text END";
+
 fn push_review_filters(
     qb: &mut QueryBuilder<'_, Postgres>,
     status: Option<String>,
     search_pattern: Option<String>,
 ) {
     if let Some(status) = status {
-        qb.push(" AND status = ");
+        qb.push(" AND ").push(REVIEW_QUEUE_STATUS).push(" = ");
         qb.push_bind(status);
     }
     if let Some(pattern) = search_pattern {
@@ -3353,6 +3380,7 @@ fn review_edit_dto_from_json(result_json: &str) -> ReviewEditDto {
         return ReviewEditDto::default();
     };
     ReviewEditDto {
+        import_separately: false,
         title: normalized.title.unwrap_or_default(),
         artist: normalized.artist.unwrap_or_default(),
         album: normalized.album.unwrap_or_default(),
@@ -3432,40 +3460,6 @@ fn media_tags(row: &ReviewMediaRow) -> Vec<TagDto> {
     }
     tags.push(tag(size_display(row.file_size_bytes), "size"));
     tags
-}
-
-async fn apply_review_filter_action(
-    pool: &PgPool,
-    action: &str,
-    filter: ReviewFilter,
-) -> cot::Result<u64> {
-    let status = normalize_status(filter.status.as_deref());
-    let search_pattern = clean_search(filter.search.as_deref()).map(|s| format!("%{s}%"));
-
-    let result = if action == "delete" {
-        let mut qb =
-            QueryBuilder::<Postgres>::new("DELETE FROM furumusic__pending_review WHERE 1=1");
-        push_review_filters(&mut qb, status, search_pattern);
-        qb.build()
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?
-    } else {
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let mut qb = QueryBuilder::<Postgres>::new(
-            "UPDATE furumusic__pending_review \
-             SET status = 'queued', error_message = NULL, updated_at = ",
-        );
-        qb.push_bind(now);
-        qb.push(" WHERE 1=1");
-        push_review_filters(&mut qb, status, search_pattern);
-        qb.build()
-            .execute(pool)
-            .await
-            .map_err(|e| cot::Error::internal(e.to_string()))?
-    };
-
-    Ok(result.rows_affected())
 }
 
 async fn load_jobs(
@@ -4655,6 +4649,10 @@ fn clean_search(search: Option<&str>) -> Option<String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.chars().take(120).collect())
 }
+
+#[cfg(test)]
+#[path = "review_approval_tests.rs"]
+mod review_approval_tests;
 
 #[cfg(test)]
 mod unicode_search_tests {

@@ -13,7 +13,8 @@ WITH wanted AS (
                 WHEN bool_or(f.status='queued') THEN 'queued'
                 WHEN bool_or(f.status='needs_review') THEN 'needs_review'
                 WHEN bool_and(f.status='failed') THEN 'failed'
-                WHEN bool_or(f.status='failed') THEN 'complete_with_errors'
+                WHEN bool_and(f.status='cancelled') THEN 'cancelled'
+                WHEN bool_or(f.status IN ('failed','cancelled')) THEN 'complete_with_errors'
                 ELSE 'complete' END AS status,
            min(f.created_at) AS created_at, max(f.updated_at) AS updated_at, count(*) AS item_count,
            CASE WHEN count(*)>1 THEN 100.0::float8 * count(*) FILTER (WHERE f.status='complete') / count(*) END AS progress_percent,
@@ -29,6 +30,8 @@ WITH wanted AS (
                 WHEN review.queued THEN 'awaiting_ai'
                 WHEN review.failed THEN 'ai_failed'
                 WHEN review.pending THEN 'needs_review'
+                WHEN review.cancelled THEN 'cancelled'
+                WHEN review.partly_cancelled THEN 'complete_with_errors'
                 ELSE t.status END,
            t.created_at,t.updated_at,t.history_item_count::bigint,
            CASE WHEN t.status='downloading' THEN t.progress_percent END,
@@ -37,8 +40,9 @@ WITH wanted AS (
     LEFT JOIN LATERAL (
         SELECT bool_or(r.status='processing') AS processing, bool_or(r.status='queued') AS queued,
                bool_or(r.status='failed') AS failed, bool_or(r.status IN ('rejected','pending')) AS pending,
+               bool_and(r.status='cancelled') AS cancelled, bool_or(r.status='cancelled') AS partly_cancelled,
                min(r.error_message) FILTER (WHERE r.status='failed') AS error
-        FROM furumusic__pending_review r WHERE t.status='complete' AND NOT t.history_processed
+        FROM furumusic__upload_review_state r WHERE t.status='complete' AND NOT t.history_processed
           AND split_part(r.input_path,'/',1)='user_uploads' AND split_part(r.input_path,'/',2)=t.user_id::text
           AND split_part(r.input_path,'/',3)='torrent-'||t.id
     ) review ON true

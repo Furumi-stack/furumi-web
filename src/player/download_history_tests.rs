@@ -23,7 +23,7 @@ async fn batches_group_before_pagination_and_hiding_preserves_imports() -> anyho
         CREATE TABLE furumusic__youtube_download_item(job_id text, progress_percent double precision);
         CREATE TABLE furumusic__torrent_session(id text PRIMARY KEY,user_id bigint,name text,selected_files_json text,files_json text,
             status text, progress_percent double precision,error text,created_at text DEFAULT '03',updated_at text DEFAULT '03');
-        CREATE TABLE furumusic__pending_review(input_path text,status text,error_message text);
+        CREATE TABLE furumusic__pending_review(input_path text,status text,error_message text,id bigserial PRIMARY KEY);
         CREATE TABLE furumusic__media_file(id bigint,uploaded_by_user_id bigint);
         CREATE TABLE furumusic__track(audio_file_id bigint,release_id bigint);
         INSERT INTO furumusic__media_file VALUES (1,1),(2,1),(3,2);
@@ -41,6 +41,9 @@ async fn batches_group_before_pagination_and_hiding_preserves_imports() -> anyho
                    ('second-user',2,'Own.mp3','user_uploads/2/local-12345678-1234-1234-1234-123456789abc/Own.mp3','complete');
     "#).execute(&pool).await?;
     sqlx::raw_sql(include_str!("download_history_schema.sql"))
+        .execute(&pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../scheduler/review_dismissal_schema.sql"))
         .execute(&pool)
         .await?;
     let batch = "12345678-1234-1234-1234-123456789abc";
@@ -133,6 +136,28 @@ async fn batches_group_before_pagination_and_hiding_preserves_imports() -> anyho
     torrent_status(&pool, 1, Some(inbox.path()), &service, &mut entry).await?;
     assert_eq!(entry.status, "complete");
     assert!(summaries(&pool, 1, &["torrents".into()], &["same".into()]).await?[0].processed);
+    // An unimported file dismissed in the inbox must not count as an import.
+    let other_file = "user_uploads/2/torrent-other/Album/removed.mp3";
+    sqlx::query("INSERT INTO furumusic__dismissed_review VALUES ($1, repeat('a',64), 70, false)")
+        .bind(other_file)
+        .execute(&pool)
+        .await?;
+    let torrent_sources = ["torrents".into()];
+    let other_id = ["other".into()];
+    assert_eq!(
+        summaries(&pool, 2, &torrent_sources, &other_id).await?[0].status,
+        "cancelled"
+    );
+    sqlx::query(
+        "INSERT INTO furumusic__pending_review(input_path,status,id) VALUES ($1,'queued',71)",
+    )
+    .bind(other_file)
+    .execute(&pool)
+    .await?;
+    assert_eq!(
+        summaries(&pool, 2, &torrent_sources, &other_id).await?[0].status,
+        "awaiting_ai"
+    );
     sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&pool)
         .await?;

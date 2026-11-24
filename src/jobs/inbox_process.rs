@@ -366,6 +366,18 @@ async fn process_folder_batch(
     let mut merged_count = 0u64;
 
     for mut review in reviews {
+        match review.claim_for_processing(pool, None).await {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                log.error(&format!(
+                    "Failed to claim review {}: {error}",
+                    review.id_val()
+                ));
+                failed_reviews.push(review);
+                continue;
+            }
+        }
         let stored_input_path = review.input_path_str().to_owned();
         let file_path =
             crate::media_paths::resolve_path_from_root(&config.agent_inbox_dir, &stored_input_path);
@@ -382,41 +394,24 @@ async fn process_folder_batch(
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
 
-        // Resolve duplicates and missing sources before any expensive work.
-        let sha = context
-            .get("sha256")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
-        let file_exists = file_path.exists();
-        if !sha.is_empty()
-            && crate::agent::rag::file_hash_exists_verified(pool, &sha, &config.agent_storage_dir)
-                .await
-                .unwrap_or(false)
-        {
-            // Identical content is already in the library — drop the inbox
-            // copy (same as mover::Merged) and close the review.
-            if file_exists {
-                let _ = tokio::fs::remove_file(&file_path).await;
+        match verify_queued_input(db, pool, config, &mut review, &mut context, &file_path).await {
+            Ok(true) => {
+                log.info(&format!(
+                    "{filename}: exact audio already present in the library"
+                ));
+                crate::metrics::record_agent_file_processed("ok", "merged_duplicate");
+                merged_count += 1;
+                continue;
             }
-            let _ = PendingReview::delete_by_ids(db, &[review.id_val()]).await;
-            log.info(&format!(
-                "{filename}: content already in library (sha256 match) — merged duplicate"
-            ));
-            crate::metrics::record_agent_file_processed("ok", "merged_duplicate");
-            merged_count += 1;
-            continue;
+            Ok(false) => {}
+            Err(error) => {
+                let message = format!("{filename}: {error:#}");
+                log.error(&message);
+                let _ = review.set_failed(db, &message).await;
+                failed_reviews.push(review);
+                continue;
+            }
         }
-        if !file_exists {
-            let msg = format!("{filename}: source file missing: {stored_input_path}");
-            log.error(&msg);
-            let _ = review.set_failed(db, &msg).await;
-            failed_reviews.push(review);
-            continue;
-        }
-
-        // Set status → processing
-        let _ = review.set_processing(db).await;
 
         // Extract metadata (with 60s timeout)
         let path_for_meta = file_path.to_path_buf();
@@ -791,22 +786,15 @@ async fn process_folder_batch(
         p.review.result_json = Some(result_json);
         let _ = p.review.save(db).await;
 
-        let input_path = crate::media_paths::resolve_path_from_root(
-            &config.agent_inbox_dir,
-            p.review.input_path_str(),
-        );
-        let input_path_str = input_path.to_string_lossy().to_string();
-
         if confidence >= config.agent_confidence_threshold {
             match finalize_approved(
                 db,
                 pool,
                 config,
-                &input_path_str,
+                p.review.input_path_str(),
                 normalized,
                 &p.context,
-                &config.agent_storage_dir,
-                Some(llm_model),
+                ReviewApproval::Check(Some(llm_model)),
             )
             .await
             {
@@ -877,20 +865,87 @@ async fn process_folder_batch(
     (ok_count, fail_count)
 }
 
+/// Return true after satisfying the review with physically verified library audio.
+/// Otherwise retain the source and ensure the queued metadata still belongs to it.
+async fn verify_queued_input(
+    db: &Database,
+    pool: &sqlx::PgPool,
+    config: &AppConfig,
+    review: &mut PendingReview,
+    context: &mut serde_json::Value,
+    source: &Path,
+) -> anyhow::Result<bool> {
+    let mut sha = context["sha256"].as_str().unwrap_or("").to_owned();
+    let mut observed = None;
+    if sha.is_empty() {
+        // Legacy reviews predate content identities. Establish one from this
+        // input before publishing a media row or recording a deduplication.
+        let metadata = tokio::fs::metadata(source).await?;
+        sha = mover::sha256_file(source).await?;
+        context["sha256"] = serde_json::json!(sha);
+        context["file_size"] = serde_json::json!(metadata.len());
+        review.context_json = Some(context.to_string());
+        review.save(db).await?;
+        observed = Some(sha.clone());
+    }
+    if let Some(media) =
+        crate::agent::rag::verified_audio_media(pool, &sha, &config.agent_storage_dir).await?
+    {
+        let tracked = super::inbox_review::ReviewFile {
+            id: review.id_val(),
+            input_path: review.input_path_str().to_owned(),
+            sha256: Some(sha.clone()),
+            status: review.status_str().to_owned(),
+            updated_at: review.updated_at.to_string(),
+        };
+        anyhow::ensure!(
+            super::inbox_review::finish_exact_review(pool, config, &tracked, &sha, media).await?,
+            "the review changed while verifying its library audio"
+        );
+        return Ok(true);
+    }
+    let actual = match observed {
+        Some(sha) => sha,
+        None => mover::sha256_file(source).await.map_err(|error| {
+            error.context(format!("could not read source {}", source.display()))
+        })?,
+    };
+    anyhow::ensure!(
+        actual == sha,
+        "source content changed since discovery: {}",
+        source.display()
+    );
+    Ok(false)
+}
+
 // ---------------------------------------------------------------------------
 // Finalization (called on approve or auto-approve)
 // ---------------------------------------------------------------------------
 
+pub enum ReviewApproval<'a> {
+    Check(Option<&'a str>),
+    Separate(Option<&'a str>),
+}
+
 pub async fn finalize_approved(
     db: &cot::db::Database,
     pool: &sqlx::PgPool,
-    _config: &crate::config::AppConfig,
-    input_path_str: &str,
+    config: &AppConfig,
+    review_input_path: &str,
     normalized: &NormalizedFields,
     context: &serde_json::Value,
-    storage_dir_str: &str,
-    model_name: Option<&str>,
+    approval: ReviewApproval<'_>,
 ) -> anyhow::Result<()> {
+    let model_name = match approval {
+        ReviewApproval::Check(model) | ReviewApproval::Separate(model) => model,
+    };
+    anyhow::ensure!(
+        !review_input_path.trim().is_empty(),
+        "review has no input path"
+    );
+    let source_path =
+        crate::media_paths::resolve_path_from_root(&config.agent_inbox_dir, review_input_path);
+    let storage_dir_str = config.agent_storage_dir.as_str();
     let artist_name = normalized.artist.as_deref().unwrap_or("Unknown Artist");
     let release_title = normalized.album.as_deref().unwrap_or("Unknown Release");
     let track_title = normalized.title.as_deref().unwrap_or("Unknown Title");
@@ -922,10 +977,80 @@ pub async fn finalize_approved(
             .execute(&mut *import_lock)
             .await?;
     }
-    if crate::agent::dedup::merge_existing(
+    let sha256 = context.get("sha256").and_then(|v| v.as_str()).unwrap_or("");
+    let original_filename = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let ext = source_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("flac");
+
+    let track_num = track_number.unwrap_or(0);
+    let dest_filename = if track_num > 0 {
+        format!(
+            "{:02} - {}.{}",
+            track_num,
+            sanitize_filename(track_title),
+            ext
+        )
+    } else {
+        format!("{}.{}", sanitize_filename(track_title), ext)
+    };
+
+    let storage_dir = crate::media_paths::resolve_config_path_buf(storage_dir_str);
+    let source_exists = tokio::fs::try_exists(&source_path).await?;
+    if source_exists && !sha256.is_empty() {
+        anyhow::ensure!(
+            mover::sha256_file(&source_path).await? == sha256,
+            "the file at {} has changed since discovery",
+            source_path.display()
+        );
+    }
+    if !sha256.is_empty()
+        && let Some(media_id) =
+            crate::agent::rag::verified_audio_media(pool, sha256, storage_dir_str).await?
+    {
+        crate::jobs::inbox_discover::link_exact_import(pool, review_input_path, sha256, media_id)
+            .await?;
+        if source_exists {
+            crate::jobs::inbox_discover::remove_exact_inbox_copy(config, &source_path, sha256)
+                .await?;
+        }
+        import_lock.commit().await?;
+        return Ok(());
+    }
+    let moved_path = if source_exists {
+        None
+    } else {
+        // A previous approval may have finished or moved the bytes before a
+        // catalog write failed. Only accept content verified against the review.
+        let path = mover::find_moved_file(
+            &storage_dir,
+            artist_name,
+            release_title,
+            &dest_filename,
+            sha256,
+        )
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "source file missing: {}; no matching audio found in storage",
+                source_path.display()
+            )
+        })?;
+        // Deduplication may remove or upgrade its input. Give it an inbox
+        // copy, keeping the already-published library file intact.
+        mover::publish_copy(&path, &source_path).await?;
+        Some(path)
+    };
+    if matches!(approval, ReviewApproval::Separate(_)) {
+        crate::agent::dedup::verify_separate_recording(&source_path).await?;
+    } else if crate::agent::dedup::merge_existing(
         pool,
         storage_dir_str,
-        Path::new(input_path_str),
+        &source_path,
         normalized,
         context,
     )
@@ -967,7 +1092,33 @@ pub async fn finalize_approved(
             .map_err(|e| anyhow::anyhow!("failed to link release-artist: {e}"))?;
     }
 
-    let sha256 = context.get("sha256").and_then(|v| v.as_str()).unwrap_or("");
+    let destination = match moved_path {
+        Some(path) => {
+            tokio::fs::remove_file(&source_path).await?;
+            path
+        }
+        None => match mover::move_to_storage(
+            &storage_dir,
+            artist_name,
+            release_title,
+            &dest_filename,
+            &source_path,
+        )
+        .await?
+        {
+            mover::MoveOutcome::Moved(path) | mover::MoveOutcome::Merged(path) => path,
+        },
+    };
+    let storage_path =
+        crate::media_paths::media_file_path_for_storage(storage_dir_str, &destination).ok_or_else(
+            || {
+                anyhow::anyhow!(
+                    "storage destination is outside agent_storage_dir: {}",
+                    destination.display()
+                )
+            },
+        )?;
+
     let file_size = context
         .get("file_size")
         .and_then(|v| v.as_i64())
@@ -995,16 +1146,6 @@ pub async fn finalize_approved(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("UFO");
 
-    let source_path = Path::new(input_path_str);
-    let original_filename = source_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-    let ext = source_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("flac");
-
     let mime_type = match ext.to_lowercase().as_str() {
         "mp3" => "audio/mpeg",
         "flac" => "audio/flac",
@@ -1013,54 +1154,6 @@ pub async fn finalize_approved(
         "wav" => "audio/wav",
         "aiff" | "aif" => "audio/aiff",
         _ => "application/octet-stream",
-    };
-
-    let track_num = track_number.unwrap_or(0);
-    let dest_filename = if track_num > 0 {
-        format!(
-            "{:02} - {}.{}",
-            track_num,
-            sanitize_filename(track_title),
-            ext
-        )
-    } else {
-        format!("{}.{}", sanitize_filename(track_title), ext)
-    };
-
-    let storage_dir = crate::media_paths::resolve_config_path_buf(storage_dir_str);
-    let storage_path = if source_path.exists() {
-        match mover::move_to_storage(
-            &storage_dir,
-            artist_name,
-            release_title,
-            &dest_filename,
-            source_path,
-        )
-        .await?
-        {
-            mover::MoveOutcome::Moved(p) | mover::MoveOutcome::Merged(p) => {
-                crate::media_paths::media_file_path_for_storage(storage_dir_str, &p).ok_or_else(
-                    || {
-                        anyhow::anyhow!(
-                            "storage destination is outside agent_storage_dir: {}",
-                            p.display()
-                        )
-                    },
-                )?
-            }
-        }
-    } else {
-        let expected_path = storage_dir
-            .join(sanitize_filename(artist_name))
-            .join(sanitize_filename(release_title))
-            .join(&dest_filename);
-        crate::media_paths::media_file_path_for_storage(storage_dir_str, &expected_path)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "storage destination is outside agent_storage_dir: {}",
-                    expected_path.display()
-                )
-            })?
     };
 
     let reusable_media_id: Option<i64> = sqlx::query_scalar(
@@ -1198,7 +1291,7 @@ pub async fn finalize_approved(
 
     // Cover art: if the release has no cover yet, try to find one
     if release.cover_file_id.is_none() {
-        let source_folder = Path::new(input_path_str).parent().unwrap_or(Path::new("."));
+        let source_folder = source_path.parent().unwrap_or(Path::new("."));
 
         // Collect audio files in the same folder to try embedded extraction
         let audio_files_in_folder: Vec<std::path::PathBuf> = std::fs::read_dir(source_folder)
@@ -1271,7 +1364,8 @@ pub async fn finalize_approved(
         }
     }
 
-    if let Err(error) = crate::import_playlists::link_media(pool, sha256, media_file.id_val()).await {
+    if let Err(error) = crate::import_playlists::link_media(pool, sha256, media_file.id_val()).await
+    {
         tracing::warn!(%error, "could not add imported tracks to destination playlists; will retry");
     }
 
